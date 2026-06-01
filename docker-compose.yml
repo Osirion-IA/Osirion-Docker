@@ -164,6 +164,8 @@ services:
       - ./Osirion-core-master/Osirion-core-master/face_detection_new.py:/app/face_detection_new.py
       - ./Osirion-core-master/Osirion-core-master/plate_detection.py:/app/plate_detection.py
       - ./Osirion-core-master/Osirion-core-master/main_refactored.py:/app/main_refactored.py
+      # Modèle YOLO de plaque (LPR) — montage en lecture seule (évite un rebuild)
+      - ./Osirion-core-master/Osirion-core-master/license_plate_detector.pt:/app/license_plate_detector.pt:ro
       # ── Patches ByteTrack — fix np.float → float (NumPy ≥ 1.24) ────────────
       - ./Osirion-core-master/Osirion-core-master/patches/matching.py:/app/ByteTrack/yolox/tracker/matching.py
       - ./Osirion-core-master/Osirion-core-master/patches/byte_tracker.py:/app/ByteTrack/yolox/tracker/byte_tracker.py

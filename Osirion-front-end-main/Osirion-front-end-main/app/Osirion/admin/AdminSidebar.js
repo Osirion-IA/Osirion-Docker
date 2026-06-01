@@ -45,6 +45,17 @@ export default function AdminSidebar({
       ),
     },
     {
+      label: "Plaques",
+      href: "/Osirion/admin/plates",
+      roles: ["admin", "user", "viewer"],
+      icon: (
+        <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+          <rect x="2" y="6" width="20" height="12" rx="2" />
+          <path d="M6 10v4M10 10v4M14 10v4M18 10v4" />
+        </svg>
+      ),
+    },
+    {
       label: "Blacklist",
       href: "/Osirion/admin/blacklist",
       roles: ["admin", "user"],

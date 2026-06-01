@@ -117,11 +117,9 @@ COPY face_detection.py  .
 COPY plate_detection.py .
 COPY main_refactored.py .
 COPY yolov11n-face.pt   .
-# Modèle YOLO de détection de plaque (LPR/ANPR) — optionnel.
-# Placez 'license_plate_detector.pt' à la racine du Core pour l'embarquer dans
-# l'image ; sinon montez-le via docker-compose ou définissez PLATE_MODEL_PATH.
+# Modèle YOLO de détection de plaque (LPR/ANPR).
 # Le module plaques se désactive proprement si le modèle est absent.
-# COPY license_plate_detector.pt .
+COPY license_plate_detector.pt .
 
 # Pré-télécharger le modèle InsightFace buffalo_l (~183 MB) pour éviter un
 # téléchargement au premier démarrage du conteneur.
