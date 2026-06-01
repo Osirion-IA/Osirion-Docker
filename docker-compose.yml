@@ -55,19 +55,21 @@ services:
       start_period: 10s
 
   # ---------------------------------------------------------------------------
-  # Backend — FastAPI + GPU (torch CUDA + onnxruntime-gpu)
+  # Backend — FastAPI (build CPU : torch CPU + onnxruntime CPU)
+  # L'inférence faciale du backend utilise CPUExecutionProvider (cf. code) :
+  # il n'a PAS besoin du GPU. Build CPU → image ~4 Go au lieu de ~14 Go, et le
+  # GPU reste entièrement disponible pour le Core (temps réel).
   # L'entrypoint attend la DB, applique les migrations, puis lance uvicorn.
   #
   # Bind mounts granulaires : seuls app/, scripts/ et alembic/ sont écrasés.
-  # yolov11n-face.pt reste celui de l'image (non présent dans le bind mount).
   # Hot-reload uvicorn activé via UVICORN_RELOAD=true (entrypoint.py).
   # ---------------------------------------------------------------------------
   backend:
-    image: osirion-backend:gpu
+    image: osirion-backend:cpu
     build:
       context: ./Osirion-backend-main/Osirion-backend-main
       args:
-        GPU: "1"
+        GPU: "0"
     container_name: osirion-backend
     restart: unless-stopped
     networks:
@@ -105,13 +107,7 @@ services:
       timeout: 10s
       start_period: 300s
       retries: 3
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+    # Pas de réservation GPU : backend en CPU (le GPU est dédié au Core).
 
   # ---------------------------------------------------------------------------
   # Core — Flask + GPU (surveillance multi-caméras, détection, tracking)

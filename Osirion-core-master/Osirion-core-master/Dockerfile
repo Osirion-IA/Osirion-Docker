@@ -23,7 +23,8 @@ FROM python:3.11-slim AS builder
 
 ARG GPU
 ENV DEBIAN_FRONTEND=noninteractive
-ENV PIP_NO_CACHE_DIR=1
+# PIP_NO_CACHE_DIR retiré : on utilise un cache pip BuildKit (RUN --mount=type=cache)
+# pour reprendre les téléchargements après une coupure réseau sans tout refaire.
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -36,30 +37,34 @@ WORKDIR /build
 
 COPY requirements.txt requirements-cpu.txt ./
 
-# PyTorch :
-#   GPU=0 → wheel CPU-only (index pytorch/whl/cpu)  ~500 MB
-#   GPU=1 → wheel CUDA 12.x (index PyPI par défaut) ~2.5 GB
-RUN if [ "$GPU" = "1" ]; then \
-        pip install --user --no-cache-dir --retries 5 --timeout 180 \
-            "torch>=2.0.0" "torchvision>=0.15.0"; \
+# PyTorch — versions ÉPINGLÉES en CUDA 12 (torch 2.9.1 / torchvision 0.24.1).
+#   Sans épinglage, "torch>=2.0.0" tirait torch 2.12 + CUDA 13 (énorme + incompatible
+#   avec les nvidia-*-cu12 du projet et le driver). 2.9.1 = même base que le backend.
+#   GPU=0 → wheel CPU-only (index pytorch/whl/cpu)
+#   GPU=1 → wheel CUDA 12.x (index PyPI par défaut)
+RUN --mount=type=cache,target=/root/.cache/pip \
+    if [ "$GPU" = "1" ]; then \
+        pip install --user --retries 10 --timeout 300 \
+            "torch==2.9.1" "torchvision==0.24.1"; \
     else \
-        pip install --user --no-cache-dir --retries 5 --timeout 180 \
+        pip install --user --retries 10 --timeout 300 \
             --index-url https://download.pytorch.org/whl/cpu \
-            "torch>=2.0.0" "torchvision>=0.15.0"; \
+            "torch==2.9.1" "torchvision==0.24.1"; \
     fi
 
 # Dépendances applicatives :
 #   GPU=1 → requirements.txt     (onnxruntime-gpu ≥1.17, bundle CUDA ~700 MB)
 #   GPU=0 → requirements-cpu.txt (onnxruntime CPU  ≥1.17,         ~50 MB)
-RUN if [ "$GPU" = "1" ]; then \
-        pip install --user --no-cache-dir --retries 5 --timeout 120 -r requirements.txt && \
-        pip install --user --no-cache-dir \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    if [ "$GPU" = "1" ]; then \
+        pip install --user --retries 10 --timeout 300 -r requirements.txt && \
+        pip install --user --retries 10 --timeout 300 \
             "nvidia-cuda-runtime-cu12" \
             "nvidia-cufft-cu12" \
             "nvidia-cublas-cu12>=12.2" \
             "nvidia-cudnn-cu12>=8.9"; \
     else \
-        pip install --user --no-cache-dir --retries 5 --timeout 120 -r requirements-cpu.txt; \
+        pip install --user --retries 10 --timeout 300 -r requirements-cpu.txt; \
     fi
 
 # ByteTrack cloné comme package local — import via PYTHONPATH=/app

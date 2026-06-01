@@ -51,13 +51,13 @@ STEPS = [
         "est_min": 1,
     },
     {
-        "label":   "Osirion Backend  [GPU]",
+        "label":   "Osirion Backend  [CPU]",
         "type":    "build",
-        "image":   "osirion-backend:gpu",
+        "image":   "osirion-backend:cpu",
         "context": os.path.join(SCRIPT_DIR, "Osirion-backend-main", "Osirion-backend-main"),
-        "args":    {"GPU": "1"},
-        "note":    "~7 GB — torch CUDA + onnxruntime-gpu",
-        "est_min": 45,
+        "args":    {"GPU": "0"},
+        "note":    "~4 GB — torch CPU + onnxruntime CPU (le backend n'utilise pas le GPU)",
+        "est_min": 25,
     },
     {
         "label":   "Osirion Core     [GPU]",
@@ -65,7 +65,7 @@ STEPS = [
         "image":   "osirion-core:gpu",
         "context": os.path.join(SCRIPT_DIR, "Osirion-core-master", "Osirion-core-master"),
         "args":    {"GPU": "1"},
-        "note":    "~6 GB — torch CUDA + InsightFace buffalo_l",
+        "note":    "~6 GB — torch CUDA 12 (épinglé) + InsightFace + EasyOCR",
         "est_min": 35,
     },
     {

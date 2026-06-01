@@ -90,15 +90,27 @@ if nvidia-smi >/dev/null 2>&1; then
     warn "  sudo apt install -y nvidia-container-toolkit && sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker"
   fi
 else
-  warn "Pas de GPU détecté — les services exigent un GPU (deploy.resources). Le démarrage échouera sans GPU/toolkit."
+  warn "Pas de GPU détecté — le service 'core' exige un GPU. Le démarrage du core échouera sans GPU/toolkit."
+fi
+
+# Espace disque (le build complet nécessite ~20-25 Go : Core GPU + Backend CPU)
+AVAIL_GB=$(df --output=avail -BG / 2>/dev/null | tail -1 | tr -dc '0-9' || echo 0)
+if [ "${AVAIL_GB:-0}" -lt 25 ]; then
+  warn "Espace disque faible : ${AVAIL_GB} Go libres sur /. Build complet ≈ 20-25 Go."
+  warn "Pour libérer : ${DIM}docker system prune -af${RESET} (supprime images + cache Docker inutilisés)"
+else
+  ok "Espace disque : ${AVAIL_GB} Go libres"
 fi
 
 # =============================================================================
 if [ "$DO_BUILD" -eq 1 ]; then
-  step "ÉTAPE 1 — Construction des images (long au 1er build : torch + ML, plusieurs Go)"
-  echo "${DIM}   Cela télécharge torch CUDA, onnxruntime-gpu, ultralytics, easyocr, etc.${RESET}"
-  echo "${DIM}   Les poids InsightFace (~183 Mo) et EasyOCR (~100 Mo) sont préchargés dans l'image.${RESET}"
-  $DC build
+  step "ÉTAPE 1 — Construction des images (séquentielle, pour ménager le disque)"
+  echo "${DIM}   1er build long : torch CUDA 12 (Core), onnxruntime, ultralytics, easyocr…${RESET}"
+  echo "${DIM}   Poids InsightFace (~183 Mo) + EasyOCR (~100 Mo) préchargés dans l'image Core.${RESET}"
+  echo "${DIM}   Cache pip BuildKit actif : si la connexion coupe, relance ./launch.sh — ça reprend.${RESET}"
+  echo "${BOLD}   → Backend (CPU, ~4 Go)${RESET}";  $DC build backend
+  echo "${BOLD}   → Core (GPU, ~6 Go)${RESET}";     $DC build core
+  echo "${BOLD}   → Frontend (~0,3 Go)${RESET}";    $DC build frontend
   ok "Images construites"
   [ "$BUILD_ONLY" -eq 1 ] && { ok "Build terminé (--build-only)."; exit 0; }
 else
