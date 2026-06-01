@@ -135,6 +135,11 @@ app = FaceAnalysis( \
 app.prepare(ctx_id=-1, det_size=(320, 320)); \
 print('InsightFace buffalo_l prêt')"
 
+# Pré-télécharger les modèles EasyOCR (détecteur CRAFT + recognizer 'en', ~100 MB)
+# pour le module LPR — évite un téléchargement (et un blocage potentiel sans réseau)
+# au premier chargement du pipeline plaques. gpu=False suffit ici (builder sans GPU).
+RUN python -c "import easyocr; easyocr.Reader(['en'], gpu=False); print('EasyOCR prêt')"
+
 RUN mkdir -p logs
 
 EXPOSE 5000
