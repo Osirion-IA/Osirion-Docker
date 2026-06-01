@@ -16,6 +16,8 @@ async def add_event(
     person_id: Optional[int] = Form(None),
     event_type: str = Form(...),
     confidence: Optional[float] = Form(None),
+    plate_text_detected: Optional[str] = Form(None),
+    vehicle_id: Optional[int] = Form(None),
     image: UploadFile = File(None),
     session: Session = Depends(get_session),
     _current_user=Depends(get_current_active_user)
@@ -38,7 +40,9 @@ async def add_event(
         person_id=person_id,
         event_type=event_type,
         confidence=confidence,
-        snapshot_url=snapshot_url
+        snapshot_url=snapshot_url,
+        plate_text_detected=plate_text_detected,
+        vehicle_id=vehicle_id
     )
 
     session.add(new_event)

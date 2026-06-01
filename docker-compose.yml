@@ -147,6 +147,12 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_DIR: logs
       CUDA_VISIBLE_DEVICES: "0"
+      # ── LPR / ANPR (reconnaissance de plaques) ──────────────────────────────
+      # OPT-IN : false par défaut. Activable à chaud via le frontend (toggle) ou
+      # en mettant true ici. Nécessite un modèle YOLO de plaque (PLATE_MODEL_PATH).
+      ENABLE_PLATE_RECOGNITION: ${ENABLE_PLATE_RECOGNITION:-false}
+      PLATE_MODEL_PATH: ${PLATE_MODEL_PATH:-license_plate_detector.pt}
+      PLATE_SEARCH_THRESHOLD: ${PLATE_SEARCH_THRESHOLD:-0.82}
     volumes:
       # ── Bind mounts — packages Python modifiés ──────────────────────────────
       # ByteTrack (/app/ByteTrack) et yolov11n-face.pt restent dans l'image.
@@ -156,6 +162,7 @@ services:
       - ./Osirion-core-master/Osirion-core-master/utils:/app/utils
       - ./Osirion-core-master/Osirion-core-master/face_detection.py:/app/face_detection.py
       - ./Osirion-core-master/Osirion-core-master/face_detection_new.py:/app/face_detection_new.py
+      - ./Osirion-core-master/Osirion-core-master/plate_detection.py:/app/plate_detection.py
       - ./Osirion-core-master/Osirion-core-master/main_refactored.py:/app/main_refactored.py
       # ── Patches ByteTrack — fix np.float → float (NumPy ≥ 1.24) ────────────
       - ./Osirion-core-master/Osirion-core-master/patches/matching.py:/app/ByteTrack/yolox/tracker/matching.py

@@ -129,4 +129,46 @@ GLOBAL_SIMILARITY_THRESHOLD = float(os.getenv('GLOBAL_SIMILARITY_THRESHOLD', '0.
 # configuration des événements (ex: reconnaissance, entrée/sortie)
 # -----------------------------------------
 
-EVENTS = ["RECOGNITION","ENTRY","EXIT","DETECTION"]  # Types d'événements à créer
+EVENTS = ["RECOGNITION","ENTRY","EXIT","DETECTION","PLATE_RECOGNITION"]  # Types d'événements à créer
+
+# -----------------------------------------
+# Module LPR / ANPR — reconnaissance des plaques d'immatriculation
+# -----------------------------------------
+# Activation OPT-IN : désactivé par défaut pour ne JAMAIS perturber le pipeline
+# facial existant. Pilotable au runtime via l'API du Core (/api/lpr/toggle),
+# elle-même branchée sur l'interrupteur du frontend (page Paramètres).
+ENABLE_PLATE_RECOGNITION = os.getenv('ENABLE_PLATE_RECOGNITION', 'false').lower() == 'true'
+
+# Chemin du modèle YOLO de détection de plaque (poids .pt Ultralytics).
+# Si le fichier est absent ou les libs (ultralytics/easyocr) manquantes,
+# le module se désactive proprement (log d'avertissement) sans casser le facial.
+PLATE_MODEL_PATH = os.getenv('PLATE_MODEL_PATH', 'license_plate_detector.pt')
+
+# Seuils de détection / OCR
+PLATE_DETECTION_CONFIDENCE = float(os.getenv('PLATE_DETECTION_CONFIDENCE', '0.45'))  # confiance YOLO mini
+PLATE_OCR_MIN_CONFIDENCE = float(os.getenv('PLATE_OCR_MIN_CONFIDENCE', '0.40'))      # confiance OCR mini pour accepter une lecture
+PLATE_OCR_GOOD_CONFIDENCE = float(os.getenv('PLATE_OCR_GOOD_CONFIDENCE', '0.65'))    # au-delà → lecture "définitive", OCR figé pour ce track
+
+# Frame-skipping OCR : nb max de tentatives OCR par track avant de figer la lecture
+PLATE_OCR_MAX_ATTEMPTS = int(os.getenv('PLATE_OCR_MAX_ATTEMPTS', '5'))
+
+# Langues EasyOCR (les plaques étant alphanumériques latines, 'en' suffit)
+PLATE_OCR_LANGS = [s.strip() for s in os.getenv('PLATE_OCR_LANGS', 'en').split(',') if s.strip()]
+
+# Liste blanche de caractères autorisés sur une plaque (filtre l'OCR)
+PLATE_OCR_ALLOWLIST = os.getenv('PLATE_OCR_ALLOWLIST', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789')
+
+# Longueur plausible d'une plaque (filtre les faux positifs OCR)
+PLATE_MIN_CHARS = int(os.getenv('PLATE_MIN_CHARS', '4'))
+PLATE_MAX_CHARS = int(os.getenv('PLATE_MAX_CHARS', '10'))
+
+# Seuil de similarité pour la recherche floue côté backend (/plates/search)
+PLATE_SEARCH_THRESHOLD = float(os.getenv('PLATE_SEARCH_THRESHOLD', '0.82'))
+
+# Durée de vie (en frames) d'une plaque en cache de track avant nettoyage
+PLATE_CACHE_TTL_FRAMES = int(os.getenv('PLATE_CACHE_TTL_FRAMES', '600'))
+
+# Couleurs d'annotation des plaques (BGR) — distinctes des visages (vert/rouge)
+COLOR_PLATE = (0, 200, 255)            # Jaune/orangé : plaque détectée/lue
+COLOR_PLATE_BLACKLIST = (0, 0, 255)    # Rouge : plaque blacklistée (alerte)
+COLOR_PLATE_KNOWN = (255, 200, 0)      # Bleu clair : plaque connue (non blacklistée)

@@ -72,6 +72,7 @@ pydantic_core==2.41.5
 pyparsing==3.2.5
 python-dateutil==2.9.0.post0
 python-decouple==3.8
+rapidfuzz==3.10.1
 python-dotenv==1.2.1
 python-multipart==0.0.20
 PyYAML==6.0.3

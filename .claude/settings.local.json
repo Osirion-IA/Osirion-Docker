@@ -27,7 +27,10 @@
       "Bash(git add *)",
       "Bash(git commit -q -m 'chore: baseline snapshot of Osirion before LPR module *)",
       "Bash(git checkout *)",
-      "Bash(grep -E \"\\(^|/\\)\\\\.env$\")"
+      "Bash(grep -E \"\\(^|/\\)\\\\.env$\")",
+      "Bash(python3 -m py_compile app/models/vehicles.py app/models/events.py app/schemas/vehicles_schema.py app/schemas/events_schema.py app/routes/plates_routes.py app/routes/events_routes.py app/utils/plate_utils.py app/main.py alembic/env.py alembic/versions/c3d4e5f6a7b8_add_vehicle_and_plate_event_fields.py)",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 -m py_compile plate_detection.py core/plate_processor.py core/runtime_control.py core/tracking_processor.py core/surveillance_system.py core/web_streaming.py services/plate_search_service.py services/event_services.py config/settings.py)"
     ]
   }
 }

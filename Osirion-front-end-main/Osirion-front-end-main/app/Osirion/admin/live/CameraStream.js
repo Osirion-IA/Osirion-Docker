@@ -9,6 +9,11 @@ export default function CameraStream({ cameraId, onLatencyUpdate, showStats = tr
     const [status, setStatus] = useState('connecting');
     const [latency, setLatency] = useState(0);
     const [fps, setFps] = useState(0);
+    // NB : les annotations (visages ET plaques) sont dessinées CÔTÉ CORE par OpenCV
+    // et incrustées dans le JPEG diffusé. Le canvas se contente d'afficher l'image,
+    // donc les boîtes de plaques apparaissent automatiquement quand le LPR est actif.
+    // Ce drapeau sert uniquement à afficher un badge + une légende des couleurs.
+    const [lprActive, setLprActive] = useState(false);
 
     useEffect(() => {
         const canvas = canvasRef.current;
@@ -77,6 +82,25 @@ export default function CameraStream({ cameraId, onLatencyUpdate, showStats = tr
         };
     }, [cameraId]);
 
+    // Poll léger de l'état LPR du Core (badge + légende). Rafraîchi toutes les 15s
+    // pour refléter un toggle fait depuis la page Paramètres.
+    useEffect(() => {
+        let active = true;
+        const fetchLpr = async () => {
+            try {
+                const res = await fetch(`${SOCKET_URL}/api/lpr/status`);
+                if (!res.ok) return;
+                const data = await res.json();
+                if (active) setLprActive(!!data.lpr_enabled);
+            } catch {
+                /* Core injoignable : ignorer */
+            }
+        };
+        fetchLpr();
+        const id = setInterval(fetchLpr, 15000);
+        return () => { active = false; clearInterval(id); };
+    }, []);
+
     const latencyColor =
         latency === 0 ? 'text-gray-400' :
         latency < 100 ? 'text-emerald-400' :
@@ -111,6 +135,21 @@ export default function CameraStream({ cameraId, onLatencyUpdate, showStats = tr
                 height={480}
                 className="absolute inset-0 w-full h-full"
             />
+
+            {/* Badge LPR + légende des couleurs de plaques (boîtes incrustées par le Core) */}
+            {status === 'live' && lprActive && (
+                <div className="absolute top-3 left-3 flex flex-col gap-1">
+                    <div className="px-2 py-0.5 rounded-md bg-black/60 backdrop-blur-sm text-xs font-semibold text-amber-300 flex items-center gap-1">
+                        <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" /> LPR actif
+                    </div>
+                    <div className="px-2 py-1 rounded-md bg-black/50 backdrop-blur-sm text-[10px] text-white/80 leading-tight space-y-0.5">
+                        {/* Couleurs CONVERTIES BGR(Core)→RGB(CSS) pour correspondre au flux */}
+                        <div className="flex items-center gap-1"><span className="h-2 w-2 rounded-sm" style={{ background: 'rgb(255,200,0)' }} /> Plaque détectée</div>
+                        <div className="flex items-center gap-1"><span className="h-2 w-2 rounded-sm" style={{ background: 'rgb(0,200,255)' }} /> Plaque connue</div>
+                        <div className="flex items-center gap-1"><span className="h-2 w-2 rounded-sm" style={{ background: 'rgb(255,0,0)' }} /> Blacklist (alerte)</div>
+                    </div>
+                </div>
+            )}
 
             {/* HUD : latence + FPS */}
             {showStats && status === 'live' && (

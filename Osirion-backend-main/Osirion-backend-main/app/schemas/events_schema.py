@@ -9,6 +9,8 @@ class EventCreate(BaseModel):
     event_type: str
     confidence: Optional[float] = None
     snapshot_url: Optional[str] = None
+    plate_text_detected: Optional[str] = None
+    vehicle_id: Optional[int] = None
 
 class EventRead(BaseModel):
     id: int
@@ -17,4 +19,6 @@ class EventRead(BaseModel):
     event_type: str
     confidence: Optional[float]
     snapshot_url: Optional[str]
+    plate_text_detected: Optional[str] = None
+    vehicle_id: Optional[int] = None
     timestamp: datetime

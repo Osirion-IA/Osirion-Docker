@@ -25,7 +25,7 @@ class TrackingProcessor:
 
     def __init__(self, cam: Dict, frame_queue: queue.Queue, result_frames: Dict,
                  result_lock, tracker, person_db: Dict, frame_idx_container: Dict,
-                 stop_event, config, global_tracker=None):
+                 stop_event, config, global_tracker=None, runtime_control=None):
         self.cam_id = cam["id"]
         self.cam_name = cam["cam_name"]
         self.location = cam["location"]
@@ -38,6 +38,12 @@ class TrackingProcessor:
         self.stop_event = stop_event
         self.config = config
         self.global_tracker = global_tracker
+
+        # ── LPR / ANPR (module plaques, optionnel et indépendant du facial) ──
+        self.runtime_control = runtime_control      # drapeau activable au runtime
+        self._cam = cam                             # mémorisé pour init paresseuse
+        self.plate_processor = None                 # créé à la 1re activation LPR
+        self._lpr_init_failed = False               # évite de réessayer en boucle
 
         self.frame_counter = 0
         self.loop = None
@@ -308,6 +314,51 @@ class TrackingProcessor:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         return float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
+    def _lpr_enabled(self) -> bool:
+        """LPR actif ? Priorité au drapeau runtime (toggle frontend), sinon config."""
+        if self.runtime_control is not None:
+            return self.runtime_control.lpr_enabled
+        return getattr(self.config, 'ENABLE_PLATE_RECOGNITION', False)
+
+    def _ensure_plate_processor(self):
+        """Crée le PlateProcessor à la 1re activation (chargement modèles paresseux)."""
+        if self.plate_processor is not None or self._lpr_init_failed:
+            return self.plate_processor
+        try:
+            from core.plate_processor import PlateProcessor
+            logger.info(f"[LPR][cam={self.cam_name}] Initialisation du module plaques...")
+            self.plate_processor = PlateProcessor(self._cam, self.config)
+        except Exception as e:
+            self._lpr_init_failed = True
+            logger.error(
+                f"[LPR][cam={self.cam_name}] Init impossible — LPR désactivé pour cette "
+                f"caméra (le pipeline facial continue normalement) : {e}"
+            )
+        return self.plate_processor
+
+    def _run_plate_detection(self, frame: np.ndarray, frame_to_display: np.ndarray,
+                             frame_idx: int) -> np.ndarray:
+        """Pipeline LPR complet sur une frame traitée (détection + OCR + annot.)."""
+        if not self._lpr_enabled():
+            return frame_to_display
+        pp = self._ensure_plate_processor()
+        if pp is None:
+            return frame_to_display
+        try:
+            return pp.process(frame, frame_to_display, frame_idx, self.loop, self._session)
+        except Exception as e:
+            logger.error(f"[LPR][cam={self.cam_name}] erreur pipeline plaques : {e}")
+            return frame_to_display
+
+    def _redraw_plates(self, frame_to_display: np.ndarray) -> np.ndarray:
+        """Redessine les boîtes plaques en cache sur une frame sautée."""
+        if self._lpr_enabled() and self.plate_processor is not None:
+            try:
+                return self.plate_processor.annotate_cached(frame_to_display)
+            except Exception:
+                pass
+        return frame_to_display
+
     def run(self):
         """Boucle principale de traitement"""
         self.loop = asyncio.new_event_loop()
@@ -366,6 +417,7 @@ class TrackingProcessor:
                                     x, y, w, h = bbox
                                     cv2.rectangle(frame_to_display, (x, y), (x + w, y + h),
                                                   self.config.COLOR_UNKNOWN, 2)
+                            frame_to_display = self._redraw_plates(frame_to_display)
                             frame_to_display = self.add_camera_overlay(frame_to_display)
                             with self.result_lock:
                                 self.result_frames[self.cam_id] = frame_to_display
@@ -442,6 +494,9 @@ class TrackingProcessor:
                     frame_to_display = frame_annotated
                     self.cleanup_cache(frame_idx)
 
+                    # ── LPR : détection + lecture des plaques (parallèle au facial) ──
+                    frame_to_display = self._run_plate_detection(frame, frame_to_display, frame_idx)
+
                 else:
                     # Fix 1 : re-appliquer les dernières annotations connues
                     # Avant : frame brute sur 9/10 frames → boîtes clignotantes à 3 Hz
@@ -460,6 +515,8 @@ class TrackingProcessor:
                             x, y, w, h = bbox
                             cv2.rectangle(frame_to_display, (x, y), (x + w, y + h),
                                           self.config.COLOR_UNKNOWN, 2)
+
+                    frame_to_display = self._redraw_plates(frame_to_display)
 
                 frame_to_display = self.add_camera_overlay(frame_to_display)
                 with self.result_lock:

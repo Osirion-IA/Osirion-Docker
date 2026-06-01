@@ -66,3 +66,13 @@ ultralytics>=8.0.0
 python-dateutil==2.8.2
 psutil>=5.9.0
 rich==13.7.1
+
+# ----------------------
+# LPR / ANPR — reconnaissance de plaques d'immatriculation
+# ----------------------
+# Détection de plaque : Ultralytics YOLO (déjà listé ci-dessus).
+# OCR : EasyOCR (lecture des caractères). EasyOCR s'appuie sur torch,
+#       déjà tiré par ultralytics — pas de surcoût de dépendance majeur.
+#       Détecte automatiquement le GPU (CUDA) si disponible.
+easyocr>=1.7.1
+# python-bidi / shapely / pyclipper sont des dépendances transitives d'easyocr

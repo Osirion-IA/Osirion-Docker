@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import AdminSidebar from "../AdminSidebar";
 import AdminTopBar from "../AdminTopBar";
 import { useAuth } from "../AuthContext";
@@ -66,6 +66,46 @@ export default function SettingsPage() {
   const handleSettingChange = (key, value) => {
     setSettings(prev => ({ ...prev, [key]: value }));
     setHasUnsavedChanges(true);
+  };
+
+  // URL publique du Core (moteur de surveillance) — expose l'API LPR.
+  const CORE_URL = process.env.NEXT_PUBLIC_CORE_URL || "http://localhost:5000";
+  const [lprAvailable, setLprAvailable] = useState(null);
+
+  // Au montage : récupérer l'état RÉEL du LPR côté Core et l'afficher.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${CORE_URL}/api/lpr/status`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled) return;
+        setLprAvailable(data.lpr_available);
+        setSettings(prev => ({ ...prev, licencePlateRecognition: !!data.lpr_enabled }));
+      } catch {
+        // Core injoignable : on laisse l'état local par défaut, sans bloquer la page.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [CORE_URL]);
+
+  // Active/désactive le pipeline LPR côté Core (toggle Plaques d'immatriculation).
+  const toggleLPR = async (enabled) => {
+    try {
+      const res = await fetch(`${CORE_URL}/api/lpr/toggle`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setSettings(prev => ({ ...prev, licencePlateRecognition: !!data.lpr_enabled }));
+      }
+    } catch {
+      // Échec réseau : l'état local reste, mais on notifie via console.
+      console.warn("LPR toggle: Core injoignable à", CORE_URL);
+    }
   };
 
   const handleSave = () => {
@@ -737,14 +777,27 @@ export default function SettingsPage() {
                             </div>
                             <div>
                               <div className="text-sm font-bold text-gray-900 dark:text-white">Plaques d'immatriculation</div>
-                              <div className="text-xs text-gray-600 dark:text-gray-400">Lire et identifier les plaques</div>
+                              <div className="text-xs text-gray-600 dark:text-gray-400">Lire et identifier les plaques (LPR/ANPR)</div>
+                              {lprAvailable === false && (
+                                <div className="text-[11px] mt-1 text-amber-600 dark:text-amber-400">
+                                  ⚠ Modèle de plaque non chargé côté Core
+                                </div>
+                              )}
+                              {lprAvailable === true && (
+                                <div className="text-[11px] mt-1 text-emerald-600 dark:text-emerald-400">
+                                  ✓ Module LPR opérationnel
+                                </div>
+                              )}
                             </div>
                           </div>
                           <label className="relative inline-flex items-center cursor-pointer">
                             <input
                               type="checkbox"
                               checked={settings.licencePlateRecognition}
-                              onChange={(e) => handleSettingChange("licencePlateRecognition", e.target.checked)}
+                              onChange={(e) => {
+                                handleSettingChange("licencePlateRecognition", e.target.checked);
+                                toggleLPR(e.target.checked);
+                              }}
                               className="sr-only peer"
                             />
                             <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-orange-300 dark:peer-focus:ring-orange-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-orange-600"></div>

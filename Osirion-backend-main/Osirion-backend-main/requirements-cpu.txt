@@ -57,6 +57,10 @@ protobuf==6.33.1
 polars==1.35.2
 polars-runtime-32==1.35.2
 
+# LPR / ANPR — fuzzy matching des plaques (tolérance erreurs OCR : O↔0, I↔1…)
+# Fallback pur-Python intégré dans plates_routes.py si rapidfuzz est absent.
+rapidfuzz==3.10.1
+
 # Auth / Config
 python-decouple==3.8
 python-dotenv==1.2.1

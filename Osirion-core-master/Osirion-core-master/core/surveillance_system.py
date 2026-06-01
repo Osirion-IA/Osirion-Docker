@@ -12,6 +12,7 @@ from services.camera_fetching_service import fetch_camera_list
 from core.camera_manager import CameraCapture
 from core.tracking_processor import TrackingProcessor
 from core.global_person_tracker import GlobalPersonTracker
+from core.runtime_control import RuntimeControl
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -39,6 +40,12 @@ class SurveillanceSystem:
         self.global_tracker = GlobalPersonTracker(
             cache_ttl_seconds=getattr(config, 'GLOBAL_CACHE_TTL_SECONDS', 300),
             similarity_threshold=getattr(config, 'GLOBAL_SIMILARITY_THRESHOLD', 0.50)
+        )
+
+        # Contrôle runtime (toggle LPR depuis le frontend). Initialisé sur la valeur
+        # de config, modifiable à chaud via l'endpoint Flask /api/lpr/toggle.
+        self.runtime_control = RuntimeControl(
+            lpr_enabled=getattr(config, 'ENABLE_PLATE_RECOGNITION', False)
         )
         
         self.threads = []
@@ -101,7 +108,8 @@ class SurveillanceSystem:
                 frame_idx_container=self.current_frame_idx,
                 stop_event=self.stop_event,
                 config=self.config,
-                global_tracker=self.global_tracker  # Ajout du tracker global
+                global_tracker=self.global_tracker,  # Ajout du tracker global
+                runtime_control=self.runtime_control  # Toggle LPR partagé
             )
             processing_thread = threading.Thread(target=processor.run, daemon=True)
             processing_thread.start()

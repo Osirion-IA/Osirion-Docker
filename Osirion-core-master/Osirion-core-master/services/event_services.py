@@ -71,3 +71,59 @@ async def send_event_async(
 
     logger.error("Échec définitif de l'envoi de l'événement après retries")
     return False
+
+
+async def send_plate_event_async(
+    session: aiohttp.ClientSession,
+    frame: np.ndarray,
+    camera_id: int,
+    plate_text: str,
+    confidence: float,
+    vehicle_id: int = None,
+    event_type: str = "PLATE_RECOGNITION",
+):
+    """
+    Envoie un événement de reconnaissance de plaque au backend (POST /events/add),
+    avec le snapshot et les champs LPR (plate_text_detected, vehicle_id).
+
+    Distinct de send_event_async (facial) pour ne pas modifier le pipeline existant.
+    """
+    URL = f"{API_URL}/events/add"
+
+    success, buffer = cv2.imencode('.jpg', frame)
+    if not success:
+        logger.error("[plate-event] Erreur encodage image")
+        return False
+    image_bytes = buffer.tobytes()
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        headers = get_auth_headers()
+
+        form = aiohttp.FormData()
+        form.add_field("image", image_bytes, filename="plate_event.jpg", content_type="image/jpeg")
+        form.add_field("camera_id", str(camera_id))
+        form.add_field("event_type", event_type)
+        form.add_field("confidence", str(confidence))
+        form.add_field("plate_text_detected", plate_text)
+        if vehicle_id is not None:
+            form.add_field("vehicle_id", str(vehicle_id))
+
+        try:
+            async with session.post(
+                URL, data=form, headers=headers, timeout=aiohttp.ClientTimeout(total=20)
+            ) as response:
+                if response.status == 401:
+                    logger.warning("[plate-event] Token expiré, retry...")
+                    continue
+                if 500 <= response.status < 600:
+                    logger.warning(f"[plate-event] Erreur serveur {response.status}, retry {attempt}/{MAX_RETRIES}")
+                    await asyncio.sleep(RETRY_DELAY)
+                    continue
+                response.raise_for_status()
+                return await response.json()
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            logger.warning(f"[plate-event] Erreur réseau (tentative {attempt}/{MAX_RETRIES}) : {e}")
+            await asyncio.sleep(RETRY_DELAY)
+
+    logger.error("[plate-event] Échec définitif de l'envoi de l'événement plaque")
+    return False
