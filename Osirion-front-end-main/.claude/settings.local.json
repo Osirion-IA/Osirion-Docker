@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -E \"requirements|\\\\.pt$\")",
+      "Bash(grep -E \"yolov|\\\\.pt$\")",
+      "Bash(awk '{print $9, \"\\(\" $5 \" bytes\\)\"}')",
+      "PowerShell(Move-Item -Path \"C:\\\\Users\\\\rmous\\\\Downloads\\\\Osirion-backend-main\" -Destination \"C:\\\\Users\\\\rmous\\\\Downloads\\\\Osirion\\\\Osirion-backend-main\")",
+      "PowerShell(Move-Item -Path \"C:\\\\Users\\\\rmous\\\\Downloads\\\\Osirion-core-master\" -Destination \"C:\\\\Users\\\\rmous\\\\Downloads\\\\Osirion\\\\Osirion-core-master\")",
+      "PowerShell(Move-Item -Path \"C:\\\\Users\\\\rmous\\\\Downloads\\\\Osirion-front-end-main\" -Destination \"C:\\\\Users\\\\rmous\\\\Downloads\\\\Osirion\\\\Osirion-front-end-main\")",
+      "PowerShell(robocopy \"C:\\\\Users\\\\rmous\\\\Downloads\\\\Osirion-front-end-main\" \"C:\\\\Users\\\\rmous\\\\Downloads\\\\Osirion\\\\Osirion-front-end-main\" /E /MOVE /NFL /NDL /NJH /NJS; echo \"Exit: $LASTEXITCODE\")"
+    ]
+  }
+}

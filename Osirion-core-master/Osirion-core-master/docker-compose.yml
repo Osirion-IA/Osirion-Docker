@@ -1,0 +1,92 @@
+# =============================================================================
+# Osirion-Core — docker-compose
+# =============================================================================
+# Usage :
+#   CPU  : docker compose up [-d]
+#   GPU  : docker compose --profile gpu up [-d]
+#
+# Pré-requis GPU : nvidia-container-toolkit installé sur l'hôte.
+#   https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
+#
+# Avant le premier lancement :
+#   cp .env.example .env   # puis remplir les valeurs
+# =============================================================================
+
+networks:
+  osirion:
+    driver: bridge
+
+services:
+  # ---------------------------------------------------------------------------
+  # Service CPU (défaut)
+  # torch CPU + onnxruntime (~3 GB image)
+  # ---------------------------------------------------------------------------
+  osirion-core:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        GPU: "0"
+    image: osirion-core:cpu
+    container_name: osirion-core
+    restart: unless-stopped
+    networks:
+      - osirion
+    ports:
+      - "5000:5000"
+    # Les variables sensibles (API_URL, AUTH_EMAIL, AUTH_PASSWORD,
+    # FLASK_SECRET_KEY, CORS_ALLOWED_ORIGINS) sont lues depuis .env
+    env_file:
+      - .env
+    volumes:
+      - logs_data:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:5000/api/cameras"]
+      interval: 30s
+      timeout: 10s
+      start_period: 90s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # Service GPU (NVIDIA) — activer avec : docker compose --profile gpu up
+  # torch CUDA + onnxruntime-gpu (~6 GB image)
+  # Nécessite : nvidia-container-toolkit sur l'hôte + GPU compatible CUDA 12.x
+  # ---------------------------------------------------------------------------
+  osirion-core-gpu:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        GPU: "1"
+    image: osirion-core:gpu
+    container_name: osirion-core-gpu
+    restart: unless-stopped
+    profiles:
+      - gpu
+    networks:
+      - osirion
+    ports:
+      - "5000:5000"
+    env_file:
+      - .env
+    volumes:
+      - logs_data:/app/logs
+    environment:
+      # Sélectionner le GPU 0 (ajuster si plusieurs GPU disponibles)
+      - CUDA_VISIBLE_DEVICES=0
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:5000/api/cameras"]
+      interval: 30s
+      timeout: 10s
+      start_period: 90s
+      retries: 3
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  logs_data:

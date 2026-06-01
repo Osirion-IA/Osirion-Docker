@@ -1,0 +1,122 @@
+# =============================================================================
+# Osirion-Backend — docker-compose
+# =============================================================================
+# Usage :
+#   CPU : docker compose up [-d]
+#   GPU : docker compose --profile gpu up [-d]
+#
+# Pré-requis GPU : nvidia-container-toolkit installé sur l'hôte.
+#   https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
+#
+# Avant le premier lancement :
+#   cp .env.example .env   # puis remplir les valeurs
+# =============================================================================
+
+networks:
+  osirion-backend:
+    driver: bridge
+
+services:
+  # -----------
+  # Base de données PostgreSQL + pgvector
+  # -----------
+  db:
+    image: pgvector/pgvector:pg15
+    container_name: osirion-db
+    restart: unless-stopped
+    networks:
+      - osirion-backend
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-Osirion-AI}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # -----------
+  # Service CPU (défaut)
+  # torch CPU + onnxruntime (~3 GB image)
+  # -----------
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        GPU: "0"
+    image: osirion-backend:cpu
+    container_name: osirion-backend
+    restart: unless-stopped
+    networks:
+      - osirion-backend
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - uploads_data:/app/uploads
+      - cropped_data:/app/cropped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+
+  # -----------
+  # Service GPU (NVIDIA) — activer avec : docker compose --profile gpu up
+  # torch CUDA + onnxruntime-gpu (~7 GB image)
+  # Nécessite : nvidia-container-toolkit sur l'hôte + GPU compatible CUDA 12.x
+  # -----------
+  backend-gpu:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        GPU: "1"
+    image: osirion-backend:gpu
+    container_name: osirion-backend-gpu
+    restart: unless-stopped
+    profiles:
+      - gpu
+    networks:
+      - osirion-backend
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - uploads_data:/app/uploads
+      - cropped_data:/app/cropped
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  db_data:
+  uploads_data:
+  cropped_data:

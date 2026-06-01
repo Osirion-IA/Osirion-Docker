@@ -1,0 +1,51 @@
+# --- Environnements virtuels ---
+venv/
+env/
+.venv/
+.env/
+_requirements.txt
+export_stucture.py
+
+# --- Fichiers Python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pdb
+
+# --- Build / distribution ---
+build/
+dist/
+*.egg-info/
+*.egg
+
+# --- Logs ---
+*.log
+
+# --- Configs locales ---
+.env.local
+.env.*.local
+*.sqlite3
+
+# --- Cache ---
+.cache/
+.ipynb_checkpoints/
+pytest_cache/
+mypy_cache/
+pip-wheel-metadata/
+
+# --- IDE ---
+# VSCode
+.vscode/
+# PyCharm
+.idea/
+*.iml
+
+# --- Systèmes ---
+.DS_Store
+Thumbs.db
+
+# --- Autre ---
+*.bak
+*.tmp
+

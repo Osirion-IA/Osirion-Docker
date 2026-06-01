@@ -1,0 +1,49 @@
+# ======================================================
+# Osirion-Core — Python dependencies (build CPU)
+# ======================================================
+# Utiliser ce fichier pour les builds sans GPU.
+# Pour le build GPU, utiliser requirements.txt
+# (qui contient onnxruntime-gpu à la place d'onnxruntime).
+# ======================================================
+
+# ----------------------
+# Web framework
+# ----------------------
+Flask==3.0.0
+Flask-SocketIO==5.3.5
+python-socketio==5.10.0
+python-engineio==4.13.1
+simple-websocket==1.1.0
+Werkzeug==3.1.6
+
+# ----------------------
+# HTTP / Auth
+# ----------------------
+requests==2.31.0
+aiohttp==3.9.1
+PyJWT==2.7.0
+python-dotenv==1.2.1
+
+# ----------------------
+# Vision / ML
+# ----------------------
+opencv-python-headless>=4.9.0
+insightface>=0.7.3
+# onnxruntime CPU-only : ~50 MB (vs ~700 MB pour onnxruntime-gpu)
+onnxruntime>=1.17.1
+numpy>=1.26.0,<2.0
+pillow==10.2.0
+
+# ----------------------
+# ByteTrack — dépendances
+# (ByteTrack lui-même est cloné dans le Dockerfile)
+# ----------------------
+lapx>=0.5.2
+scipy>=1.12.0
+cython_bbox>=0.1.3
+
+# ----------------------
+# Utilitaires
+# ----------------------
+python-dateutil==2.8.2
+rich==13.7.1

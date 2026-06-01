@@ -1,0 +1,70 @@
+# Environnements virtuels
+venv/
+.venv/
+env/
+pyvenv.cfg
+
+# Cache Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pdb
+.Python
+
+# Secrets — NE JAMAIS inclure dans l'image
+.env
+*.env
+
+# Données uploadées / générées (persistées via volumes Docker)
+uploads/
+cropped/
+
+# Modèles ML locaux — exclus par défaut sauf ceux copiés explicitement dans le Dockerfile
+*.pt
+!yolov11n-face.pt
+*.pth
+*.onnx
+*.bin
+
+# Logs
+logs/
+*.log
+
+# Base de données locale
+*.sqlite3
+*.db
+
+# Git
+.git/
+.gitignore
+
+# Fichiers de développement / tests
+test_*.py
+tests/
+pytest.ini
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Documentation
+*.md
+README*
+
+# CI/CD
+.github/
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+instance/
+dist/
+build/
+*.egg-info
+
+# Claude Code
+.claude/
+memory/

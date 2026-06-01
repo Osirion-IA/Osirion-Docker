@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Osirion - Surveillance Multi-Caméras</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #ffffff;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+            backdrop-filter: blur(10px);
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            background: linear-gradient(90deg, #00d4ff, #00ff88);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        .stats {
+            display: flex;
+            justify-content: center;
+            gap: 30px;
+            margin-top: 15px;
+        }
+        
+        .stat-item {
+            background: rgba(0, 212, 255, 0.1);
+            padding: 10px 20px;
+            border-radius: 8px;
+            border: 1px solid rgba(0, 212, 255, 0.3);
+        }
+        
+        .stat-label {
+            font-size: 0.85em;
+            opacity: 0.7;
+            margin-bottom: 5px;
+        }
+        
+        .stat-value {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #00d4ff;
+        }
+        
+        .camera-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(600px, 1fr));
+            gap: 20px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        .camera-box {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            position: relative;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        
+        .camera-box:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 12px 48px rgba(0, 212, 255, 0.3);
+        }
+        
+        .camera-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        
+        .camera-title {
+            font-size: 1.3em;
+            font-weight: 600;
+        }
+        
+        .camera-location {
+            font-size: 0.9em;
+            color: #00ff88;
+            opacity: 0.8;
+        }
+        
+        .camera-status {
+            display: inline-block;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            font-weight: 600;
+        }
+        
+        .status-online {
+            background: rgba(0, 255, 136, 0.2);
+            color: #00ff88;
+            border: 1px solid #00ff88;
+        }
+        
+        .status-offline {
+            background: rgba(255, 68, 68, 0.2);
+            color: #ff4444;
+            border: 1px solid #ff4444;
+        }
+        
+        .canvas-container {
+            position: relative;
+            width: 100%;
+            background: #000;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        
+        .camera-canvas {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        
+        .latency-badge {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 8px 15px;
+            border-radius: 6px;
+            font-size: 0.9em;
+            font-weight: 600;
+            backdrop-filter: blur(5px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .latency-good { color: #00ff88; }
+        .latency-medium { color: #ffd700; }
+        .latency-bad { color: #ff4444; }
+        
+        .fps-badge {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 8px 15px;
+            border-radius: 6px;
+            font-size: 0.9em;
+            font-weight: 600;
+            backdrop-filter: blur(5px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: #00d4ff;
+        }
+        
+        .connection-status {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-size: 0.9em;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            z-index: 1000;
+        }
+        
+        .connection-status.connected {
+            color: #00ff88;
+            border-color: #00ff88;
+        }
+        
+        .connection-status.disconnected {
+            color: #ff4444;
+            border-color: #ff4444;
+        }
+        
+        .loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 360px;
+            color: rgba(255, 255, 255, 0.5);
+            font-size: 1.1em;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .loading::after {
+            content: '...';
+            animation: pulse 1.5s infinite;
+        }
+    </style>
+</head>
+<body>
+    <div class="connection-status disconnected" id="connectionStatus">
+        🔴 Déconnecté
+    </div>
+
+    <div class="header">
+        <h1>🎥 Osirion - Surveillance Multi-Caméras</h1>
+        <div class="stats">
+            <div class="stat-item">
+                <div class="stat-label">Caméras actives</div>
+                <div class="stat-value" id="totalCameras">0</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Streams actifs</div>
+                <div class="stat-value" id="activeStreams">0</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Personnes suivies</div>
+                <div class="stat-value" id="peopleTracked">0</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="camera-grid" id="cameraGrid"></div>
+
+    <script>
+        // Connexion WebSocket
+        const socket = io();
+        const cameras = {};
+        let connectionStatus = document.getElementById('connectionStatus');
+        let activeStreamCount = 0;
+
+        // État de connexion
+        socket.on('connect', () => {
+            console.log('✅ Connecté au serveur WebSocket');
+            connectionStatus.textContent = '🟢 Connecté';
+            connectionStatus.className = 'connection-status connected';
+        });
+
+        socket.on('disconnect', () => {
+            console.log('❌ Déconnecté du serveur WebSocket');
+            connectionStatus.textContent = '🔴 Déconnecté';
+            connectionStatus.className = 'connection-status disconnected';
+        });
+
+        // Réception de la liste des caméras
+        socket.on('cameras_list', (data) => {
+            console.log('📷 Caméras reçues:', data.cameras);
+            document.getElementById('totalCameras').textContent = data.cameras.length;
+            
+            const grid = document.getElementById('cameraGrid');
+            grid.innerHTML = '';
+            
+            data.cameras.forEach(cam => {
+                createCameraBox(cam);
+            });
+            
+            // Charger les statistiques
+            loadStats();
+        });
+
+        // Réception des frames
+        socket.on('frame', (data) => {
+            const cam = cameras[data.camera_id];
+            if (!cam) return;
+            
+            const now = Date.now();
+            
+            // Calculer latence (temps entre frames)
+            if (cam.lastFrameTime) {
+                const latency = now - cam.lastFrameTime;
+                cam.latencyDiv.textContent = `${latency}ms`;
+                
+                if (latency < 100) {
+                    cam.latencyDiv.className = 'latency-badge latency-good';
+                } else if (latency < 250) {
+                    cam.latencyDiv.className = 'latency-badge latency-medium';
+                } else {
+                    cam.latencyDiv.className = 'latency-badge latency-bad';
+                }
+                
+                // Calculer FPS
+                cam.frameCount++;
+                const elapsed = (now - cam.fpsStartTime) / 1000;
+                if (elapsed >= 1) {
+                    cam.fps = Math.round(cam.frameCount / elapsed);
+                    cam.fpsDiv.textContent = `${cam.fps} FPS`;
+                    cam.frameCount = 0;
+                    cam.fpsStartTime = now;
+                }
+            }
+            
+            cam.lastFrameTime = now;
+            
+            // Afficher l'image
+            const img = new Image();
+            img.onload = () => {
+                cam.ctx.drawImage(img, 0, 0, cam.canvas.width, cam.canvas.height);
+            };
+            img.src = 'data:image/jpeg;base64,' + data.data;
+        });
+
+        // Stream démarré
+        socket.on('stream_started', (data) => {
+            console.log(`✅ Stream démarré pour caméra ${data.camera_id}`);
+            const cam = cameras[data.camera_id];
+            if (cam) {
+                cam.statusDiv.textContent = 'En ligne';
+                cam.statusDiv.className = 'camera-status status-online';
+            }
+            activeStreamCount++;
+            document.getElementById('activeStreams').textContent = activeStreamCount;
+        });
+
+        // Erreur
+        socket.on('error', (data) => {
+            console.error('❌ Erreur:', data.message);
+        });
+
+        // Créer une box caméra
+        function createCameraBox(cam) {
+            const box = document.createElement('div');
+            box.className = 'camera-box';
+            
+            const header = document.createElement('div');
+            header.className = 'camera-header';
+            
+            const titleDiv = document.createElement('div');
+            titleDiv.innerHTML = `
+                <div class="camera-title">${cam.name}</div>
+                <div class="camera-location">📍 ${cam.location}</div>
+            `;
+            
+            const statusDiv = document.createElement('div');
+            statusDiv.className = 'camera-status status-offline';
+            statusDiv.textContent = 'Chargement...';
+            
+            header.appendChild(titleDiv);
+            header.appendChild(statusDiv);
+            
+            const canvasContainer = document.createElement('div');
+            canvasContainer.className = 'canvas-container';
+            
+            const canvas = document.createElement('canvas');
+            canvas.className = 'camera-canvas';
+            canvas.width = 640;
+            canvas.height = 480;
+            const ctx = canvas.getContext('2d');
+            
+            // Badge latence
+            const latencyDiv = document.createElement('div');
+            latencyDiv.className = 'latency-badge latency-good';
+            latencyDiv.textContent = '0ms';
+            
+            // Badge FPS
+            const fpsDiv = document.createElement('div');
+            fpsDiv.className = 'fps-badge';
+            fpsDiv.textContent = '0 FPS';
+            
+            canvasContainer.appendChild(canvas);
+            canvasContainer.appendChild(latencyDiv);
+            canvasContainer.appendChild(fpsDiv);
+            
+            box.appendChild(header);
+            box.appendChild(canvasContainer);
+            
+            document.getElementById('cameraGrid').appendChild(box);
+            
+            // Stocker les références
+            cameras[cam.id] = {
+                canvas: canvas,
+                ctx: ctx,
+                latencyDiv: latencyDiv,
+                fpsDiv: fpsDiv,
+                statusDiv: statusDiv,
+                lastFrameTime: null,
+                frameCount: 0,
+                fpsStartTime: Date.now(),
+                fps: 0
+            };
+            
+            // Démarrer le stream
+            socket.emit('start_stream', { camera_id: cam.id });
+        }
+
+        // Charger les statistiques
+        function loadStats() {
+            fetch('/api/stats')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('peopleTracked').textContent = data.people_tracked;
+                })
+                .catch(err => console.error('Erreur stats:', err));
+        }
+
+        // Actualiser les stats toutes les 5 secondes
+        setInterval(loadStats, 5000);
+    </script>
+</body>
+</html>

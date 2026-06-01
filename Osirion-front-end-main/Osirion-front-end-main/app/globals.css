@@ -1,0 +1,82 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+  --app-bg: radial-gradient(circle at top, rgba(0, 0, 0, 0.06), transparent 45%),
+    radial-gradient(circle at bottom, rgba(0, 0, 0, 0.08), transparent 45%);
+}
+@keyframes scan {
+  0% { transform: translateY(-100%); }
+  50% { transform: translateY(100vh); }
+  100% { transform: translateY(100vh); }
+}
+
+.animate-scan {
+  animation: scan 8s linear infinite;
+}
+:root.dark {
+  --background: #0a0a0a;
+  --foreground: #ededed;
+  --app-bg: radial-gradient(circle at top, rgba(255, 255, 255, 0.08), transparent 45%),
+    radial-gradient(circle at bottom, rgba(255, 255, 255, 0.06), transparent 45%);
+}
+
+@layer utilities {
+  .scrollbar-soft {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+
+  .scrollbar-soft::-webkit-scrollbar {
+    width: 5px;
+  }
+
+  .scrollbar-soft::-webkit-scrollbar-track {
+    background: transparent;
+    border-radius: 9999px;
+  }
+
+  .scrollbar-soft::-webkit-scrollbar-thumb {
+    background: rgba(100, 116, 139, 0.18); /* très discret */
+    border-radius: 9999px;
+    transition: background 0.18s ease;
+  }
+
+  .dark .scrollbar-soft::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.18);
+  }
+
+  .scrollbar-soft:hover::-webkit-scrollbar-thumb {
+    background: rgba(100, 116, 139, 0.38);
+  }
+
+  .dark .scrollbar-soft:hover::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.38);
+  }
+
+  .scrollbar-soft {
+    scrollbar-color: rgba(148, 163, 184, 0.18) transparent;
+  }
+
+  .scrollbar-soft:hover {
+    scrollbar-color: rgba(148, 163, 184, 0.4) transparent;
+  }
+
+  @keyframes fade-in {
+    from { opacity: 0; transform: translateX(-4px); }
+    to   { opacity: 1; transform: translateX(0); }
+  }
+
+  .animate-fade-in {
+    animation: fade-in 0.18s ease-out forwards;
+  }
+}
+
+body {
+  color: var(--foreground);
+  background: var(--background);
+  font-family: Arial, Helvetica, sans-serif;
+}

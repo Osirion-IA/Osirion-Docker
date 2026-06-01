@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/rmous/Downloads/Osirion-core-master/**)",
+      "Read(//c/Users/rmous/Downloads/**)"
+    ]
+  }
+}

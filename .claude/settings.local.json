@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\rmous\\\\Downloads\\\\Osirion\" -Recurse -Force | ForEach-Object { $_.FullName })",
+      "PowerShell(New-Item -ItemType Directory -Force -Path \"C:\\\\Users\\\\rmous\\\\Downloads\\\\Osirion\\\\Osirion-backend-main\\\\Osirion-backend-main\\\\tests\\\\assets\")",
+      "Bash(docker --version)",
+      "Bash(docker compose *)",
+      "Bash(docker-compose --version)",
+      "Bash(nvidia-smi)",
+      "Bash(sudo -S mv /etc/apt/sources.list.d/nvidia-container-toolkit.lis /etc/apt/sources.list.d/nvidia-container-toolkit.list)",
+      "Bash(sudo -S apt-get update)",
+      "Bash(sudo -S nvidia-ctk runtime configure --runtime=docker)",
+      "Bash(sudo -S systemctl restart docker)",
+      "Bash(sudo -S docker run --rm --gpus all nvidia/cuda:12.3.0-base-ubuntu22.04 nvidia-smi)",
+      "Bash(sudo -S docker ps --format \"table {{.Names}}\\\\t{{.Status}}\\\\t{{.Ports}}\")",
+      "Bash(sudo -S docker exec osirion-core python3 -c \"import onnxruntime as ort; print\\('providers:', ort.get_available_providers\\(\\)\\)\")",
+      "Bash(sudo -S docker exec osirion-backend python3 -c \"import onnxruntime as ort; print\\('providers:', ort.get_available_providers\\(\\)\\)\")",
+      "Bash(sudo -S docker exec osirion-core pip show onnxruntime onnxruntime-gpu)",
+      "Bash(sudo -S docker exec osirion-core bash -c ' *)",
+      "Bash(grep -rniE \"plaque|immatricul|anpr|\\\\blpr\\\\b|easyocr|paddleocr|license.?plate|reconnaissance.{0,5}plaque\" --include=\"*.py\" --include=\"*.js\" .)",
+      "Bash(git --version)",
+      "Bash(python3 -c \"import easyocr; print\\('easyocr OK'\\)\")",
+      "Bash(python3 -c \"import ultralytics; print\\('ultralytics OK'\\)\")",
+      "Bash(python3 -c \"import Levenshtein; print\\('levenshtein OK'\\)\")",
+      "Bash(git init *)",
+      "Bash(git config *)",
+      "Bash(git add *)",
+      "Bash(git commit -q -m 'chore: baseline snapshot of Osirion before LPR module *)",
+      "Bash(git checkout *)",
+      "Bash(grep -E \"\\(^|/\\)\\\\.env$\")"
+    ]
+  }
+}

@@ -1,0 +1,45 @@
+
+# --- Secrets — NE JAMAIS committer ---
+.env
+
+# --- Environnement virtuel Python ---
+venv/
+env/
+.venv/
+osirion/
+bin/
+include/
+lib/
+lib64/
+share/
+pyvenv.cfg
+yolov8l_100e.pt
+
+# --- Fichiers temporaires Python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pkl
+
+# --- Fichiers de logs ---
+*.log
+
+# --- Caches & dossiers générés ---
+.cache/
+*.egg-info/
+dist/
+build/
+
+# --- Éditeurs de code ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- Systèmes d’exploitation ---
+# macOS
+.DS_Store
+# Windows
+Thumbs.db
+

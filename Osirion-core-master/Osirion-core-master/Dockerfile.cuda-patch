@@ -1,0 +1,17 @@
+# Patch GPU : fournit libcublasLt.so.12 via les packages pip NVIDIA
+# (le repo apt NVIDIA est cassé sur Debian Trixie — SHA1 rejeté depuis fév 2026)
+#
+# Usage :
+#   docker build -f Dockerfile.cuda-patch -t osirion-core:gpu .
+FROM osirion-core:gpu
+
+# nvidia-cublas-cu12 → libcublasLt.so.12 + libcublas.so.12
+# nvidia-cudnn-cu12  → libcudnn.so.8 (requis pour l'inférence)
+RUN pip install --no-cache-dir \
+        "nvidia-cublas-cu12>=12.2" \
+        "nvidia-cudnn-cu12>=8.9" && \
+    # Enregistrer les répertoires lib des packages nvidia auprès du linker dynamique
+    find /root/.local/lib/python3.11/site-packages/nvidia \
+        -mindepth 2 -maxdepth 2 -name lib -type d \
+        > /etc/ld.so.conf.d/nvidia-pypi.conf && \
+    ldconfig
