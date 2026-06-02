@@ -37,17 +37,20 @@ WORKDIR /build
 
 COPY requirements.txt requirements-cpu.txt ./
 
+# pip récent (≥25.1) pour --resume-retries : REPREND un téléchargement coupé en
+# plein milieu (indispensable sur connexion lente/instable). Couche cachée.
+RUN --mount=type=cache,target=/root/.cache/pip pip install --retries 10 --timeout 120 --upgrade pip
+
 # PyTorch — versions ÉPINGLÉES en CUDA 12 (torch 2.9.1 / torchvision 0.24.1).
 #   Sans épinglage, "torch>=2.0.0" tirait torch 2.12 + CUDA 13 (énorme + incompatible
 #   avec les nvidia-*-cu12 du projet et le driver). 2.9.1 = même base que le backend.
-#   GPU=0 → wheel CPU-only (index pytorch/whl/cpu)
-#   GPU=1 → wheel CUDA 12.x (index PyPI par défaut)
+# Options réseau robustes : --resume-retries 10 reprend un fichier interrompu.
 RUN --mount=type=cache,target=/root/.cache/pip \
     if [ "$GPU" = "1" ]; then \
-        pip install --user --retries 10 --timeout 300 \
+        pip install --user --retries 10 --timeout 120 --resume-retries 10 \
             "torch==2.9.1" "torchvision==0.24.1"; \
     else \
-        pip install --user --retries 10 --timeout 300 \
+        pip install --user --retries 10 --timeout 120 --resume-retries 10 \
             --index-url https://download.pytorch.org/whl/cpu \
             "torch==2.9.1" "torchvision==0.24.1"; \
     fi
@@ -57,14 +60,14 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 #   GPU=0 → requirements-cpu.txt (onnxruntime CPU  ≥1.17,         ~50 MB)
 RUN --mount=type=cache,target=/root/.cache/pip \
     if [ "$GPU" = "1" ]; then \
-        pip install --user --retries 10 --timeout 300 -r requirements.txt && \
-        pip install --user --retries 10 --timeout 300 \
+        pip install --user --retries 10 --timeout 120 --resume-retries 10 -r requirements.txt && \
+        pip install --user --retries 10 --timeout 120 --resume-retries 10 \
             "nvidia-cuda-runtime-cu12" \
             "nvidia-cufft-cu12" \
             "nvidia-cublas-cu12>=12.2" \
             "nvidia-cudnn-cu12>=8.9"; \
     else \
-        pip install --user --retries 10 --timeout 300 -r requirements-cpu.txt; \
+        pip install --user --retries 10 --timeout 120 --resume-retries 10 -r requirements-cpu.txt; \
     fi
 
 # ByteTrack cloné comme package local — import via PYTHONPATH=/app

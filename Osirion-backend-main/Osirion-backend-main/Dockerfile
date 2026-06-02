@@ -37,15 +37,21 @@ WORKDIR /build
 
 COPY requirements-cpu.txt requirements-gpu.txt ./
 
-# PyTorch :
-#   GPU=1 → wheel CUDA 12.x (index PyPI par défaut)  ~2.5 GB
-#   GPU=0 → wheel CPU-only (index pytorch/whl/cpu)   ~500 MB
+# pip récent (≥25.1) pour --resume-retries : REPREND un téléchargement coupé en
+# plein milieu (indispensable sur connexion lente/instable). Couche cachée.
+RUN --mount=type=cache,target=/root/.cache/pip pip install --retries 10 --timeout 120 --upgrade pip
+
+# Options réseau robustes (connexion lente) :
+#   --resume-retries 10 → reprend un fichier interrompu sans tout refaire
+#   --retries 10        → réessaie sur erreur de connexion
+#   --timeout 120       → échoue vite sur stall puis reprend (vs attendre 300s)
+# PyTorch épinglé CUDA 12 (GPU) / CPU (GPU=0).
 RUN --mount=type=cache,target=/root/.cache/pip \
     if [ "$GPU" = "1" ]; then \
-        pip install --user --retries 10 --timeout 300 \
+        pip install --user --retries 10 --timeout 120 --resume-retries 10 \
             "torch==2.9.1" "torchvision==0.24.1"; \
     else \
-        pip install --user --retries 10 --timeout 300 \
+        pip install --user --retries 10 --timeout 120 --resume-retries 10 \
             --index-url https://download.pytorch.org/whl/cpu \
             "torch==2.9.1" "torchvision==0.24.1"; \
     fi
@@ -55,9 +61,9 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 #   GPU=0 → requirements-cpu.txt (onnxruntime CPU  ~50 MB)
 RUN --mount=type=cache,target=/root/.cache/pip \
     if [ "$GPU" = "1" ]; then \
-        pip install --user --retries 10 --timeout 300 -r requirements-gpu.txt; \
+        pip install --user --retries 10 --timeout 120 --resume-retries 10 -r requirements-gpu.txt; \
     else \
-        pip install --user --retries 10 --timeout 300 -r requirements-cpu.txt; \
+        pip install --user --retries 10 --timeout 120 --resume-retries 10 -r requirements-cpu.txt; \
     fi
 
 # -----------
