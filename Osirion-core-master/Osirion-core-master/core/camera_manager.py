@@ -38,7 +38,10 @@ class CameraCapture:
     def connect_camera(self) -> Optional[cv2.VideoCapture]:
         """Tente de se connecter à la caméra (TCP forcé pour éviter les erreurs de décodage H.264 UDP)"""
         os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
-        new_cap = cv2.VideoCapture(self.rtsp_url)
+        # Backend FFmpeg explicite (cv2.CAP_FFMPEG) : sans lui, une URL RTSP contenant
+        # un '%' (ex. mot de passe encodé '%40' pour '@') est prise par OpenCV pour un
+        # motif de séquence d'images (cap_images) → "expected '0?[1-9][du]' pattern".
+        new_cap = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
         new_cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         if new_cap.isOpened():
             return new_cap
