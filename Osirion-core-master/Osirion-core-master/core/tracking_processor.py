@@ -523,6 +523,12 @@ class TrackingProcessor:
                     self.result_frames[self.cam_id] = frame_to_display
 
         finally:
+            # Arrêt propre du worker réseau LPR (thread + session aiohttp dédiés).
+            if self.plate_processor is not None:
+                try:
+                    self.plate_processor.shutdown()
+                except Exception as e:
+                    logger.debug(f"[LPR][cam={self.cam_name}] arrêt worker LPR : {e}")
             async def _close():
                 if self._session and not self._session.closed:
                     await self._session.close()

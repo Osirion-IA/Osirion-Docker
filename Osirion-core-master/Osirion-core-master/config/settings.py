@@ -172,3 +172,63 @@ PLATE_CACHE_TTL_FRAMES = int(os.getenv('PLATE_CACHE_TTL_FRAMES', '600'))
 COLOR_PLATE = (0, 200, 255)            # Jaune/orangé : plaque détectée/lue
 COLOR_PLATE_BLACKLIST = (0, 0, 255)    # Rouge : plaque blacklistée (alerte)
 COLOR_PLATE_KNOWN = (255, 200, 0)      # Bleu clair : plaque connue (non blacklistée)
+
+# -----------------------------------------
+# Module LPR — OPTIMISATIONS latence & précision
+# -----------------------------------------
+# Tous ces réglages ont des valeurs par défaut SÛRES : le module se comporte au
+# moins aussi bien qu'avant, et chaque nouveau chemin retombe gracieusement sur
+# l'ancien comportement en cas de problème (jamais d'impact sur le facial).
+
+# ── Latence : cadence de DÉTECTION plaque ───────────────────────────────────
+# La détection YOLO de plaque ne tourne qu'1 frame TRAITÉE sur N (le cache OCR
+# par track couvre les frames intermédiaires via annotate_cached). 1 = ancien
+# comportement (détecter à chaque frame traitée). 2-3 = ~2-3× moins de YOLO.
+PLATE_PROCESS_EVERY_N = int(os.getenv('PLATE_PROCESS_EVERY_N', '2'))
+
+# ── Latence : résolution réseau découplée du thread caméra ──────────────────
+# La recherche floue + l'envoi d'événement partent dans un thread worker dédié
+# (file FIFO) ; le thread caméra n'est JAMAIS bloqué par le réseau.
+PLATE_LOOKUP_QUEUE_MAXSIZE = int(os.getenv('PLATE_LOOKUP_QUEUE_MAXSIZE', '64'))
+
+# ── Latence/précision : gating du crop avant OCR ────────────────────────────
+# On n'OCR pas les plaques trop petites (illisibles, gaspillage GPU/CPU).
+PLATE_MIN_CROP_WIDTH = int(os.getenv('PLATE_MIN_CROP_WIDTH', '60'))
+PLATE_MIN_CROP_HEIGHT = int(os.getenv('PLATE_MIN_CROP_HEIGHT', '18'))
+# Filtre de netteté du crop (variance du Laplacien). 0.0 = désactivé (défaut sûr,
+# évite de tout filtrer en faible luminosité). Mettre ~15-30 pour rejeter le flou.
+PLATE_CROP_MIN_SHARPNESS = float(os.getenv('PLATE_CROP_MIN_SHARPNESS', '0.0'))
+
+# ── Précision : vote temporel multi-frames (agrégation OCR le long d'un track)
+# Au lieu de figer la 1re lecture haute-confiance, on accumule les lectures et
+# on vote caractère par caractère. Une plaque est "définitive" quand le même
+# consensus est observé PLATE_VOTE_MIN_AGREE fois (et conf moyenne ≥ ocr_good),
+# ou que PLATE_OCR_MAX_ATTEMPTS est atteint.
+PLATE_TEMPORAL_VOTING = os.getenv('PLATE_TEMPORAL_VOTING', 'true').lower() == 'true'
+PLATE_VOTE_MIN_AGREE = int(os.getenv('PLATE_VOTE_MIN_AGREE', '2'))
+
+# ── Précision : pré-traitement du crop avant OCR ────────────────────────────
+# Upscale des petits crops + niveaux de gris + CLAHE (contraste adaptatif).
+# Sûr et peu coûteux. Le deskew (correction de perspective) est plus agressif,
+# donc désactivé par défaut.
+PLATE_PREPROCESS = os.getenv('PLATE_PREPROCESS', 'true').lower() == 'true'
+PLATE_PREPROCESS_TARGET_HEIGHT = int(os.getenv('PLATE_PREPROCESS_TARGET_HEIGHT', '64'))
+PLATE_DESKEW = os.getenv('PLATE_DESKEW', 'false').lower() == 'true'
+
+# Robustesse à la FORTE LUMINOSITÉ (surexposition, reflets, gradients) :
+# suppression du glare (inpainting des pixels saturés) + normalisation
+# d'illumination (division par fond flou) + gamma adaptatif. Tout est
+# CONDITIONNEL (ne se déclenche que sur les crops réellement trop clairs),
+# donc activé par défaut sans risque sur les conditions normales/faible lumière.
+PLATE_ILLUMINATION_ROBUST = os.getenv('PLATE_ILLUMINATION_ROBUST', 'true').lower() == 'true'
+
+# ── Latence : demi-précision (FP16) du YOLO de plaque sur GPU ───────────────
+# Accélère l'inférence sur GPU. Repli automatique en FP32 si une inférence FP16
+# échoue (le flag se désactive tout seul → jamais de crash).
+PLATE_YOLO_HALF = os.getenv('PLATE_YOLO_HALF', 'true').lower() == 'true'
+
+# ── Précision : validation par format (regex) — OPTIONNEL ───────────────────
+# Vide = désactivé (défaut). Ex. pour ne garder que 6-8 alphanumériques :
+#   PLATE_FORMAT_REGEX='^[A-Z0-9]{6,8}$'
+# Une lecture qui ne matche pas n'est jamais "finalisée" (réduit les faux positifs).
+PLATE_FORMAT_REGEX = os.getenv('PLATE_FORMAT_REGEX', '').strip()
