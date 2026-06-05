@@ -1,0 +1,56 @@
+# =============================================================================
+# Osirion — MediaMTX (proxy média haute performance)   [Phase 2]
+# =============================================================================
+# Rôle : décharger TOTALEMENT le transport vidéo du Core.
+#   - Ingest le flux RTSP des caméras (à la demande)
+#   - Le re-publie en WebRTC (WHEP) pour lecture native, accélérée matériellement,
+#     directement dans la balise <video> du frontend.
+#
+# Le Core ne fait plus QUE de l'IA + des métadonnées JSON (bounding boxes).
+#
+# La source RTSP de chaque caméra est injectée par variable d'environnement
+# (compose → .env : MTX_PATHS_CAM3_SOURCE) pour ne pas versionner les
+# identifiants caméra. MediaMTX échoue au démarrage sur toute clé inconnue :
+# ce fichier reste volontairement minimal et n'utilise que des clés stables.
+# =============================================================================
+
+logLevel: info
+
+# ── Serveurs inutilisés désactivés (image légère, surface réduite) ───────────
+api: no
+metrics: no
+hls: no
+rtmp: no
+srt: no
+
+# ── Serveur RTSP (ingest des caméras) ────────────────────────────────────────
+rtsp: yes
+rtspAddress: :8554
+
+# ── Serveur WebRTC (lecture WHEP / publication WHIP) ─────────────────────────
+webrtc: yes
+webrtcAddress: :8889
+# Mux ICE UDP sur un port unique (publié vers l'hôte) — tous les lecteurs le
+# partagent. 'webrtcAdditionalHosts: 127.0.0.1' fait que MediaMTX annonce un
+# candidat ICE joignable par le navigateur via le port publié (sinon il
+# n'annoncerait que l'IP interne 172.x du conteneur, injoignable depuis l'hôte).
+webrtcLocalUDPAddress: :8189
+webrtcAdditionalHosts: [127.0.0.1]
+
+# ── Chemins (1 par caméra) ──────────────────────────────────────────────────
+# Convention : path = "cam<id>"  →  le frontend lit  /cam<id>/whep
+# 'source' fourni via MTX_PATHS_CAM3_SOURCE (env). 'sourceOnDemand' : connexion
+# à la caméra uniquement lorsqu'un lecteur WebRTC est réellement présent.
+paths:
+  cam3:
+    source: rtsp://overridden-by-MTX_PATHS_CAM3_SOURCE-env
+    sourceOnDemand: yes
+    sourceOnDemandCloseAfter: 30s
+    # Forcer le transport TCP pour le pull caméra (comme le Core). En UDP, la
+    # caméra HIKVISION perdait des centaines de paquets RTP/s (FU-A invalides,
+    # vidéo saccadée) ; le TCP retransmet → flux propre. Lien local fiable.
+    rtspTransport: tcp
+
+  # Catch-all : autorise les autres chemins (flux publiés à la volée, mire de
+  # test, futures caméras via WHIP/RTSP push) sans devoir les déclarer un à un.
+  all_others:

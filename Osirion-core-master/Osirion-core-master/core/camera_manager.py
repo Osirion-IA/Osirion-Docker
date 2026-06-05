@@ -26,11 +26,29 @@ class CameraCapture:
     def __init__(self, cam: Dict, frame_queue: queue.Queue, stop_event, config):
         self.cam_id = cam["id"]
         self.cam_name = cam["cam_name"]
-        self.rtsp_url = cam["rtsp_url"]
+        self.config = config
+
+        # Source de capture (architecture VMS — Phase 2). Si READ_FROM_MEDIAMTX,
+        # le Core lit le flux REPUBLIÉ par MediaMTX (rtsp://<base>/cam<id>) au lieu
+        # d'ouvrir une 2e connexion vers la caméra physique : une seule connexion
+        # caméra (MediaMTX), partagée entre l'IA et la vidéo navigateur.
+        if getattr(config, 'READ_FROM_MEDIAMTX', False):
+            base = getattr(config, 'MEDIAMTX_RTSP_BASE', 'mediamtx:8554')
+            self.rtsp_url = f"rtsp://{base}/cam{self.cam_id}"
+            self.source_kind = "MediaMTX (republié)"
+        else:
+            self.rtsp_url = cam["rtsp_url"]
+            self.source_kind = "caméra directe"
+
+        logger.info(
+            f"Caméra {self.cam_id} ({self.cam_name}) — source de capture : "
+            f"{self.source_kind} [{_mask_rtsp_url(self.rtsp_url)}]",
+            extra={'camera_id': self.cam_id}
+        )
+
         self.frame_queue = frame_queue
         self.stop_event = stop_event
-        self.config = config
-        
+
         self.cap: Optional[cv2.VideoCapture] = None
         self.reconnection_attempts = 0
         self.frame_failures = 0

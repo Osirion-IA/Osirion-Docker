@@ -67,6 +67,17 @@ MAX_RECONNECTION_DELAY = 30.0     # Délai maximum entre les tentatives de recon
 FRAME_FAILURE_THRESHOLD = 10      # Nombre d'échecs consécutifs avant de déclencher une reconnexion
 
 # ----------------------
+# Source de capture vidéo (architecture VMS — Phase 2)
+# ----------------------
+# READ_FROM_MEDIAMTX=true : le Core lit le flux RTSP REPUBLIÉ par MediaMTX
+# (rtsp://<base>/cam<id>) au lieu de taper la caméra directement. Résultat : UNE
+# SEULE connexion à la caméra physique (faite par MediaMTX), partagée entre l'IA
+# (Core) et la vidéo navigateur (WebRTC). Réduit la charge caméra/réseau et la
+# perte de paquets. false = ancien comportement (Core ouvre cam["rtsp_url"]).
+READ_FROM_MEDIAMTX = os.getenv('READ_FROM_MEDIAMTX', 'false').lower() == 'true'
+MEDIAMTX_RTSP_BASE = os.getenv('MEDIAMTX_RTSP_BASE', 'mediamtx:8554')  # hôte:port RTSP interne
+
+# ----------------------
 # Constantes de couleurs (BGR format)
 # ----------------------
 COLOR_UNKNOWN = (0, 0, 255)       # Rouge pour les visages inconnus

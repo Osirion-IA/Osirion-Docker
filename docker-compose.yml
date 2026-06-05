@@ -131,11 +131,18 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+      mediamtx:
+        condition: service_started   # le Core lit le flux republié par MediaMTX
     ports:
       - "5000:5000"
     environment:
       # URL interne Docker vers le backend — NE PAS utiliser localhost ici
       API_URL: http://backend:8000/
+      # ── Source vidéo (VMS Phase 2) : le Core lit le flux RTSP republié par
+      # MediaMTX (rtsp://mediamtx:8554/cam<id>) → UNE seule connexion à la caméra
+      # physique (MediaMTX), partagée entre l'IA (Core) et la vidéo (WebRTC).
+      READ_FROM_MEDIAMTX: "true"
+      MEDIAMTX_RTSP_BASE: mediamtx:8554
       AUTH_EMAIL: ${AUTH_EMAIL}
       AUTH_PASSWORD: ${AUTH_PASSWORD}
       FLASK_SECRET_KEY: ${FLASK_SECRET_KEY}
@@ -194,10 +201,34 @@ services:
               capabilities: [gpu]
 
   # ---------------------------------------------------------------------------
+  # MediaMTX — proxy média (RTSP ingest → WebRTC/WHEP)   [Phase 2]
+  # Décharge TOTALEMENT le transport vidéo du Core : le frontend lit la vidéo en
+  # WebRTC natif (décodage accéléré matériellement par le navigateur) et superpose
+  # les bounding boxes reçues en JSON via Socket.IO. Configuration : ./mediamtx.yml
+  # + source RTSP par caméra injectée depuis .env (MTX_PATHS_CAM3_SOURCE).
+  # ---------------------------------------------------------------------------
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: osirion-mediamtx
+    restart: unless-stopped
+    networks:
+      - osirion
+    ports:
+      - "8554:8554"        # RTSP (ingest / republish)
+      - "8889:8889"        # WebRTC — signalisation HTTP (WHEP / WHIP)
+      - "8189:8189/udp"    # WebRTC — mux ICE UDP (DOIT être publié pour la lecture navigateur)
+    environment:
+      # URL RTSP déchiffrée de la caméra 3, injectée depuis .env (jamais versionnée).
+      # MediaMTX mappe MTX_PATHS_CAM3_SOURCE → paths.cam3.source.
+      MTX_PATHS_CAM3_SOURCE: ${MTX_PATHS_CAM3_SOURCE}
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+
+  # ---------------------------------------------------------------------------
   # Frontend — Next.js standalone (~200 MB)
   # Les appels API serveur passent par le réseau interne Docker.
-  # Les appels WebSocket du navigateur passent par les ports exposés.
-  # Pas de bind mount frontend (code non modifié dans cette session).
+  # Vidéo : WebRTC (WHEP) navigateur → MediaMTX (port 8889 publié).
+  # Overlay : événement Socket.IO 'metadata' navigateur → Core (port 5000 publié).
   # ---------------------------------------------------------------------------
   frontend:
     image: osirion-frontend:latest
@@ -220,6 +251,9 @@ services:
       # URL publique (navigateur → core WebSocket, accessible depuis l'hôte)
       NEXT_PUBLIC_CORE_URL: http://localhost:5000
       NEXT_PUBLIC_BACKEND_URL: http://localhost:8000
+      # Socket.IO Core (overlay metadata) + MediaMTX WHEP (vidéo WebRTC) — Phase 2
+      NEXT_PUBLIC_SOCKET_URL: http://localhost:5000
+      NEXT_PUBLIC_MEDIAMTX_URL: http://localhost:8889
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/"]
       interval: 30s

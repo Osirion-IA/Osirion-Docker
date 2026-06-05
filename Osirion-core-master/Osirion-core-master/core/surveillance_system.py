@@ -31,6 +31,10 @@ class SurveillanceSystem:
         self.current_frame_idx = {}
         self.frame_queues = {}
         self.result_frames = {}
+        # Phase 2 : le Core ne produit plus d'images annotées. Chaque caméra publie
+        # un payload de métadonnées JSON (bounding boxes) que le serveur web diffuse
+        # via Socket.IO ('metadata'). La vidéo passe par MediaMTX (WebRTC), pas ici.
+        self.result_metadata = {}             # {cam_id: {"seq": int, "payload": {...}}}
         self.result_lock = threading.Lock()   # verrou global (routes REST)
         self.result_locks = {}                # verrous par caméra (streaming)
         self.stop_event = threading.Event()
@@ -73,6 +77,7 @@ class SurveillanceSystem:
             cam_id = cam["id"]
             self.frame_queues[cam_id] = queue.Queue(maxsize=self.config.FRAME_QUEUE_MAXSIZE)
             self.result_frames[cam_id] = None
+            self.result_metadata[cam_id] = None
             self.result_locks[cam_id] = threading.Lock()
             self.trackers[cam_id] = BYTETracker(
                 self.config.BYTE_TRACK_ARGS,
@@ -102,6 +107,7 @@ class SurveillanceSystem:
                 cam=cam,
                 frame_queue=self.frame_queues[cam_id],
                 result_frames=self.result_frames,
+                result_metadata=self.result_metadata,
                 result_lock=self.result_locks[cam_id],
                 tracker=self.trackers[cam_id],
                 person_db=self.track_id_to_person[cam_id],

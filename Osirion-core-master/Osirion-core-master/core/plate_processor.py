@@ -116,23 +116,23 @@ class PlateProcessor:
     # ──────────────────────────────────────────────────────────────────────
     # Entrée principale (appelée par TrackingProcessor sur les frames traitées)
     # ──────────────────────────────────────────────────────────────────────
-    def process(self, frame: np.ndarray, frame_annotated: np.ndarray,
-                frame_idx: int, loop=None, session=None) -> np.ndarray:
+    def process(self, frame: np.ndarray, frame_idx: int) -> None:
         """
-        Détecte/lit les plaques sur `frame`, annote `frame_annotated` et renvoie
-        ce dernier. `loop`/`session` sont acceptés pour compatibilité mais ne
-        sont plus utilisés (le worker réseau interne gère les appels).
+        Phase 2 : détecte/lit les plaques sur `frame` et met à jour plate_db +
+        _active_ids, SANS dessiner. Les bounding boxes sont récupérées ensuite par
+        get_detections() (JSON) pour l'overlay frontend.
         """
         if not plate_detection.LPR_AVAILABLE:
-            return frame_annotated
+            return
 
         # 1) Appliquer les résultats réseau revenus du worker (non bloquant).
         self._drain_results()
 
-        # 2) Cadence : ne lancer la détection YOLO qu'1 frame sur N.
+        # 2) Cadence : ne lancer la détection YOLO qu'1 frame sur N. Entre deux,
+        #    on conserve _active_ids/plate_db (l'overlay frontend reste affiché).
         self._proc_count += 1
         if self._proc_count % self.process_every_n != 0:
-            return self.annotate_cached(frame_annotated)
+            return
 
         detections = detect_plates(frame, confidence_threshold=self.det_conf)
 
@@ -173,25 +173,38 @@ class PlateProcessor:
             if entry["finalized"] and entry["plate_text"]:
                 self._schedule_lookup(tid, entry, frame)
 
-        # ── Annotation (tracks actifs de cette frame) ──
-        for tid in self._active_ids:
-            entry = self.plate_db.get(tid)
-            if entry:
-                self._annotate(frame_annotated, entry)
-
         self._cleanup(frame_idx)
-        return frame_annotated
 
-    def annotate_cached(self, frame: np.ndarray) -> np.ndarray:
-        """Redessine les boîtes plaques des derniers tracks actifs (frames sautées,
-        sans relancer détection/OCR). Garde l'affichage stable entre 2 détections."""
+    def get_detections(self) -> List[Dict]:
+        """Détections plaques (JSON) des tracks actifs, pour l'overlay frontend.
+
+        Schéma par détection :
+          {type:"plate", track_id, bbox:[x1,y1,x2,y2], label, alert:bool, known:bool}
+        """
+        out: List[Dict] = []
         if not plate_detection.LPR_AVAILABLE:
-            return frame
+            return out
         for tid in self._active_ids:
             entry = self.plate_db.get(tid)
-            if entry:
-                self._annotate(frame, entry)
-        return frame
+            if not entry:
+                continue
+            x, y, w, h = entry["bbox"]
+            text = entry["plate_text"] or "..."
+            if entry["is_blacklisted"]:
+                label = f"{text} [BLACKLIST]"
+            elif entry["owner_name"]:
+                label = f"{text} ({entry['owner_name']})"
+            else:
+                label = text
+            out.append({
+                "type": "plate",
+                "track_id": tid,
+                "bbox": [x, y, x + w, y + h],
+                "label": label,
+                "alert": bool(entry["is_blacklisted"]),
+                "known": entry["vehicle_id"] is not None,
+            })
+        return out
 
     def shutdown(self) -> None:
         """Arrête proprement le worker réseau (appelé à l'arrêt de la caméra)."""
@@ -427,30 +440,9 @@ class PlateProcessor:
 
         self._results.put(result)
 
-    # ──────────────────────────────────────────────────────────────────────
-    def _annotate(self, frame: np.ndarray, entry: Dict) -> None:
-        x, y, w, h = entry["bbox"]
-        if entry["is_blacklisted"]:
-            color = self.color_black
-        elif entry["vehicle_id"] is not None:
-            color = self.color_known
-        else:
-            color = self.color_plate
-
-        cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
-
-        text = entry["plate_text"] or "..."
-        label = text
-        if entry["is_blacklisted"]:
-            label = f"{text} [BLACKLIST]"
-        elif entry["owner_name"]:
-            label = f"{text} ({entry['owner_name']})"
-
-        font, scale, thick = cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2
-        (tw, th), bl = cv2.getTextSize(label, font, scale, thick)
-        ly = max(0, y - th - 8)
-        cv2.rectangle(frame, (x, ly), (x + tw + 8, ly + th + bl + 6), color, -1)
-        cv2.putText(frame, label, (x + 4, ly + th + 2), font, scale, (0, 0, 0), thick, cv2.LINE_AA)
+    # Phase 2 : _annotate() SUPPRIMÉ — le Core ne dessine plus les plaques.
+    # Les boîtes sont exposées en JSON via get_detections() et dessinées par le
+    # frontend sur un <canvas> superposé à la vidéo WebRTC.
 
     def _cleanup(self, frame_idx: int) -> None:
         expired = [tid for tid, e in self.plate_db.items()

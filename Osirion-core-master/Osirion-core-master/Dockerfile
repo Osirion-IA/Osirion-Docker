@@ -65,7 +65,20 @@ RUN --mount=type=cache,target=/root/.cache/pip \
             "nvidia-cuda-runtime-cu12" \
             "nvidia-cufft-cu12" \
             "nvidia-cublas-cu12>=12.2" \
-            "nvidia-cudnn-cu12>=8.9"; \
+            "nvidia-cudnn-cu12>=8.9" && \
+        # ── Conflit onnxruntime : insightface tire `onnxruntime` (CPU) en
+        # dépendance transitive, dont le pybind (onnxruntime_pybind11_state.so)
+        # ÉCRASE celui d'onnxruntime-gpu → CUDAExecutionProvider disparaît et
+        # InsightFace retombe sur CPU. On purge les DEUX distributions puis on
+        # réinstalle UNIQUEMENT onnxruntime-gpu EN DERNIER (son pybind l'emporte).
+        pip uninstall -y onnxruntime onnxruntime-gpu && \
+        pip install --user --retries 10 --timeout 120 --resume-retries 10 --no-deps \
+            "onnxruntime-gpu>=1.17.1" && \
+        # Garde-fou : échoue le build si le pybind embarqué est un build CPU
+        # (sans symbole CUDAExecutionProvider) — empêche toute régression future.
+        grep -aq CUDAExecutionProvider \
+            /root/.local/lib/python3.11/site-packages/onnxruntime/capi/onnxruntime_pybind11_state*.so \
+        || { echo "ERREUR build : pybind onnxruntime sans CUDA (build CPU détecté)"; exit 1; }; \
     else \
         pip install --user --retries 10 --timeout 120 --resume-retries 10 -r requirements-cpu.txt; \
     fi

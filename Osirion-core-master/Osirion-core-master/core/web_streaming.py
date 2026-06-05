@@ -1,10 +1,11 @@
 # core/web_streaming.py
 """
-Serveur de streaming WebSocket pour faible latence
-Expose les flux caméras via WebSocket pour intégration dans votre frontend
+Serveur de métadonnées temps réel (Socket.IO) — architecture VMS Phase 2.
+
+Le Core n'envoie PLUS d'images : la vidéo est servie en WebRTC par MediaMTX,
+directement au navigateur. Ce serveur ne diffuse que des bounding boxes JSON
+(événement 'metadata') que le frontend superpose sur la vidéo via un <canvas>.
 """
-import base64
-import cv2
 import sys
 from flask import Flask, jsonify, request
 from flask_socketio import SocketIO, emit, join_room, leave_room
@@ -27,13 +28,14 @@ logger = get_logger(__name__)
 
 class WebStreamingServer:
     """
-    Serveur WebSocket qui expose les flux caméras en temps réel
+    Serveur WebSocket qui expose les métadonnées (bounding boxes) en temps réel
 
     Fonctionnement:
     1. Client se connecte via WebSocket (socket.io)
     2. Client envoie 'start_stream' avec camera_id
-    3. Serveur envoie les frames en continu via événement 'frame'
-    4. Client affiche les frames dans un canvas HTML
+    3. Serveur envoie en continu les détections via événement 'metadata'
+    4. La vidéo, elle, est lue séparément en WebRTC depuis MediaMTX
+    5. Le client dessine les boxes sur un <canvas> superposé à la <video>
     """
 
     def __init__(self, surveillance_system, host='0.0.0.0', port=5000):
@@ -61,10 +63,6 @@ class WebStreamingServer:
         self.stream_lock = threading.Lock()
         self._stop_event = threading.Event()
 
-        # Cache JPEG par caméra partagé entre tous les clients.
-        self._jpeg_cache: dict = {}   # {camera_id: {'frame_id': int, 'jpeg': str (base64)}}
-        self._jpeg_locks: dict = {}   # {camera_id: threading.Lock}
-
         self._setup_routes()
         self._setup_socketio()
 
@@ -87,11 +85,12 @@ class WebStreamingServer:
                     "url": f"ws://{self.host}:{self.port}",
                     "events": {
                         "connect": "Connexion établie, reçoit cameras_list",
-                        "start_stream": "Démarrer un stream {camera_id: int}",
-                        "stop_stream": "Arrêter le stream actuel",
-                        "frame": "Réception des frames {camera_id, data (ArrayBuffer), timestamp}",
+                        "start_stream": "S'abonner aux métadonnées d'une caméra {camera_id: int}",
+                        "stop_stream": "Se désabonner",
+                        "metadata": "Détections {camera_id, width, height, detections:[{type, bbox:[x1,y1,x2,y2], label, track_id}]}",
                         "disconnect": "Déconnexion"
-                    }
+                    },
+                    "note": "La vidéo est servie séparément en WebRTC (WHEP) par MediaMTX."
                 },
                 "example": {
                     "javascript": "const socket = io('http://localhost:5000'); socket.emit('start_stream', {camera_id: 1});"
@@ -108,13 +107,13 @@ class WebStreamingServer:
                     cam_id, self.surveillance_system.result_lock
                 )
                 with cam_lock:
-                    has_frame = self.surveillance_system.result_frames.get(cam_id) is not None
+                    has_meta = self.surveillance_system.result_metadata.get(cam_id) is not None
 
                 cameras.append({
                     "id": cam_id,
                     "name": cam["cam_name"],
                     "location": cam["location"],
-                    "status": "online" if has_frame else "offline"
+                    "status": "online" if has_meta else "offline"
                 })
 
             return jsonify({"cameras": cameras, "count": len(cameras)})
@@ -255,23 +254,22 @@ class WebStreamingServer:
     def _broadcast_camera(self, camera_id: int):
         """
         Thread de broadcast : 1 thread par caméra active.
-        Envoie la frame courante à TOUS les clients du room camera_{camera_id}
-        en un seul emit — élimine N threads redondants pour N clients.
+        Diffuse les métadonnées (bounding boxes JSON) à TOUS les clients du room
+        camera_{camera_id} en un seul emit. Aucune image, aucun encodage : le Core
+        ne touche plus au transport vidéo (assuré par MediaMTX en WebRTC).
 
-        Les frames sont envoyées en binaire (bytes JPEG) pour supprimer
-        l'overhead base64 (+33 % bande passante, 3-5 ms décodage JS).
+        On déduplique par `seq` (= frame_idx) : on n'émet que lorsque le payload a
+        réellement changé → ~10 emits/s (cadence d'inférence) au lieu de 30.
         """
-        fps = 30
-        frame_delay = 1.0 / fps
-        frames_sent = 0
+        poll_fps = 30
+        poll_delay = 1.0 / poll_fps
+        sent = 0
+        last_seq = None
 
         logger.debug(
-            f"Thread broadcast démarré pour caméra {camera_id}",
+            f"Thread broadcast (metadata) démarré pour caméra {camera_id}",
             extra={'camera_id': camera_id}
         )
-
-        if camera_id not in self._jpeg_locks:
-            self._jpeg_locks[camera_id] = threading.Lock()
 
         while not self._stop_event.is_set():
             if not self._has_viewers(camera_id):
@@ -279,55 +277,34 @@ class WebStreamingServer:
 
             start_time = time.time()
 
-            # Lecture de la frame avec le verrou par caméra (P3)
+            # Lecture du dernier payload avec le verrou par caméra
             cam_lock = self.surveillance_system.result_locks.get(
                 camera_id, self.surveillance_system.result_lock
             )
             with cam_lock:
-                frame = self.surveillance_system.result_frames.get(camera_id)
+                meta = self.surveillance_system.result_metadata.get(camera_id)
 
-            if frame is not None:
+            if meta is not None and meta.get('seq') != last_seq:
                 try:
-                    # Cache JPEG par frame (double-checked locking)
-                    frame_id = id(frame)
-                    cache = self._jpeg_cache.get(camera_id, {})
-                    if cache.get('frame_id') != frame_id:
-                        with self._jpeg_locks[camera_id]:
-                            cache = self._jpeg_cache.get(camera_id, {})
-                            if cache.get('frame_id') != frame_id:
-                                quality = getattr(
-                                    self.surveillance_system.config, 'JPEG_QUALITY', 85
-                                )
-                                _, buffer = cv2.imencode(
-                                    '.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, quality]
-                                )
-                                self._jpeg_cache[camera_id] = {
-                                    'frame_id': frame_id,
-                                    'jpeg': base64.b64encode(buffer).decode('utf-8')
-                                }
-
-                    frame_b64 = self._jpeg_cache[camera_id]['jpeg']
-
-                    # Broadcast vers tous les clients de cette caméra en un seul emit
+                    last_seq = meta['seq']
                     self.socketio.emit(
-                        'frame',
-                        {'camera_id': camera_id, 'data': frame_b64, 'timestamp': time.time()},
+                        'metadata',
+                        meta['payload'],
                         room=f'camera_{camera_id}'
                     )
-                    frames_sent += 1
-
+                    sent += 1
                 except Exception:
                     logger.error(
-                        f"Erreur broadcast caméra {camera_id}",
+                        f"Erreur broadcast metadata caméra {camera_id}",
                         extra={'camera_id': camera_id},
                         exc_info=True
                     )
 
             elapsed = time.time() - start_time
-            time.sleep(max(0, frame_delay - elapsed))
+            time.sleep(max(0, poll_delay - elapsed))
 
         logger.debug(
-            f"Thread broadcast terminé pour caméra {camera_id} ({frames_sent} frames envoyées)",
+            f"Thread broadcast terminé pour caméra {camera_id} ({sent} payloads envoyés)",
             extra={'camera_id': camera_id}
         )
 
