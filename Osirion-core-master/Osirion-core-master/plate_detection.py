@@ -18,7 +18,7 @@ caméras/threads ; les appels d'inférence sont protégés par des verrous pour
 import os
 import re
 import threading
-from typing import List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional
 
 import cv2
 import numpy as np
@@ -69,6 +69,19 @@ except Exception:
 
 # La demi-précision n'a de sens que sur GPU.
 _yolo_half = _yolo_half and _USE_GPU
+
+# Validateur alphanumérique universel (layout-agnostique, sans format pays).
+# Accepte UNIQUEMENT lettres majuscules + chiffres, longueur [_MIN_CHARS.._MAX_CHARS].
+# Avec les défauts (4..10) cela donne exactement ^[A-Z0-9]{4,10}$.
+_PLATE_VALIDATOR = re.compile(rf"^[A-Z0-9]{{{_MIN_CHARS},{_MAX_CHARS}}}$")
+
+# En dessous de ce ratio par rapport à la plus grande hauteur de texte, un bloc
+# OCR est considéré comme du « petit texte » non essentiel (nom de pays, label
+# structurel…) et ignoré. Réglable via config (défaut 0.45 = 45 %).
+try:
+    _MIN_TEXT_HEIGHT_RATIO = float(getattr(_cfg, 'PLATE_MIN_TEXT_HEIGHT_RATIO', 0.45))
+except Exception:
+    _MIN_TEXT_HEIGHT_RATIO = 0.45
 
 
 def normalize_plate(raw: Optional[str]) -> str:
@@ -283,9 +296,98 @@ def detect_plates(frame: np.ndarray, confidence_threshold: float = 0.45) -> List
     return out
 
 
+def _block_metrics(bbox) -> Tuple[float, float, float]:
+    """
+    À partir d'un polygone EasyOCR (4 points [[x,y], ...], potentiellement
+    incliné), renvoie l'enveloppe alignée sur les axes :
+        (x_left, y_center, height)  en pixels.
+
+    On prend min/max sur les 4 sommets → robuste aux boîtes pivotées.
+    """
+    xs = [float(p[0]) for p in bbox]
+    ys = [float(p[1]) for p in bbox]
+    x_min, x_max = min(xs), max(xs)
+    y_min, y_max = min(ys), max(ys)
+    height = max(1.0, y_max - y_min)
+    return x_min, (y_min + y_max) / 2.0, height
+
+
+def _spatial_reading_order(detections: List[Tuple]) -> List[Tuple[str, float]]:
+    """
+    Ordre de lecture spatial 2D — agnostique du layout (mono-ligne longue OU
+    multi-lignes carrée/empilée), sans aucun format pays codé en dur.
+
+    Étape 1 — Filtrage géométrique du bruit (hauteur de police) :
+        on calcule la hauteur en pixels de chaque bloc, on prend la hauteur max,
+        puis on rejette tout bloc dont la hauteur < 45 % de ce max (élimine les
+        petits textes non essentiels : nom de pays, labels structurels…).
+
+    Étape 2 — Regroupement spatial 2D (ordre de lecture multi-lignes) :
+        on NE trie PAS bêtement de gauche à droite. On regroupe d'abord les blocs
+        en lignes horizontales logiques via le centre vertical (Y) : deux blocs
+        qui se chevauchent verticalement (distance entre centres Y < la moitié de
+        leur hauteur moyenne) appartiennent à la MÊME ligne. On trie ensuite les
+        lignes de HAUT en BAS, et, dans chaque ligne, les blocs de GAUCHE à DROITE.
+
+    Returns:
+        Liste ordonnée de (token_normalisé, confiance). Vide si rien d'exploitable.
+    """
+    # Normalisation + métriques géométriques de chaque bloc OCR.
+    blocks = []
+    for bbox, txt, conf in detections:
+        norm = normalize_plate(txt)            # majuscules + suppr. non-alphanum
+        if not norm:
+            continue
+        x_left, y_center, height = _block_metrics(bbox)
+        blocks.append({
+            "text": norm, "conf": float(conf),
+            "x_left": x_left, "y_center": y_center, "height": height,
+        })
+    if not blocks:
+        return []
+
+    # ── Étape 1 : filtrage par hauteur (≥ 45 % de la hauteur max) ──────────────
+    max_h = max(b["height"] for b in blocks)
+    height_thresh = _MIN_TEXT_HEIGHT_RATIO * max_h
+    blocks = [b for b in blocks if b["height"] >= height_thresh]
+    if not blocks:
+        return []
+
+    # ── Étape 2 : regroupement 2D en lignes horizontales ──────────────────────
+    # On parcourt les blocs du haut vers le bas et on les agrège dans une ligne
+    # existante si leurs centres Y se chevauchent (< 0.5 × hauteur moyenne).
+    lines: List[Dict] = []
+    for b in sorted(blocks, key=lambda bl: bl["y_center"]):
+        placed = False
+        for ln in lines:
+            avg_h = (b["height"] + ln["mean_h"]) / 2.0
+            if abs(b["y_center"] - ln["mean_y"]) < 0.5 * avg_h:
+                ln["blocks"].append(b)
+                n = len(ln["blocks"])
+                ln["mean_y"] = sum(x["y_center"] for x in ln["blocks"]) / n
+                ln["mean_h"] = sum(x["height"] for x in ln["blocks"]) / n
+                placed = True
+                break
+        if not placed:
+            lines.append({"blocks": [b], "mean_y": b["y_center"], "mean_h": b["height"]})
+
+    lines.sort(key=lambda ln: ln["mean_y"])    # lignes : haut → bas
+    ordered: List[Tuple[str, float]] = []
+    for ln in lines:
+        for b in sorted(ln["blocks"], key=lambda bl: bl["x_left"]):   # gauche → droite
+            ordered.append((b["text"], b["conf"]))
+    return ordered
+
+
 def read_plate_text(plate_crop: np.ndarray) -> Tuple[str, float]:
     """
-    Lit le texte d'un crop de plaque via EasyOCR.
+    Lit le texte d'un crop de plaque via EasyOCR puis applique l'ordre de lecture
+    spatial 2D (cf. _spatial_reading_order) — gère indifféremment les plaques
+    mono-ligne et multi-lignes, sans format pays codé en dur.
+
+    NB latence : cette fonction (OCR + assemblage) est volontairement appelée
+    depuis le worker OCR de PlateProcessor, JAMAIS depuis le thread caméra, afin
+    de ne pas introduire de saccade dans la boucle de tracking vidéo WebRTC.
 
     Returns:
         (texte_normalisé, confiance_ocr). ("", 0.0) si échec / illisible.
@@ -308,25 +410,22 @@ def read_plate_text(plate_crop: np.ndarray) -> Tuple[str, float]:
     if not detections:
         return "", 0.0
 
-    # Ordonne les fragments : d'abord par bande verticale (haut→bas, gère les
-    # plaques sur 2 lignes), puis de gauche à droite à l'intérieur d'une ligne.
-    def _key(d):
-        (x0, y0) = d[0][0]            # coin haut-gauche du bbox du fragment
-        band = round(float(y0) / 20.0)  # regroupe par bandes ~20px → numéro de ligne
-        return (band, float(x0))
-    detections.sort(key=_key)
-
-    text_parts, confs = [], []
-    for _bbox, txt, conf in detections:
-        norm = normalize_plate(txt)
-        if norm:
-            text_parts.append(norm)
-            confs.append(float(conf))
-
-    plate = "".join(text_parts)
-    if not (_MIN_CHARS <= len(plate) <= _MAX_CHARS):
+    # Étapes 1 & 2 : filtrage hauteur + regroupement spatial multi-lignes.
+    ordered = _spatial_reading_order(detections)
+    if not ordered:
         return "", 0.0
 
+    # ── Étape 3 : assemblage + validation universelle ─────────────────────────
+    # Concaténation séquentielle (ligne 1 g→d, puis ligne 2 g→d, …) puis nettoyage
+    # final (majuscules, suppression espaces/non-alphanumérique) — les tokens sont
+    # déjà normalisés, on re-nettoie par sûreté.
+    plate = _NON_ALNUM.sub("", "".join(t for t, _ in ordered).upper())
+
+    # Validateur permissif : uniquement A-Z et 0-9, longueur 4..10.
+    if not _PLATE_VALIDATOR.match(plate):
+        return "", 0.0
+
+    confs = [c for _, c in ordered]
     avg_conf = float(np.mean(confs)) if confs else 0.0
     return plate, avg_conf
 

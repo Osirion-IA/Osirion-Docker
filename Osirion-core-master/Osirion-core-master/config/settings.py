@@ -169,9 +169,15 @@ PLATE_OCR_LANGS = [s.strip() for s in os.getenv('PLATE_OCR_LANGS', 'en').split('
 # Liste blanche de caractères autorisés sur une plaque (filtre l'OCR)
 PLATE_OCR_ALLOWLIST = os.getenv('PLATE_OCR_ALLOWLIST', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789')
 
-# Longueur plausible d'une plaque (filtre les faux positifs OCR)
+# Longueur plausible d'une plaque (filtre les faux positifs OCR). Sert aussi à
+# construire le validateur universel ^[A-Z0-9]{MIN,MAX}$ (layout-agnostique).
 PLATE_MIN_CHARS = int(os.getenv('PLATE_MIN_CHARS', '4'))
 PLATE_MAX_CHARS = int(os.getenv('PLATE_MAX_CHARS', '10'))
+
+# Ordre de lecture spatial 2D — filtrage géométrique du bruit (Step 1) : un bloc
+# OCR dont la hauteur < ce ratio × hauteur max est ignoré (petit texte non
+# essentiel : nom de pays, label structurel). 0.45 = 45 %.
+PLATE_MIN_TEXT_HEIGHT_RATIO = float(os.getenv('PLATE_MIN_TEXT_HEIGHT_RATIO', '0.45'))
 
 # Seuil de similarité pour la recherche floue côté backend (/plates/search)
 PLATE_SEARCH_THRESHOLD = float(os.getenv('PLATE_SEARCH_THRESHOLD', '0.82'))
@@ -196,6 +202,12 @@ COLOR_PLATE_KNOWN = (255, 200, 0)      # Bleu clair : plaque connue (non blackli
 # par track couvre les frames intermédiaires via annotate_cached). 1 = ancien
 # comportement (détecter à chaque frame traitée). 2-3 = ~2-3× moins de YOLO.
 PLATE_PROCESS_EVERY_N = int(os.getenv('PLATE_PROCESS_EVERY_N', '2'))
+
+# ── Latence : OCR découplé du thread caméra ─────────────────────────────────
+# EasyOCR + l'ordre de lecture spatial 2D tournent dans un thread worker OCR
+# dédié (file FIFO) ; le thread caméra ne fait que détecter/tracker/soumettre →
+# aucune saccade sur la boucle de tracking WebRTC. Borné par le gating 1 crop/track.
+PLATE_OCR_QUEUE_MAXSIZE = int(os.getenv('PLATE_OCR_QUEUE_MAXSIZE', '32'))
 
 # ── Latence : résolution réseau découplée du thread caméra ──────────────────
 # La recherche floue + l'envoi d'événement partent dans un thread worker dédié

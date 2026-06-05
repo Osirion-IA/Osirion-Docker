@@ -10,10 +10,19 @@ même frame, sans jamais le perturber : si le module LPR est indisponible
 
 Optimisations (cf. config.settings, section « OPTIMISATIONS latence & précision ») :
 
+  • LATENCE — OCR DÉCOUPLÉ : la lecture EasyOCR + l'ordre de lecture spatial 2D
+    (filtrage hauteur, regroupement multi-lignes, validation) tournent dans un
+    thread worker OCR dédié (file FIFO). Le thread caméra ne fait QUE détecter +
+    tracker (YOLO/ByteTrack) et soumettre des crops : il n'est JAMAIS bloqué par
+    l'OCR → aucune saccade sur la boucle de tracking vidéo WebRTC (avant : EasyOCR
+    s'exécutait en ligne dans process() et pouvait figer le flux plusieurs ms/frame).
+
   • LATENCE — résolution réseau DÉCOUPLÉE : la recherche floue + l'envoi
-    d'événement partent dans un thread worker dédié (file FIFO). Le thread
+    d'événement partent dans un SECOND thread worker dédié (file FIFO). Le thread
     caméra n'est JAMAIS bloqué par le réseau (avant : loop.run_until_complete
     bloquant pouvait figer le flux plusieurs secondes si le backend ramait).
+    OCR (CPU/GPU) et réseau (asyncio) vivent dans deux workers séparés pour ne
+    jamais se sérialiser l'un derrière l'autre.
 
   • LATENCE — cadence de détection : YOLO ne tourne qu'1 frame traitée sur
     PLATE_PROCESS_EVERY_N (le cache OCR couvre les frames intermédiaires).
@@ -66,8 +75,11 @@ class PlateProcessor:
         )
 
         # Cache par track_id. Champs : plate_text, ocr_conf, attempts, finalized,
-        #   bbox, readings[], vehicle_id, is_blacklisted, owner_name,
+        #   bbox, readings[], ocr_inflight, vehicle_id, is_blacklisted, owner_name,
         #   looked_up_for, lookup_inflight, event_sent, last_updated.
+        # IMPORTANT : plate_db n'est muté QUE par le thread caméra (process,
+        # _drain_*, _cleanup). Les workers OCR/réseau ne lisent/écrivent que des
+        # files → aucun verrou nécessaire (mêmes garanties qu'avant).
         self.plate_db: Dict[int, Dict] = {}
 
         self.det_conf = getattr(config, 'PLATE_DETECTION_CONFIDENCE', 0.45)
@@ -101,13 +113,28 @@ class PlateProcessor:
         self._active_ids: set = set()
         self._proc_count = 0   # compteur interne pour la cadence de détection
 
+        self._stop = threading.Event()
+
+        # ── Worker OCR découplé (Step 4) ──────────────────────────────────────
+        # Le thread caméra ne fait QUE détecter + tracker + soumettre des crops.
+        # EasyOCR + l'ordre de lecture spatial 2D (plate_detection.read_plate_text)
+        # tournent ICI → jamais sur la boucle de tracking WebRTC. Borné : avec le
+        # gating `ocr_inflight` (≤ 1 crop en vol par track) la file reste petite ;
+        # si pleine, on saute la soumission (réessai au prochain cycle).
+        ocrq = max(1, getattr(config, 'PLATE_OCR_QUEUE_MAXSIZE', 32))
+        self._ocr_jobs: "queue.Queue" = queue.Queue(maxsize=ocrq)
+        self._ocr_results: "queue.Queue" = queue.Queue()
+        self._ocr_worker = threading.Thread(
+            target=self._ocr_loop, name=f"lpr-ocr-{self.cam_id}", daemon=True
+        )
+        self._ocr_worker.start()
+
         # ── Worker réseau découplé ────────────────────────────────────────────
         # Le thread caméra ne fait QUE détecter/lire/annoter. La recherche floue
         # et l'envoi d'événement (lents, réseau) sont délégués à ce worker.
         maxq = getattr(config, 'PLATE_LOOKUP_QUEUE_MAXSIZE', 64)
         self._jobs: "queue.Queue" = queue.Queue(maxsize=maxq)
         self._results: "queue.Queue" = queue.Queue()
-        self._stop = threading.Event()
         self._worker = threading.Thread(
             target=self._lookup_loop, name=f"lpr-lookup-{self.cam_id}", daemon=True
         )
@@ -125,7 +152,10 @@ class PlateProcessor:
         if not plate_detection.LPR_AVAILABLE:
             return
 
-        # 1) Appliquer les résultats réseau revenus du worker (non bloquant).
+        # 1) Appliquer les résultats revenus des workers (non bloquant) :
+        #    - OCR  : nouvelles lectures → vote temporel / finalisation,
+        #    - réseau : recherche floue + événement.
+        self._drain_ocr()
         self._drain_results()
 
         # 2) Cadence : ne lancer la détection YOLO qu'1 frame sur N. Entre deux,
@@ -165,9 +195,10 @@ class PlateProcessor:
             entry["bbox"] = (x, y, w, h)
             entry["last_updated"] = frame_idx
 
-            # ── Frame-skipping OCR : OCR seulement si pas encore « définitif » ──
+            # ── Frame-skipping OCR : soumettre au worker OCR seulement si pas
+            #    encore « définitif » (la lecture elle-même est asynchrone) ──
             if not entry["finalized"] and entry["attempts"] < self.max_attempts:
-                self._try_read(entry, frame, x, y, w, h)
+                self._submit_ocr(tid, entry, frame, x, y, w, h)
 
             # Programmer la résolution réseau dès que la lecture est définitive.
             if entry["finalized"] and entry["plate_text"]:
@@ -207,21 +238,32 @@ class PlateProcessor:
         return out
 
     def shutdown(self) -> None:
-        """Arrête proprement le worker réseau (appelé à l'arrêt de la caméra)."""
+        """Arrête proprement les workers OCR + réseau (appelé à l'arrêt caméra)."""
         self._stop.set()
-        try:
-            self._jobs.put_nowait(None)   # réveille le worker s'il attend
-        except Exception:
-            pass
-        if self._worker is not None and self._worker.is_alive():
-            self._worker.join(timeout=3)
+        for q in (self._ocr_jobs, self._jobs):
+            try:
+                q.put_nowait(None)        # réveille le worker s'il attend
+            except Exception:
+                pass
+        for worker in (self._ocr_worker, self._worker):
+            if worker is not None and worker.is_alive():
+                worker.join(timeout=3)
 
     # ──────────────────────────────────────────────────────────────────────
     # Lecture OCR + vote temporel
     # ──────────────────────────────────────────────────────────────────────
-    def _try_read(self, entry: Dict, frame: np.ndarray,
-                  x: int, y: int, w: int, h: int) -> None:
-        """OCR d'un crop avec gating (taille/netteté) puis agrégation (vote)."""
+    def _submit_ocr(self, tid: int, entry: Dict, frame: np.ndarray,
+                    x: int, y: int, w: int, h: int) -> None:
+        """Soumet (thread caméra, NON bloquant) un crop au worker OCR.
+
+        Gating taille/netteté appliqué ici (bon marché) pour ne pas gaspiller le
+        worker. Un seul crop « en vol » par track (`ocr_inflight`) → la file reste
+        bornée et on ne double-compte pas les tentatives. La lecture EasyOCR + le
+        regroupement spatial 2D se font ensuite dans _ocr_loop (hors thread caméra).
+        """
+        # Un crop est déjà en cours de lecture pour ce track → on attend.
+        if entry["ocr_inflight"]:
+            return
         # Gating taille : on ignore les plaques trop petites (illisibles).
         if w < self.min_crop_w or h < self.min_crop_h:
             return
@@ -235,9 +277,35 @@ class PlateProcessor:
         if self.crop_min_sharp > 0.0 and self._sharpness(crop) < self.crop_min_sharp:
             return
 
-        text, conf = read_plate_text(crop)
-        entry["attempts"] += 1
+        # Le crop est une VUE de `frame`, réutilisée par la boucle caméra → copie
+        # impérative avant de la confier au worker (sinon corruption mémoire).
+        job = {"track_id": tid, "crop": crop.copy()}
+        try:
+            self._ocr_jobs.put_nowait(job)
+            entry["ocr_inflight"] = True
+        except queue.Full:
+            # Worker OCR saturé → on saute ce cycle (réessai à la prochaine frame).
+            pass
 
+    def _drain_ocr(self) -> None:
+        """Applique (thread caméra) les lectures OCR produites par le worker :
+        comptage des tentatives + vote temporel + finalisation."""
+        while True:
+            try:
+                r = self._ocr_results.get_nowait()
+            except queue.Empty:
+                break
+            entry = self.plate_db.get(r["track_id"])
+            if entry is None:
+                continue                      # track expiré entre-temps
+            entry["ocr_inflight"] = False
+            if entry["finalized"]:
+                continue
+            entry["attempts"] += 1
+            self._apply_reading(entry, r["text"], r["conf"])
+
+    def _apply_reading(self, entry: Dict, text: str, conf: float) -> None:
+        """Agrège une lecture OCR dans l'entrée (vote temporel / finalisation)."""
         if text and conf >= self.ocr_min:
             if self.voting:
                 entry["readings"].append((text, conf))
@@ -259,6 +327,26 @@ class PlateProcessor:
         # Plus de tentatives possibles → on fige avec le meilleur consensus connu.
         if not entry["finalized"] and entry["attempts"] >= self.max_attempts:
             entry["finalized"] = True
+
+    def _ocr_loop(self) -> None:
+        """Boucle du worker OCR : lit les crops (EasyOCR + ordre de lecture spatial
+        2D) hors du thread caméra et renvoie (track_id, text, conf) au thread caméra
+        via _ocr_results. Aucune écriture dans plate_db ici (thread-safe par design)."""
+        while not self._stop.is_set():
+            try:
+                job = self._ocr_jobs.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if job is None:                   # sentinelle d'arrêt
+                break
+            try:
+                text, conf = read_plate_text(job["crop"])
+            except Exception as e:
+                logger.error(f"[LPR][cam={self.cam_name}] worker OCR : {e}")
+                text, conf = "", 0.0
+            self._ocr_results.put(
+                {"track_id": job["track_id"], "text": text, "conf": conf}
+            )
 
     @staticmethod
     def _vote(readings: List) -> tuple:
@@ -306,6 +394,7 @@ class PlateProcessor:
         return {
             "plate_text": "", "ocr_conf": 0.0, "attempts": 0,
             "finalized": False, "bbox": (x, y, w, h), "readings": [],
+            "ocr_inflight": False,
             "vehicle_id": None, "is_blacklisted": False, "owner_name": None,
             "looked_up_for": None, "lookup_inflight": None,
             "event_sent": False, "last_updated": frame_idx,
