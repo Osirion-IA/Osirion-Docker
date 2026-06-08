@@ -150,6 +150,11 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_DIR: logs
       CUDA_VISIBLE_DEVICES: "0"
+      # ── Événement « visage non reconnu » (UNKNOWN_FACE) ─────────────────────
+      # OPT-IN : false par défaut. Activable à chaud via le frontend (toggle) ou
+      # en mettant true ici. Enregistre un événement distinct pour tout visage
+      # détecté mais non identifié (person_id NULL). N'affecte pas le facial.
+      ENABLE_UNKNOWN_FACE_EVENT: ${ENABLE_UNKNOWN_FACE_EVENT:-false}
       # ── LPR / ANPR (reconnaissance de plaques) ──────────────────────────────
       # OPT-IN : false par défaut. Activable à chaud via le frontend (toggle) ou
       # en mettant true ici. Nécessite un modèle YOLO de plaque (PLATE_MODEL_PATH).

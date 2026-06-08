@@ -20,6 +20,10 @@ from utils.monitoring import emit_recognition_metric, emit_blur_metric
 
 logger = get_logger(__name__)
 
+# Type d'événement émis pour un visage détecté mais NON reconnu (opt-in).
+# Doit rester aligné sur backend app/models/events.py::EVENT_UNKNOWN_FACE.
+EVENT_UNKNOWN_FACE = "UNKNOWN_FACE"
+
 
 class TrackingProcessor:
     """Gère le traitement de détection, tracking et reconnaissance pour une caméra"""
@@ -331,7 +335,20 @@ class TrackingProcessor:
             # Événement « fire-and-forget » : envoyé par le worker après coup.
             pending_event = {
                 "person_id": person_id if person_id is not None else -1,
+                "event_type": EVENTS[0],            # "RECOGNITION" (comportement inchangé)
                 "score": recognition_score,
+            }
+        elif not from_cache and self._unknown_face_event_enabled():
+            # Visage DÉTECTÉ mais NON reconnu (aucun match au-dessus du seuil et
+            # absent du cache global) → événement DISTINCT, sans person_id.
+            # OPT-IN : ne se déclenche que si le toggle est activé. N'altère ni la
+            # reconnaissance ni l'overlay (name reste "Inconnu"). Le throttling de
+            # la ré-identification borne la fréquence (≤ 1 / track / intervalle).
+            best_score = float(results[0].get("score", 0.0)) if results else 0.0
+            pending_event = {
+                "person_id": None,
+                "event_type": EVENT_UNKNOWN_FACE,
+                "score": best_score,
             }
 
         record = {
@@ -346,10 +363,15 @@ class TrackingProcessor:
 
     async def _send_events(self, pending_events: List[Dict], session: aiohttp.ClientSession,
                            frame: np.ndarray) -> None:
-        """Envoie tous les événements du batch en parallèle (sur le thread worker)."""
+        """Envoie tous les événements du batch en parallèle (sur le thread worker).
+
+        Chaque événement porte son propre `event_type` (RECOGNITION pour un visage
+        reconnu, UNKNOWN_FACE pour un visage non reconnu) et son `person_id`
+        (None → champ omis, person_id NULL côté backend)."""
         tasks = [
             send_event_async(
-                session, frame, self.cam_id, ev["person_id"], EVENTS[0], ev["score"]
+                session, frame, self.cam_id,
+                ev["person_id"], ev.get("event_type", EVENTS[0]), ev["score"]
             )
             for ev in pending_events
         ]
@@ -394,6 +416,13 @@ class TrackingProcessor:
         if self.runtime_control is not None:
             return self.runtime_control.lpr_enabled
         return getattr(self.config, 'ENABLE_PLATE_RECOGNITION', False)
+
+    def _unknown_face_event_enabled(self) -> bool:
+        """Événement « visage non reconnu » actif ? Priorité au drapeau runtime
+        (toggle frontend), sinon valeur de config."""
+        if self.runtime_control is not None:
+            return self.runtime_control.unknown_face_event_enabled
+        return getattr(self.config, 'ENABLE_UNKNOWN_FACE_EVENT', False)
 
     def _ensure_plate_processor(self):
         """Crée le PlateProcessor à la 1re activation (chargement modèles paresseux)."""

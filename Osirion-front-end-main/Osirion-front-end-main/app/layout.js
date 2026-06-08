@@ -1,16 +1,12 @@
-import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "./ThemeProvider";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
+// NB : on n'utilise PAS next/font/google (Geist/Geist_Mono). Ces polices étaient
+// un résidu du template create-next-app, jamais référencées dans le CSS (le body
+// est rendu en Arial/Helvetica via globals.css). Les charger imposait un
+// téléchargement réseau de Google Fonts AU MOMENT DU BUILD (`npm run build`), ce
+// qui faisait échouer la construction de l'image dès que fonts.googleapis.com
+// n'était pas joignable. Suppression → build hors-ligne possible, rendu inchangé.
 
 export const metadata = {
   title: "Create Next App",
@@ -39,9 +35,7 @@ export default function RootLayout({ children }) {
           }}
         />
       </head>
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-      >
+      <body className="antialiased">
         <ThemeProvider>{children}</ThemeProvider>
       </body>
     </html>

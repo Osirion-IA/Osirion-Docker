@@ -140,7 +140,18 @@ GLOBAL_SIMILARITY_THRESHOLD = float(os.getenv('GLOBAL_SIMILARITY_THRESHOLD', '0.
 # configuration des événements (ex: reconnaissance, entrée/sortie)
 # -----------------------------------------
 
-EVENTS = ["RECOGNITION","ENTRY","EXIT","DETECTION","PLATE_RECOGNITION"]  # Types d'événements à créer
+EVENTS = ["RECOGNITION","ENTRY","EXIT","DETECTION","PLATE_RECOGNITION","UNKNOWN_FACE"]  # Types d'événements à créer
+
+# -----------------------------------------
+# Événement « visage non reconnu » (UNKNOWN_FACE)
+# -----------------------------------------
+# Activation OPT-IN : désactivé par défaut → ne change RIEN au comportement
+# existant. Quand activé (flag ci-dessous ou toggle frontend /api/unknown-face/
+# toggle), un visage DÉTECTÉ mais NON reconnu (aucun match au-dessus du seuil et
+# absent du cache global) génère un événement DISTINCT (event_type=UNKNOWN_FACE,
+# person_id=NULL). Le throttling naturel de la ré-identification (REIDENTIFICATION_
+# INTERVAL) borne la fréquence : au plus un événement par track et par intervalle.
+ENABLE_UNKNOWN_FACE_EVENT = os.getenv('ENABLE_UNKNOWN_FACE_EVENT', 'false').lower() == 'true'
 
 # -----------------------------------------
 # Module LPR / ANPR — reconnaissance des plaques d'immatriculation

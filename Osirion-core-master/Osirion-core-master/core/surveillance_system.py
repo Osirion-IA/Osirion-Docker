@@ -46,10 +46,12 @@ class SurveillanceSystem:
             similarity_threshold=getattr(config, 'GLOBAL_SIMILARITY_THRESHOLD', 0.50)
         )
 
-        # Contrôle runtime (toggle LPR depuis le frontend). Initialisé sur la valeur
-        # de config, modifiable à chaud via l'endpoint Flask /api/lpr/toggle.
+        # Contrôle runtime (toggles depuis le frontend). Initialisé sur les valeurs
+        # de config, modifiable à chaud via les endpoints Flask (/api/lpr/toggle,
+        # /api/unknown-face/toggle).
         self.runtime_control = RuntimeControl(
-            lpr_enabled=getattr(config, 'ENABLE_PLATE_RECOGNITION', False)
+            lpr_enabled=getattr(config, 'ENABLE_PLATE_RECOGNITION', False),
+            unknown_face_event_enabled=getattr(config, 'ENABLE_UNKNOWN_FACE_EVENT', False),
         )
         
         self.threads = []

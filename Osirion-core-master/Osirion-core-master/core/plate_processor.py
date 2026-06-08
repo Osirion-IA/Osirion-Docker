@@ -266,7 +266,10 @@ class PlateProcessor:
             return
         # Gating taille : on ignore les plaques trop petites (illisibles).
         if w < self.min_crop_w or h < self.min_crop_h:
+            logger.info(f"[LPR][DBG] crop tid={tid} w={w} h={h} GATÉ "  # TEMP DEBUG
+                        f"(min w={self.min_crop_w} h={self.min_crop_h})")
             return
+        logger.info(f"[LPR][DBG] crop tid={tid} w={w} h={h} -> soumis au worker OCR")  # TEMP DEBUG
 
         crop = frame[y:y + h, x:x + w]
         if crop is None or crop.size == 0:
@@ -302,6 +305,9 @@ class PlateProcessor:
             if entry["finalized"]:
                 continue
             entry["attempts"] += 1
+            logger.info(f"[LPR][DBG] résultat OCR tid={r['track_id']} "  # TEMP DEBUG
+                        f"text='{r['text']}' conf={r['conf']:.2f} "
+                        f"(ocr_min={self.ocr_min}) attempts={entry['attempts']}")
             self._apply_reading(entry, r["text"], r["conf"])
 
     def _apply_reading(self, entry: Dict, text: str, conf: float) -> None:
