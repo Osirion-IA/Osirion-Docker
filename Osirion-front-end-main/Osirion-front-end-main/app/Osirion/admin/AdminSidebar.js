@@ -77,6 +77,16 @@ export default function AdminSidebar({
       ),
     },
     {
+      label: "Événements",
+      href: "/Osirion/admin/events",
+      roles: ["admin", "user", "viewer"],
+      icon: (
+        <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+          <path d="M3 12h4l2 5 4-12 2 7h6" />
+        </svg>
+      ),
+    },
+    {
       label: "Rapports",
       href: "/Osirion/admin/reports",
       roles: ["admin", "user"],
