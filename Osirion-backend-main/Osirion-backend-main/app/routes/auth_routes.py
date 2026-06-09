@@ -13,11 +13,13 @@ from app.schemas.auth_schema import (
 from app.utils.auth_utils import (
     hash_password, verify_password, create_access_token, create_refresh_token,
     decode_token, verify_token_type, is_account_locked, should_lock_account,
-    calculate_lock_duration
+    calculate_lock_duration, create_reset_token
 )
 from app.middleware.auth_middleware import get_current_active_user
 from app.middleware.rate_limit import limiter, RATE_LIMITS
 from app.config import settings
+from app.services.audit_service import record_audit
+from app.services.notification_service import send_email
 
 router = APIRouter()
 
@@ -114,6 +116,11 @@ async def login(
     if not verify_password(credentials.password, user.usr_password):
         # Incrémenter les tentatives échouées
         user.failed_login_attempts += 1
+        record_audit(
+            "login.failure", user_id=user.id, user_email=user.email,
+            ip_address=(request.client.host if request.client else None),
+            detail=f"tentative #{user.failed_login_attempts}",
+        )
         
         # Verrouiller le compte si nécessaire
         if should_lock_account(user.failed_login_attempts):
@@ -147,7 +154,11 @@ async def login(
     user.locked_until = None
     user.last_login = datetime.utcnow()
     session.add(user)
-    
+    record_audit(
+        "login.success", user_id=user.id, user_email=user.email,
+        ip_address=(request.client.host if request.client else None),
+    )
+
     # Créer les tokens
     token_data = {
         "sub": str(user.id),
@@ -358,13 +369,57 @@ async def request_password_reset(
     user = session.exec(
         select(User).where(User.email == reset_request.email)
     ).first()
-    
-    # Ne pas révéler si l'email existe ou non (sécurité)
+
+    # Ne pas révéler si l'email existe ou non (sécurité). Si SMTP est configuré,
+    # un token court (30 min) est envoyé ; sinon la demande est simplement tracée.
     if user:
-        # TODO: Générer un token de réinitialisation
-        # TODO: Envoyer l'email avec le lien de réinitialisation
-        pass
-    
+        token = create_reset_token(user.id, minutes=30)
+        subject = "[Osirion] Réinitialisation de votre mot de passe"
+        body = (
+            "Vous avez demandé la réinitialisation de votre mot de passe Osirion.\n\n"
+            "Jeton (valide 30 minutes) à fournir à POST /auth/password-reset-confirm "
+            "avec votre nouveau mot de passe :\n\n"
+            f"{token}\n\n"
+            "Si vous n'êtes pas à l'origine de cette demande, ignorez cet email."
+        )
+        ok, msg = send_email(subject, body, to=user.email)
+        record_audit(
+            "password.reset_request", user_id=user.id, user_email=user.email,
+            ip_address=(request.client.host if request.client else None),
+            detail=("email envoyé" if ok else f"email non envoyé: {msg}"),
+        )
+
     return {
         "message": "Si cet email existe, un lien de réinitialisation a été envoyé"
     }
+
+
+@router.post("/password-reset-confirm")
+@limiter.limit(RATE_LIMITS["password_reset"])
+async def confirm_password_reset(
+    request: Request,
+    reset: PasswordReset,
+    session: Session = Depends(get_session)
+):
+    """Confirme la réinitialisation : valide le token 'reset' et applique le nouveau
+    mot de passe (déverrouille aussi le compte)."""
+    payload = decode_token(reset.token)
+    verify_token_type(payload, "reset")
+
+    user_id = payload.get("sub")
+    user = session.get(User, int(user_id)) if user_id else None
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Utilisateur introuvable.")
+
+    user.usr_password = hash_password(reset.new_password)
+    user.updated_at = datetime.utcnow()
+    user.failed_login_attempts = 0
+    user.locked_until = None
+    session.add(user)
+    session.commit()
+
+    record_audit(
+        "password.reset_confirm", user_id=user.id, user_email=user.email,
+        ip_address=(request.client.host if request.client else None),
+    )
+    return {"message": "Mot de passe réinitialisé avec succès."}

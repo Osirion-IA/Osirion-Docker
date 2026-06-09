@@ -18,6 +18,7 @@ from app.models.cameras import Camera
 from app.models.events import Event
 from app.models.vehicles import Vehicle
 from app.models.alerts import Alert
+from app.models.audit import AuditLog
 
 # this is the Alembic Config object
 config = context.config
