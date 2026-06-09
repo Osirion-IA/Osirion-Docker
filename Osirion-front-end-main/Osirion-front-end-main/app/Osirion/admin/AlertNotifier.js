@@ -136,9 +136,11 @@ export default function AlertNotifier() {
       }
     }
     for (const det of data.detections) {
-      const isPlateAlert = det.type === "plate" && det.alert;
-      const isPersonAlert = det.type === "face" && det.recognized;
-      if (!isPlateAlert && !isPersonAlert) continue;
+      // On n'alerte QUE sur det.alert === true (vraie blacklist) : plaque
+      // blacklistée OU personne sur liste de surveillance (is_blacklisted).
+      // Une personne simplement reconnue (non blacklistée) ne déclenche RIEN.
+      if (!det.alert) continue;
+      const isPlate = det.type === "plate";
 
       const key = `${data.camera_id}|${det.type}|${det.track_id}`;
       const last = cooldownRef.current.get(key) || 0;
@@ -146,9 +148,12 @@ export default function AlertNotifier() {
       cooldownRef.current.set(key, now);
 
       addAlert({
-        kind: isPlateAlert ? "plate" : "person",
-        label: (det.label || "").replace(/\s*\[BLACKLIST\]\s*$/i, "").trim()
-          || (isPlateAlert ? "Plaque inconnue" : "Personne"),
+        kind: isPlate ? "plate" : "person",
+        label: (det.label || "")
+          .replace(/^⚠\s*/, "")
+          .replace(/\s*\[BLACKLIST\]\s*$/i, "")
+          .trim()
+          || (isPlate ? "Plaque inconnue" : "Personne"),
         cameraName: cameraNamesRef.current.get(data.camera_id) || `Caméra ${data.camera_id}`,
       });
     }

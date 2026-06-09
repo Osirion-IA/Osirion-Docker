@@ -9,8 +9,9 @@ const MEDIAMTX_URL = process.env.NEXT_PUBLIC_MEDIAMTX_URL || "http://localhost:8
 // Couleur d'overlay (CSS). Visages : vert=reconnu / rouge=inconnu.
 // Plaques : rouge=blacklist / cyan=connue / ambre=simplement détectée.
 function detectionColor(det) {
+    // Alerte (blacklist) prioritaire, quel que soit le type : rouge soutenu.
+    if (det.alert) return '#dc2626';
     if (det.type === 'plate') {
-        if (det.alert) return '#ef4444';
         if (det.known) return '#06b6d4';
         return '#f59e0b';
     }

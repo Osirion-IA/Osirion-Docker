@@ -160,6 +160,10 @@ def search_similar_people(embedding: list, k: int = 1) -> list:
                     "phone": person.phone,
                     "email": person.email,
                     "image_url": person.image_url,
+                    # Statut liste de surveillance — consommé par le Core pour
+                    # déclencher l'alerte (overlay rouge + toast/son).
+                    "is_blacklisted": bool(getattr(person, "is_blacklisted", False)),
+                    "blacklist_reason": getattr(person, "blacklist_reason", None),
                     "cosine_similarity": score,  # renommé pour clarté sémantique
                     "score": score,              # conservé pour rétrocompatibilité API
                 })
