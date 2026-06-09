@@ -31,7 +31,6 @@ export default function AdminSidebar({
           <circle cx="12" cy="12" r="3" />
         </svg>
       ),
-      badge: 248,
     },
     {
       label: "Live streamings",
@@ -65,7 +64,6 @@ export default function AdminSidebar({
           <path d="m7.5 7.5 9 9" />
         </svg>
       ),
-      badge: 18,
     },
     {
       label: "Utilisateurs & rôles",
@@ -99,8 +97,6 @@ export default function AdminSidebar({
           <circle cx="12" cy="13" r="9" />
         </svg>
       ),
-      badge: 8,
-      badgeColor: "bg-rose-600/90 text-white",
     },
     {
       label: "Paramètres",

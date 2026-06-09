@@ -14,6 +14,7 @@ from app.routes.auth_routes import router as auth_router
 from app.routes.users_routes import router as users_router
 from app.routes.plates_routes import router as plates_router
 from app.routes.alerts_routes import router as alerts_router
+from app.routes.dashboard_routes import router as dashboard_router
 from app.services.Faiss_search_service import build_or_reload_faiss_index
 from app.middleware.rate_limit import limiter
 from app.config import settings
@@ -83,6 +84,7 @@ app.include_router(users_router, prefix="/users", tags=["👥 Users Management"]
 app.include_router(people_router, prefix="/people", tags=["👤 People"])
 app.include_router(plates_router, prefix="/plates", tags=["🚗 License Plates"])
 app.include_router(alerts_router, prefix="/alerts", tags=["🚨 Alerts"])
+app.include_router(dashboard_router, prefix="/dashboard", tags=["📊 Dashboard"])
 app.include_router(camera_router, prefix="/cameras", tags=["📹 Cameras"])
 app.include_router(monitoring_router,prefix="/sysInfo", tags=["Syetem Informations"])
 
