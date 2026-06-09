@@ -19,6 +19,7 @@ import AdminSidebar from "../AdminSidebar";
 import AdminTopBar from "../AdminTopBar";
 import { useAuth } from "../AuthContext";
 import { AccessDenied } from "../RoleGuard";
+import GpuMonitor from "./GpuMonitor";
 
 export default function SystemStatusPage() {
   const [isCollapsed, setIsCollapsed] = useState(false);
@@ -247,6 +248,9 @@ export default function SystemStatusPage() {
                     />
                   </div>
                 </div>
+
+                {/* GPU (métriques du Core, si NVIDIA disponible) */}
+                <GpuMonitor />
 
                 {/* Réseau */}
                 <div className="rounded-2xl border bg-white/70 p-6 backdrop-blur-sm dark:border-gray-800 dark:bg-gray-900/60 shadow-sm">
