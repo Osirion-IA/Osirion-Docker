@@ -3,6 +3,8 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { AuthContext } from "./AuthContext";
+import AlertNotifier from "./AlertNotifier";
+import { getSetting } from "../../lib/settings";
 
 // Lit le cookie non-httpOnly token_expires_at (timestamp ms)
 function getTokenExpiry() {
@@ -80,6 +82,38 @@ export default function AdminLayout({ children }) {
     };
   }, [user, router]);
 
+  // Déconnexion automatique après inactivité (paramètre Sécurité « Session (min) »).
+  // Tout geste utilisateur réarme le délai ; passé ce délai sans activité, on
+  // efface la session (cookies) et on redirige vers la page de connexion.
+  useEffect(() => {
+    if (!user) return;
+
+    let lastActivity = Date.now();
+    let loggingOut = false;
+
+    const onActivity = () => { lastActivity = Date.now(); };
+    const events = ["mousemove", "mousedown", "keydown", "scroll", "touchstart", "click"];
+    events.forEach((e) => window.addEventListener(e, onActivity, { passive: true }));
+
+    // Délai RELU à chaque tick → une modification du paramètre « Session (min) »
+    // s'applique À CHAUD (≤ 15 s), sans rechargement, et même depuis un autre
+    // onglet (localStorage partagé). Aucune dépendance au cycle de vie du layout.
+    const checkId = setInterval(async () => {
+      const minutes = Number(getSetting("sessionTimeout", 30)) || 30;
+      const timeoutMs = minutes * 60 * 1000;
+      if (loggingOut || Date.now() - lastActivity < timeoutMs) return;
+      loggingOut = true;
+      clearInterval(checkId);
+      try { await fetch("/api/auth/logout", { method: "POST" }); } catch { /* */ }
+      router.replace("/");
+    }, 15000);
+
+    return () => {
+      events.forEach((e) => window.removeEventListener(e, onActivity));
+      clearInterval(checkId);
+    };
+  }, [user, router]);
+
   if (checking) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-950">
@@ -93,6 +127,8 @@ export default function AdminLayout({ children }) {
   return (
     <AuthContext.Provider value={user}>
       {children}
+      {/* Notifications globales (toast + son) sur détection blacklist personne/plaque */}
+      <AlertNotifier />
     </AuthContext.Provider>
   );
 }

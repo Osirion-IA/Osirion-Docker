@@ -6,6 +6,7 @@ import AdminTopBar from "../AdminTopBar";
 import { useAuth } from "../AuthContext";
 import { AccessDenied } from "../RoleGuard";
 import { fetchWithRefresh } from "@/app/lib/fetchWithRefresh";
+import { getSetting } from "@/app/lib/settings";
 
 // ── Constantes rôles ────────────────────────────────────────────────────────
 
@@ -160,11 +161,18 @@ function CreateUserModal({ onClose, onSuccess }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  // Longueur minimale de mot de passe : paramètre Sécurité (défaut 8).
+  const pwdMin = Number(getSetting("passwordMinLength", 8)) || 8;
+
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
+    if (form.password.length < pwdMin) {
+      setError(`Le mot de passe doit contenir au moins ${pwdMin} caractères.`);
+      return;
+    }
     setLoading(true);
     try {
       const res = await fetchWithRefresh("/api/users", {
@@ -215,11 +223,11 @@ function CreateUserModal({ onClose, onSuccess }) {
             <input
               type="password"
               required
-              minLength={8}
+              minLength={pwdMin}
               value={form.password}
               onChange={set("password")}
               className={inputCls}
-              placeholder="Min. 8 car., 1 maj., 1 chiffre"
+              placeholder={`Min. ${pwdMin} car., 1 maj., 1 chiffre`}
             />
           </Field>
           <Field label="Rôle">
