@@ -154,6 +154,15 @@ EVENTS = ["RECOGNITION","ENTRY","EXIT","DETECTION","PLATE_RECOGNITION","UNKNOWN_
 ENABLE_UNKNOWN_FACE_EVENT = os.getenv('ENABLE_UNKNOWN_FACE_EVENT', 'false').lower() == 'true'
 
 # -----------------------------------------
+# Reconnaissance faciale (pipeline principal) — activable/désactivable à chaud
+# -----------------------------------------
+# ⚠️ DÉFAUT = true : le facial est le pipeline PRINCIPAL. Le toggle (frontend
+# /api/face/toggle) permet de le suspendre à chaud (ex. caméra dédiée plaques)
+# SANS arrêter le Core : quand il est coupé, SCRFD/ArcFace et la reconnaissance
+# sont sautés, mais le LPR et la publication des métadonnées continuent.
+ENABLE_FACE_RECOGNITION = os.getenv('ENABLE_FACE_RECOGNITION', 'true').lower() == 'true'
+
+# -----------------------------------------
 # Module LPR / ANPR — reconnaissance des plaques d'immatriculation
 # -----------------------------------------
 # Activation OPT-IN : désactivé par défaut pour ne JAMAIS perturber le pipeline

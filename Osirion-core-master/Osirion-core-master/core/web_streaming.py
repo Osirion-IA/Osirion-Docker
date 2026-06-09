@@ -171,6 +171,25 @@ class WebStreamingServer:
             new_state = control.set_unknown_face_event(bool(data['enabled']))
             return jsonify({"unknown_face_event_enabled": new_state})
 
+        # ── Reconnaissance faciale — état et activation/désactivation à chaud ───
+        @self.app.route('/api/face/status')
+        def face_status():
+            control = getattr(self.surveillance_system, 'runtime_control', None)
+            # Défaut True : le facial est le pipeline principal (activé sauf coupure).
+            enabled = control.face_recognition_enabled if control else True
+            return jsonify({"face_recognition_enabled": enabled})
+
+        @self.app.route('/api/face/toggle', methods=['POST'])
+        def face_toggle():
+            control = getattr(self.surveillance_system, 'runtime_control', None)
+            if control is None:
+                return jsonify({"error": "runtime_control indisponible"}), 503
+            data = request.get_json(silent=True) or {}
+            if 'enabled' not in data:
+                return jsonify({"error": "champ 'enabled' (bool) requis"}), 400
+            new_state = control.set_face_recognition(bool(data['enabled']))
+            return jsonify({"face_recognition_enabled": new_state})
+
     def _setup_socketio(self):
         """Configure les événements WebSocket"""
 

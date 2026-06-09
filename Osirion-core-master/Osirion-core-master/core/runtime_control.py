@@ -15,12 +15,16 @@ logger = get_logger(__name__)
 class RuntimeControl:
     """Drapeaux de contrôle modifiables à chaud, protégés par un verrou."""
 
-    def __init__(self, lpr_enabled: bool = False, unknown_face_event_enabled: bool = False):
+    def __init__(self, lpr_enabled: bool = False, unknown_face_event_enabled: bool = False,
+                 face_recognition_enabled: bool = True):
         self._lock = threading.Lock()
         self._lpr_enabled = bool(lpr_enabled)
         # Émission d'un événement distinct (UNKNOWN_FACE) pour les visages détectés
         # mais NON reconnus. Opt-in, indépendant du LPR et du facial standard.
         self._unknown_face_event_enabled = bool(unknown_face_event_enabled)
+        # Pipeline de reconnaissance faciale (PRINCIPAL). DÉFAUT True : il tourne
+        # tant qu'on ne le coupe pas explicitement → aucune régression au démarrage.
+        self._face_recognition_enabled = bool(face_recognition_enabled)
 
     @property
     def lpr_enabled(self) -> bool:
@@ -48,3 +52,18 @@ class RuntimeControl:
                 f"{'activé' if self._unknown_face_event_enabled else 'désactivé'} (toggle)"
             )
             return self._unknown_face_event_enabled
+
+    @property
+    def face_recognition_enabled(self) -> bool:
+        with self._lock:
+            return self._face_recognition_enabled
+
+    def set_face_recognition(self, enabled: bool) -> bool:
+        """Active/désactive la reconnaissance faciale à chaud. Retourne le nouvel état."""
+        with self._lock:
+            self._face_recognition_enabled = bool(enabled)
+            logger.info(
+                f"[runtime] Reconnaissance faciale "
+                f"{'activée' if self._face_recognition_enabled else 'désactivée'} (toggle)"
+            )
+            return self._face_recognition_enabled

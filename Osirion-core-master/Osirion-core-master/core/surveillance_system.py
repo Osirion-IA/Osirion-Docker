@@ -52,6 +52,7 @@ class SurveillanceSystem:
         self.runtime_control = RuntimeControl(
             lpr_enabled=getattr(config, 'ENABLE_PLATE_RECOGNITION', False),
             unknown_face_event_enabled=getattr(config, 'ENABLE_UNKNOWN_FACE_EVENT', False),
+            face_recognition_enabled=getattr(config, 'ENABLE_FACE_RECOGNITION', True),
         )
         
         self.threads = []

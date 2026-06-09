@@ -424,6 +424,14 @@ class TrackingProcessor:
             return self.runtime_control.unknown_face_event_enabled
         return getattr(self.config, 'ENABLE_UNKNOWN_FACE_EVENT', False)
 
+    def _face_recognition_enabled(self) -> bool:
+        """Reconnaissance faciale active ? Priorité au drapeau runtime (toggle
+        frontend), sinon config. DÉFAUT = True (pipeline principal) : sans
+        runtime_control ni config, le facial reste ACTIVÉ → aucune régression."""
+        if self.runtime_control is not None:
+            return self.runtime_control.face_recognition_enabled
+        return getattr(self.config, 'ENABLE_FACE_RECOGNITION', True)
+
     def _ensure_plate_processor(self):
         """Crée le PlateProcessor à la 1re activation (chargement modèles paresseux)."""
         if self.plate_processor is not None or self._lpr_init_failed:
@@ -513,56 +521,65 @@ class TrackingProcessor:
                             )
                         continue  # pas d'inférence ; l'overlay précédent reste affiché
 
-                # Single GPU pass: SCRFD detection + alignment + ArcFace embedding.
-                # frame_annotated est ignoré : on ne dessine plus (overlay côté client).
-                _, faces_data = detect_faces_with_embeddings(
-                    frame, confidence_threshold=self.config.FACE_DETECTION_CONFIDENCE
-                )
-
-                output_results, faces_indexed = self.prepare_detections(faces_data)
-                img_info = [frame.shape[0], frame.shape[1]]
-                tracks = self.tracker.update(output_results, img_info, img_info)
-
-                # Reconnaissances (fire-and-forget) — pas de re-soumission d'un track
-                # déjà en cours de résolution (anti-spam : _recognition_inflight).
-                job_items = []
-                for track in tracks:
-                    track_id = track.track_id
-                    if (self.should_recognize_track(track_id, frame_idx)
-                            and track_id not in self._recognition_inflight):
-                        embedding, bbox = self.find_best_embedding_for_track(track, faces_indexed)
-                        if embedding is not None:
-                            job_items.append({
-                                "track_id": track_id,
-                                "x": bbox[0], "y": bbox[1], "w": bbox[2], "h": bbox[3],
-                                "embedding": embedding,
-                            })
-                if job_items:
-                    self._submit_recognition(job_items, frame_idx, frame)
-
-                # ── Détections faciales → JSON (aucun dessin) ──
+                # Détections de cette frame (visages + plaques) publiées en JSON.
+                # Déclaré AVANT le gate facial → toujours défini pour le LPR + payload.
                 detections: List[Dict] = []
-                for track in tracks:
-                    track_id = track.track_id
-                    tlwh = track.tlwh
-                    x, y, w, h = int(tlwh[0]), int(tlwh[1]), int(tlwh[2]), int(tlwh[3])
-                    cached = self.person_db.get(track_id)
-                    if cached and cached["name"] != "Inconnu":
-                        recognized = True
-                        score = cached["score"]
-                        label = f'{cached["name"]} {score:.0%}' if score > 0 else cached["name"]
-                    else:
-                        recognized = False
-                        label = "Inconnu"
-                    detections.append({
-                        "type": "face",
-                        "track_id": track_id,
-                        "bbox": [x, y, x + w, y + h],
-                        "label": label,
-                        "recognized": recognized,
-                    })
 
-                self.cleanup_cache(frame_idx)
+                # ── Pipeline FACIAL — activable/désactivable À CHAUD ──────────────
+                # Désactivé : on saute SCRFD/ArcFace + la reconnaissance (GPU non
+                # sollicité pour les visages) et aucune box visage n'est produite.
+                # Le LPR, le blur-gate et la publication des métadonnées (plus bas)
+                # restent inchangés → couper le facial ne casse rien d'autre.
+                if self._face_recognition_enabled():
+                    # Single GPU pass: SCRFD detection + alignment + ArcFace embedding.
+                    # frame_annotated est ignoré : on ne dessine plus (overlay côté client).
+                    _, faces_data = detect_faces_with_embeddings(
+                        frame, confidence_threshold=self.config.FACE_DETECTION_CONFIDENCE
+                    )
+
+                    output_results, faces_indexed = self.prepare_detections(faces_data)
+                    img_info = [frame.shape[0], frame.shape[1]]
+                    tracks = self.tracker.update(output_results, img_info, img_info)
+
+                    # Reconnaissances (fire-and-forget) — pas de re-soumission d'un track
+                    # déjà en cours de résolution (anti-spam : _recognition_inflight).
+                    job_items = []
+                    for track in tracks:
+                        track_id = track.track_id
+                        if (self.should_recognize_track(track_id, frame_idx)
+                                and track_id not in self._recognition_inflight):
+                            embedding, bbox = self.find_best_embedding_for_track(track, faces_indexed)
+                            if embedding is not None:
+                                job_items.append({
+                                    "track_id": track_id,
+                                    "x": bbox[0], "y": bbox[1], "w": bbox[2], "h": bbox[3],
+                                    "embedding": embedding,
+                                })
+                    if job_items:
+                        self._submit_recognition(job_items, frame_idx, frame)
+
+                    # ── Détections faciales → JSON (aucun dessin) ──
+                    for track in tracks:
+                        track_id = track.track_id
+                        tlwh = track.tlwh
+                        x, y, w, h = int(tlwh[0]), int(tlwh[1]), int(tlwh[2]), int(tlwh[3])
+                        cached = self.person_db.get(track_id)
+                        if cached and cached["name"] != "Inconnu":
+                            recognized = True
+                            score = cached["score"]
+                            label = f'{cached["name"]} {score:.0%}' if score > 0 else cached["name"]
+                        else:
+                            recognized = False
+                            label = "Inconnu"
+                        detections.append({
+                            "type": "face",
+                            "track_id": track_id,
+                            "bbox": [x, y, x + w, y + h],
+                            "label": label,
+                            "recognized": recognized,
+                        })
+
+                    self.cleanup_cache(frame_idx)
 
                 # ── LPR : détection + lecture des plaques → détections JSON ──
                 detections.extend(self._collect_plate_detections(frame, frame_idx))
