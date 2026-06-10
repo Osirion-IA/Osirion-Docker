@@ -296,6 +296,29 @@ def set_person_blacklist(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# GET /blacklist/ — liste légère des personnes surveillées (pour le Core)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/blacklist/")
+def list_blacklisted(_current_user=Depends(require_viewer)):
+    """Renvoie les identifiants des personnes actuellement sur liste de surveillance.
+
+    Endpoint volontairement minimal (ni embeddings ni images) : le Core l'interroge
+    périodiquement pour appliquer un (dé)blacklist À CHAUD, sans attendre
+    l'expiration de son cache de reconnaissance. Source de vérité = la DB."""
+    with Session(engine) as session:
+        rows = session.execute(
+            select(People.id, People.first_name, People.last_name)
+            .where(People.is_blacklisted == True)  # noqa: E712
+        ).all()
+        return {
+            "ids": [r[0] for r in rows],
+            "names": [f"{r[1]} {r[2]}" for r in rows],
+            "count": len(rows),
+        }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # POST /search/
 # ─────────────────────────────────────────────────────────────────────────────
 
