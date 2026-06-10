@@ -62,7 +62,9 @@ class GlobalPersonTracker:
                  data["embedding"].copy(),
                  data["name"],
                  data["last_seen_camera"],
-                 data["last_seen_time"])
+                 data["last_seen_time"],
+                 data.get("is_blacklisted", False),
+                 data.get("db_id"))
                 for pid, data in self.global_persons.items()
                 if current_time - data["last_seen_time"] <= self.cache_ttl_seconds
             ]
@@ -74,7 +76,7 @@ class GlobalPersonTracker:
         #                les deux systèmes (FAISS + GlobalTracker) utilisent maintenant la même échelle
         best_match = None
         if snapshot:
-            pids, cached_embs, names, cameras, times = zip(*snapshot)
+            pids, cached_embs, names, cameras, times, blacklists, db_ids = zip(*snapshot)
             matrix = np.stack(cached_embs)                    # (N, 512)
             query_norm = np.linalg.norm(embedding)
             matrix_norms = np.linalg.norm(matrix, axis=1)    # (N,)
@@ -95,6 +97,8 @@ class GlobalPersonTracker:
                     "person_id": pids[best_idx],
                     "name": names[best_idx],
                     "score": best_score,
+                    "is_blacklisted": bool(blacklists[best_idx]),
+                    "db_id": db_ids[best_idx],
                     "previous_camera": cameras[best_idx],
                     "time_since_last_seen": current_time - times[best_idx]
                 }
@@ -123,7 +127,9 @@ class GlobalPersonTracker:
         embedding: np.ndarray,
         camera_id: int,
         track_id: int,
-        recognition_score: float
+        recognition_score: float,
+        is_blacklisted: bool = False,
+        db_id: Optional[int] = None
     ) -> int:
         """
         Fix #1 : find-then-register ATOMIQUE sous un seul verrou.
@@ -162,6 +168,9 @@ class GlobalPersonTracker:
                     data["last_seen_camera"] = camera_id
                     data["appearance_count"] += 1
                     data["track_history"].append((camera_id, track_id))
+                    data["is_blacklisted"] = bool(is_blacklisted)   # rafraîchit le statut
+                    if db_id is not None:
+                        data["db_id"] = db_id                       # mémorise l'id backend
                     return pid
 
             # Pas trouvé → enregistrement
@@ -171,6 +180,8 @@ class GlobalPersonTracker:
             self.global_persons[person_id] = {
                 "name": name,
                 "embedding": embedding.copy(),
+                "is_blacklisted": bool(is_blacklisted),
+                "db_id": db_id,                          # People.id backend (source d'alerte)
                 "first_seen_time": current_time,
                 "last_seen_time": current_time,
                 "first_seen_camera": camera_id,
@@ -197,6 +208,19 @@ class GlobalPersonTracker:
                 }
             )
             return person_id
+
+    def set_blacklist_status(self, person_id: int, is_blacklisted: bool) -> bool:
+        """Met à jour le statut « liste de surveillance » mémorisé d'une personne.
+
+        Utilisé pour propager À CHAUD un (dé)blacklist dans le cache global, de
+        sorte que les ré-identifications suivantes voient le statut à jour (et
+        n'émettent pas de nouvelle alerte sur un statut déjà connu). Idempotent."""
+        with self.lock:
+            data = self.global_persons.get(person_id)
+            if data is None:
+                return False
+            data["is_blacklisted"] = bool(is_blacklisted)
+            return True
 
     def update_person_location(self, person_id: int, camera_id: int, track_id: int) -> bool:
         """Met à jour la localisation d'une personne connue"""

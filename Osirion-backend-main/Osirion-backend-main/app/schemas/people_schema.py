@@ -20,4 +20,11 @@ class PeopleRead(BaseModel):
     email: EmailStr
     addresse: str
     image_url: str
+    is_blacklisted: bool = False
+    blacklist_reason: Optional[str] = None
     created_at: datetime
+
+
+class PersonBlacklistUpdate(BaseModel):
+    blacklisted: bool = True
+    reason: Optional[str] = None

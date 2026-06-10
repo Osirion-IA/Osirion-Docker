@@ -37,6 +37,29 @@ function formatRelative(dateString) {
   return new Date(dateString).toLocaleDateString("fr-FR", { day: "2-digit", month: "short" });
 }
 
+// Mini graphe à barres (SVG/flex, sans dépendance) — activité par jour.
+function MiniBarChart({ data }) {
+  const max = Math.max(1, ...data.map((d) => d.count));
+  return (
+    <div className="flex items-end gap-1.5 h-32">
+      {data.map((d) => (
+        <div key={d.date} className="flex-1 flex flex-col items-center gap-1 group">
+          <div className="w-full flex items-end justify-center h-full">
+            <div
+              className="w-full max-w-[28px] rounded-t-md bg-indigo-500/80 group-hover:bg-indigo-500 transition-all"
+              style={{ height: `${Math.max(4, (d.count / max) * 100)}%` }}
+              title={`${d.count} événement(s)`}
+            />
+          </div>
+          <span className="text-[10px] text-black/50 dark:text-white/50">
+            {new Date(d.date).toLocaleDateString("fr-FR", { weekday: "short" })}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function AdminDashboard() {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const user = useAuth();
@@ -46,23 +69,26 @@ export default function AdminDashboard() {
   const [users, setUsers] = useState([]);
   const [people, setPeople] = useState([]);
   const [events, setEvents] = useState([]);
+  const [dash, setDash] = useState(null);
   const [loadingStats, setLoadingStats] = useState(true);
   const [lastSync, setLastSync] = useState(null);
 
   const fetchDashboardData = useCallback(async () => {
     setLoadingStats(true);
     try {
-      const [camRes, userRes, peopleRes, eventsRes] = await Promise.all([
+      const [camRes, userRes, peopleRes, eventsRes, dashRes] = await Promise.all([
         fetchWithRefresh("/api/cameras"),
         fetchWithRefresh("/api/users"),
         fetchWithRefresh("/api/people"),
         fetchWithRefresh("/api/events?limit=20"),
+        fetchWithRefresh("/api/dashboard"),
       ]);
 
       if (camRes?.ok) setCameras(await camRes.json());
       if (userRes?.ok) setUsers(await userRes.json());
       if (peopleRes?.ok) setPeople(await peopleRes.json());
       if (eventsRes?.ok) setEvents(await eventsRes.json());
+      if (dashRes?.ok) setDash(await dashRes.json());
 
       setLastSync(new Date());
     } finally {
@@ -82,10 +108,6 @@ export default function AdminDashboard() {
     const now = new Date();
     return d.toDateString() === now.toDateString();
   });
-  const criticalEvents = events.filter((e) =>
-    ["blacklist_detected", "intrusion"].includes(e.event_type)
-  );
-
   const statCards = [
     {
       label: "Caméras actives",
@@ -97,15 +119,15 @@ export default function AdminDashboard() {
     {
       label: "Alertes aujourd'hui",
       value: loadingStats ? "—" : todayEvents.length,
-      delta: loadingStats ? "" : `${criticalEvents.length} critiques`,
+      delta: loadingStats ? "" : `${dash?.counts.alerts_new ?? 0} alertes blacklist`,
       trend: "24h",
-      deltaGood: criticalEvents.length === 0,
+      deltaGood: (dash?.counts.alerts_new ?? 0) === 0,
     },
     {
-      label: "Personnes recherchées",
-      value: loadingStats ? "—" : people.length,
-      delta: loadingStats ? "" : "blacklist",
-      trend: "total",
+      label: "Sous surveillance",
+      value: loadingStats ? "—" : ((dash?.counts.people_blacklisted ?? 0) + (dash?.counts.vehicles_blacklisted ?? 0)),
+      delta: loadingStats ? "" : `${dash?.counts.people_blacklisted ?? 0} pers. · ${dash?.counts.vehicles_blacklisted ?? 0} plaques`,
+      trend: "blacklist",
       deltaGood: true,
     },
     {
@@ -194,6 +216,44 @@ export default function AdminDashboard() {
                   </div>
                 </div>
               ))}
+            </section>
+
+            {/* Activité 7 jours + répartition par type (KPI réels) */}
+            <section className="grid gap-6 xl:grid-cols-[1.4fr_0.6fr]">
+              <div className="rounded-2xl border border-black/10 dark:border-white/10 bg-white/80 dark:bg-black/40 p-6">
+                <h3 className="font-semibold">Activité (7 derniers jours)</h3>
+                <p className="text-xs text-black/50 dark:text-white/50 mt-0.5">Événements détectés par jour</p>
+                <div className="mt-5">
+                  {dash
+                    ? <MiniBarChart data={dash.events_by_day} />
+                    : <div className="h-32 animate-pulse rounded-xl bg-black/5 dark:bg-white/5" />}
+                </div>
+              </div>
+              <div className="rounded-2xl border border-black/10 dark:border-white/10 bg-white/80 dark:bg-black/40 p-6">
+                <h3 className="font-semibold">Répartition par type</h3>
+                <div className="mt-4 space-y-2.5">
+                  {dash && Object.keys(dash.events_by_type).length > 0 ? (
+                    Object.entries(dash.events_by_type)
+                      .sort((a, b) => b[1] - a[1])
+                      .map(([type, n]) => {
+                        const total = Object.values(dash.events_by_type).reduce((s, v) => s + v, 0) || 1;
+                        return (
+                          <div key={type}>
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="text-black/70 dark:text-white/70 truncate">{type}</span>
+                              <span className="font-semibold ml-2">{n}</span>
+                            </div>
+                            <div className="mt-1 h-1.5 rounded-full bg-black/10 dark:bg-white/10">
+                              <div className="h-1.5 rounded-full bg-indigo-500" style={{ width: `${Math.round((n / total) * 100)}%` }} />
+                            </div>
+                          </div>
+                        );
+                      })
+                  ) : (
+                    <p className="text-xs text-black/50 dark:text-white/50">Aucun événement enregistré.</p>
+                  )}
+                </div>
+              </div>
             </section>
 
             <section className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">

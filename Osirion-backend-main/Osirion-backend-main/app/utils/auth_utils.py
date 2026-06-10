@@ -70,6 +70,18 @@ def create_refresh_token(data: dict) -> str:
     return encoded_jwt
 
 
+def create_reset_token(user_id: int, minutes: int = 30) -> str:
+    """Token JWT court de réinitialisation de mot de passe (type 'reset')."""
+    expire = datetime.utcnow() + timedelta(minutes=minutes)
+    to_encode = {
+        "sub": str(user_id),
+        "exp": expire,
+        "iat": datetime.utcnow(),
+        "type": "reset",
+    }
+    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+
 def decode_token(token: str) -> dict:
     """
     Décode et valide un token JWT.

@@ -31,7 +31,6 @@ export default function AdminSidebar({
           <circle cx="12" cy="12" r="3" />
         </svg>
       ),
-      badge: 248,
     },
     {
       label: "Live streamings",
@@ -65,7 +64,6 @@ export default function AdminSidebar({
           <path d="m7.5 7.5 9 9" />
         </svg>
       ),
-      badge: 18,
     },
     {
       label: "Utilisateurs & rôles",
@@ -75,6 +73,16 @@ export default function AdminSidebar({
         <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
           <path d="M16.5 9.5a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0Z" />
           <path d="M4 20.5a8.5 8.5 0 0 1 16 0" />
+        </svg>
+      ),
+    },
+    {
+      label: "Événements",
+      href: "/Osirion/admin/events",
+      roles: ["admin", "user", "viewer"],
+      icon: (
+        <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+          <path d="M3 12h4l2 5 4-12 2 7h6" />
         </svg>
       ),
     },
@@ -99,8 +107,6 @@ export default function AdminSidebar({
           <circle cx="12" cy="13" r="9" />
         </svg>
       ),
-      badge: 8,
-      badgeColor: "bg-rose-600/90 text-white",
     },
     {
       label: "Paramètres",
@@ -110,6 +116,18 @@ export default function AdminSidebar({
         <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
           <circle cx="12" cy="12" r="3.5" />
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+        </svg>
+      ),
+    },
+    {
+      label: "Audit & Maintenance",
+      href: "/Osirion/admin/audit",
+      roles: ["admin"],
+      icon: (
+        <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+          <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
+          <rect x="9" y="3" width="6" height="4" rx="1" />
+          <path d="m9 14 2 2 4-4" />
         </svg>
       ),
     },

@@ -13,6 +13,7 @@ from app.middleware.auth_middleware import (
     can_delete_users
 )
 from app.utils.auth_utils import hash_password
+from app.services.audit_service import record_audit
 
 router = APIRouter()
 
@@ -104,7 +105,12 @@ def create_user(
     session.add(new_user)
     session.commit()
     session.refresh(new_user)
-    
+
+    record_audit(
+        "user.create", user_id=current_user.id, user_email=current_user.email,
+        target_type="user", target_id=new_user.id,
+        detail=f"email={new_user.email} role={new_user.role}",
+    )
     return new_user
 
 
@@ -184,11 +190,16 @@ def delete_user(
             detail="Vous ne pouvez pas supprimer votre propre compte"
         )
     
+    _del_id, _del_email = user.id, user.email
     session.delete(user)
     session.commit()
-    
+
+    record_audit(
+        "user.delete", user_id=current_user.id, user_email=current_user.email,
+        target_type="user", target_id=_del_id, detail=f"email={_del_email}",
+    )
     return {
-        "message": f"Utilisateur {user.email} supprimé avec succès",
+        "message": f"Utilisateur {_del_email} supprimé avec succès",
         "deleted_by": current_user.email
     }
 

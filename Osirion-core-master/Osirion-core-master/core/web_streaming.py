@@ -190,6 +190,12 @@ class WebStreamingServer:
             new_state = control.set_face_recognition(bool(data['enabled']))
             return jsonify({"face_recognition_enabled": new_state})
 
+        # ── GPU — métriques d'utilisation (si NVIDIA disponible) ───────────────
+        @self.app.route('/api/gpu')
+        def gpu_stats():
+            from utils.gpu_monitor import get_gpu_stats
+            return jsonify(get_gpu_stats())
+
     def _setup_socketio(self):
         """Configure les événements WebSocket"""
 

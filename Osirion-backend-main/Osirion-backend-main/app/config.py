@@ -24,6 +24,18 @@ class Settings(BaseSettings):
     RATE_LIMIT_PER_MINUTE: str = "5/minute"  # pour les routes sensibles (login)
     RATE_LIMIT_GENERAL: str = "100/minute"   # pour les routes générales
 
+    # NOTIFICATIONS D'ALERTE — déclenchées MANUELLEMENT par un utilisateur
+    # (POST /alerts/{id}/notify), jamais en automatique. Tous optionnels : si non
+    # renseignés, l'endpoint /notify renvoie une erreur claire (pas de crash).
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM: str = "osirion@localhost"
+    SMTP_USE_TLS: bool = True
+    ALERT_EMAIL_TO: str = ""        # destinataire(s) par défaut, séparés par des virgules
+    ALERT_WEBHOOK_URL: str = ""     # webhook POST JSON (Slack/Teams/endpoint custom)
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

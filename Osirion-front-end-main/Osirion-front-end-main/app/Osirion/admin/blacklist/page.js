@@ -359,6 +359,24 @@ export default function BlacklistPage() {
     setTimeout(() => setSuccessMsg(""), 4000);
   };
 
+  // (Dé)marque une personne « sous surveillance ». Mise à jour optimiste avec
+  // rollback si l'appel échoue. Le Core lit ce statut → alerte (toast/son).
+  const toggleBlacklist = async (person) => {
+    const next = !person.is_blacklisted;
+    setPeople((prev) => prev.map((p) => (p.id === person.id ? { ...p, is_blacklisted: next } : p)));
+    try {
+      const res = await fetchWithRefresh(`/api/people/${person.id}/blacklist`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ blacklisted: next }),
+      });
+      if (!res || !res.ok) throw new Error("toggle failed");
+    } catch {
+      // Rollback visuel en cas d'échec réseau/serveur.
+      setPeople((prev) => prev.map((p) => (p.id === person.id ? { ...p, is_blacklisted: !next } : p)));
+    }
+  };
+
   const filteredPeople = useMemo(() => {
     if (!searchQuery) return people;
     const q = searchQuery.toLowerCase();
@@ -634,6 +652,12 @@ export default function BlacklistPage() {
                           {getInitials(person.first_name, person.last_name)}
                         </span>
                       </div>
+
+                      {person.is_blacklisted && (
+                        <span className="absolute top-2 left-2 px-2 py-0.5 rounded-full bg-rose-600 text-white text-[10px] font-bold shadow flex items-center gap-1">
+                          ⚠ Surveillé
+                        </span>
+                      )}
                     </div>
 
                     {/* Infos */}
@@ -665,8 +689,22 @@ export default function BlacklistPage() {
                         </div>
                       </div>
 
-                      <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-800 text-xs text-gray-400 dark:text-gray-500">
-                        Ajouté le {formatDate(person.created_at)}
+                      <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-800 flex items-center justify-between gap-2">
+                        <span className="text-xs text-gray-400 dark:text-gray-500">
+                          Ajouté le {formatDate(person.created_at)}
+                        </span>
+                        {canManageBlacklist && (
+                          <button
+                            onClick={() => toggleBlacklist(person)}
+                            className={`text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors ${
+                              person.is_blacklisted
+                                ? "bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-300"
+                                : "bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300"
+                            }`}
+                          >
+                            {person.is_blacklisted ? "Retirer surveillance" : "Mettre sous surveillance"}
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>

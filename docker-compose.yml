@@ -92,6 +92,15 @@ services:
       ADMIN_PASSWORD: ${AUTH_PASSWORD:-adminadminadmin}
       CUDA_VISIBLE_DEVICES: "0"
       UVICORN_RELOAD: "true"
+      # ── Notifications d'alerte (SMTP/webhook) — valeurs dans .env (non versionné)
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-osirion@localhost}
+      SMTP_USE_TLS: ${SMTP_USE_TLS:-true}
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
     volumes:
       # ── Bind mounts — code local écrase le code de l'image ──────────────────
       - ./Osirion-backend-main/Osirion-backend-main/app:/app/app
@@ -159,6 +168,14 @@ services:
       # OPT-IN : false par défaut. Activable à chaud via le frontend (toggle) ou
       # en mettant true ici. Nécessite un modèle YOLO de plaque (PLATE_MODEL_PATH).
       ENABLE_PLATE_RECOGNITION: ${ENABLE_PLATE_RECOGNITION:-false}
+      # ── Recherche d'embeddings LOCALE (réplique FAISS dans le Core) ──────────
+      # OPT-IN : false par défaut → comportement actuel (recherche via HTTP backend).
+      # true → recherche FAISS en RAM dans le Core (latence ~0.1 ms vs ~5-15 ms en
+      # HTTP). PostgreSQL reste géré uniquement par le backend ; le Core ne garde
+      # qu'une copie lecture seule, rechargée au démarrage + poll de version.
+      # Repli HTTP automatique si l'index local n'est pas prêt.
+      FAISS_LOCAL: ${FAISS_LOCAL:-false}
+      FAISS_LOCAL_RECONCILE_SECONDS: ${FAISS_LOCAL_RECONCILE_SECONDS:-15}
       PLATE_MODEL_PATH: ${PLATE_MODEL_PATH:-license_plate_detector.pt}
       PLATE_SEARCH_THRESHOLD: ${PLATE_SEARCH_THRESHOLD:-0.82}
       # ── Optimisations LPR (latence & précision) — défauts sûrs dans le code ──

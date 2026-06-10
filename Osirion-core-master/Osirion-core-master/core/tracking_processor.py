@@ -15,6 +15,7 @@ from services.embeddings_search_service import search_embedding_async
 from services.event_services import send_event_async
 from config.settings import EVENTS
 from core.adaptive_threshold import AdaptiveThreshold
+from core.blacklist_cache import get_blacklist_cache
 from utils.logger import get_logger
 from utils.monitoring import emit_recognition_metric, emit_blur_metric
 
@@ -48,6 +49,11 @@ class TrackingProcessor:
         self.stop_event = stop_event
         self.config = config
         self.global_tracker = global_tracker
+
+        # Source de vérité « liste de surveillance » rafraîchie depuis le backend
+        # (poll léger ~5s). Permet la prise en compte À CHAUD d'un (dé)blacklist
+        # sans attendre l'expiration du cache global. Singleton partagé caméras.
+        self.blacklist_cache = get_blacklist_cache()
 
         # ── LPR / ANPR (module plaques, optionnel et indépendant du facial) ──
         self.runtime_control = runtime_control      # drapeau activable au runtime
@@ -170,7 +176,9 @@ class TrackingProcessor:
                     "score": r["score"],
                     "last_updated": r["frame_idx"],
                     "person_id": r["person_id"],
+                    "db_id": r.get("db_id"),
                     "from_cache": r["from_cache"],
+                    "is_blacklisted": r.get("is_blacklisted", False),
                 }
 
     # ──────────────────────────────────────────────────────────────────────
@@ -262,7 +270,10 @@ class TrackingProcessor:
         name = "Inconnu"
         recognition_score = 0.0
         person_id = None
+        db_id = None
         from_cache = False
+        is_blacklisted = False
+        old_blacklisted = False   # statut mémorisé avant rafraîchissement (cache hit)
 
         # ÉTAPE 1 : Vérifier le cache global AVANT l'API
         if self.global_tracker and embedding is not None:
@@ -271,6 +282,19 @@ class TrackingProcessor:
                 name = cached_match["name"]
                 recognition_score = cached_match["score"]
                 person_id = cached_match["person_id"]
+                db_id = cached_match.get("db_id")
+                is_blacklisted = bool(cached_match.get("is_blacklisted", False))
+                old_blacklisted = is_blacklisted
+                # Statut « surveillance » FRAIS prioritaire : un (dé)blacklist récent
+                # prime sur le flag mémorisé dans le cache global (potentiellement périmé).
+                bl = self.blacklist_cache.is_blacklisted(db_id)
+                if bl is not None:
+                    is_blacklisted = bl
+                    if bl != old_blacklisted and person_id is not None:
+                        # Propage le changement (montée OU descente) dans le cache
+                        # global → les ré-identifications suivantes voient le bon
+                        # statut et ne ré-émettent pas d'alerte.
+                        self.global_tracker.set_blacklist_status(person_id, bl)
                 from_cache = True
                 self.global_tracker.update_person_location(person_id, self.cam_id, track_id)
                 logger.info(
@@ -322,6 +346,13 @@ class TrackingProcessor:
         if not from_cache and results and results[0].get("score", 0) > self.adaptive_threshold.value:
             name = results[0].get("name", "Inconnu")
             recognition_score = results[0].get("score", 0.0)
+            db_id = results[0].get("id")
+            is_blacklisted = bool(results[0].get("is_blacklisted", False))
+            # Statut frais prioritaire (gère blacklist ET déblacklist, même si la
+            # recherche locale/HTTP renvoyait une valeur légèrement en retard).
+            bl = self.blacklist_cache.is_blacklisted(db_id)
+            if bl is not None:
+                is_blacklisted = bl
 
             if self.global_tracker and embedding is not None:
                 person_id = self.global_tracker.find_or_register(
@@ -329,13 +360,28 @@ class TrackingProcessor:
                     embedding=embedding,
                     camera_id=self.cam_id,
                     track_id=track_id,
-                    recognition_score=recognition_score
+                    recognition_score=recognition_score,
+                    is_blacklisted=is_blacklisted,
+                    db_id=db_id,
                 )
 
             # Événement « fire-and-forget » : envoyé par le worker après coup.
+            # person_id = identifiant BACKEND (People.id) → le hook d'alerte backend
+            # (_maybe_create_alert) résout la bonne personne.
             pending_event = {
-                "person_id": person_id if person_id is not None else -1,
+                "person_id": db_id if db_id is not None else (person_id if person_id is not None else -1),
                 "event_type": EVENTS[0],            # "RECOGNITION" (comportement inchangé)
+                "score": recognition_score,
+            }
+        elif from_cache and is_blacklisted and not old_blacklisted:
+            # TRANSITION non-surveillé → surveillé d'une personne DÉJÀ suivie (cache
+            # hit) : on émet UNE alerte RECOGNITION pour que le backend la crée, sans
+            # attendre l'expiration du cache. Pas de spam : le statut vient d'être
+            # mémorisé (set_blacklist_status), donc les ré-identifications suivantes
+            # ne repassent plus par cette transition.
+            pending_event = {
+                "person_id": db_id if db_id is not None else (person_id if person_id is not None else -1),
+                "event_type": EVENTS[0],
                 "score": recognition_score,
             }
         elif not from_cache and self._unknown_face_event_enabled():
@@ -356,7 +402,9 @@ class TrackingProcessor:
             "name": name,
             "score": recognition_score,
             "person_id": person_id,
+            "db_id": db_id,
             "from_cache": from_cache,
+            "is_blacklisted": is_blacklisted,
             "frame_idx": frame_idx,
         }
         return record, pending_event
@@ -564,10 +612,20 @@ class TrackingProcessor:
                         tlwh = track.tlwh
                         x, y, w, h = int(tlwh[0]), int(tlwh[1]), int(tlwh[2]), int(tlwh[3])
                         cached = self.person_db.get(track_id)
+                        blacklisted = bool(cached.get("is_blacklisted")) if cached else False
+                        # Réévaluation LIVE du statut « surveillance » : un (dé)blacklist
+                        # est pris en compte au prochain rafraîchissement du poll backend
+                        # (~5s), sans attendre la ré-identification du track.
+                        if cached:
+                            bl = self.blacklist_cache.is_blacklisted(cached.get("db_id"))
+                            if bl is not None:
+                                blacklisted = bl
                         if cached and cached["name"] != "Inconnu":
                             recognized = True
                             score = cached["score"]
                             label = f'{cached["name"]} {score:.0%}' if score > 0 else cached["name"]
+                            if blacklisted:
+                                label = f'⚠ {label} [BLACKLIST]'
                         else:
                             recognized = False
                             label = "Inconnu"
@@ -577,6 +635,8 @@ class TrackingProcessor:
                             "bbox": [x, y, x + w, y + h],
                             "label": label,
                             "recognized": recognized,
+                            # alert=True → personne sur liste de surveillance (toast/son + overlay rouge)
+                            "alert": blacklisted,
                         })
 
                     self.cleanup_cache(frame_idx)
