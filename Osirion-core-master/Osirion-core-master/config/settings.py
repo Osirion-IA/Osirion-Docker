@@ -58,6 +58,20 @@ REIDENTIFICATION_INTERVAL = 200   # Frames avant de ré-identifier un track exis
 CACHE_TTL_FRAMES = 600            # Durée de vie des tracks en cache (en frames)
 
 # ----------------------
+# Recherche d'embeddings LOCALE (réplique FAISS dans le Core) — OPT-IN
+# ----------------------
+# false (défaut) : la reconnaissance interroge le backend en HTTP (comportement
+#   historique, inchangé).
+# true : le Core garde une copie RAM de la galerie (chargée au démarrage +
+#   réconciliée périodiquement) et fait la recherche FAISS EN LOCAL (~0.1 ms vs
+#   ~5-15 ms en HTTP). PostgreSQL reste géré uniquement par le backend.
+#   Tout échec/indisponibilité de l'index local → repli HTTP automatique.
+FAISS_LOCAL = os.getenv('FAISS_LOCAL', 'false').lower() == 'true'
+# Intervalle (s) du poll de version galerie : borne le délai de prise en compte
+# d'un nouvel enrôlement / changement de blacklist côté Core.
+FAISS_LOCAL_RECONCILE_SECONDS = int(os.getenv('FAISS_LOCAL_RECONCILE_SECONDS', '15'))
+
+# ----------------------
 # Configuration de la reconnexion RTSP
 # ----------------------
 RECONNECTION_SLEEP = 0.1          # Délai avant tentative de reconnexion RTSP (secondes)

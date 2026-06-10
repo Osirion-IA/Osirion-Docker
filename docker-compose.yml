@@ -168,6 +168,14 @@ services:
       # OPT-IN : false par défaut. Activable à chaud via le frontend (toggle) ou
       # en mettant true ici. Nécessite un modèle YOLO de plaque (PLATE_MODEL_PATH).
       ENABLE_PLATE_RECOGNITION: ${ENABLE_PLATE_RECOGNITION:-false}
+      # ── Recherche d'embeddings LOCALE (réplique FAISS dans le Core) ──────────
+      # OPT-IN : false par défaut → comportement actuel (recherche via HTTP backend).
+      # true → recherche FAISS en RAM dans le Core (latence ~0.1 ms vs ~5-15 ms en
+      # HTTP). PostgreSQL reste géré uniquement par le backend ; le Core ne garde
+      # qu'une copie lecture seule, rechargée au démarrage + poll de version.
+      # Repli HTTP automatique si l'index local n'est pas prêt.
+      FAISS_LOCAL: ${FAISS_LOCAL:-false}
+      FAISS_LOCAL_RECONCILE_SECONDS: ${FAISS_LOCAL_RECONCILE_SECONDS:-15}
       PLATE_MODEL_PATH: ${PLATE_MODEL_PATH:-license_plate_detector.pt}
       PLATE_SEARCH_THRESHOLD: ${PLATE_SEARCH_THRESHOLD:-0.82}
       # ── Optimisations LPR (latence & précision) — défauts sûrs dans le code ──

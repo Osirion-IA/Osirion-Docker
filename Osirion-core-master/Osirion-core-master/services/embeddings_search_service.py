@@ -7,6 +7,13 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Recherche LOCALE optionnelle (réplique FAISS dans le Core). Lue une fois ici ;
+# si false, le module core.face_index n'est même jamais importé (FAISS non chargé).
+try:
+    from config.settings import FAISS_LOCAL as _USE_LOCAL_INDEX
+except Exception:
+    _USE_LOCAL_INDEX = False
+
 # Politique de retry :
 #   - 3 tentatives max (attempt 1 = appel initial, 2-3 = retries)
 #   - Backoff exponentiel : 0.5s, 1.0s, 2.0s
@@ -29,7 +36,20 @@ async def search_embedding_async(session: aiohttp.ClientSession, embedding, top_
       - HTTP 5xx : backoff exponentiel + retry
       - Timeout / réseau : backoff exponentiel + retry
       - HTTP 4xx autres : abandon immédiat (erreur client non-corrigible)
+
+    Si FAISS_LOCAL est activé et que l'index local est prêt, la recherche se fait
+    EN LOCAL (aucun réseau). Tout retour None de l'index local (indisponible,
+    erreur) déclenche le repli sur le chemin HTTP ci-dessous → aucune régression.
     """
+    if _USE_LOCAL_INDEX:
+        try:
+            from core import face_index
+            local_results = face_index.search(embedding, k=top_k)
+            if local_results is not None:
+                return local_results
+        except Exception as e:
+            logger.debug(f"[search] index local indisponible — repli HTTP : {e}")
+
     url = f"{API_URL}/people/search/"
     payload = {
         "embedding": embedding.tolist() if hasattr(embedding, 'tolist') else list(embedding),

@@ -36,6 +36,22 @@ def main():
     # pour que le bloc finally s'exécute et arrête proprement les threads.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 
+    # ── Recherche d'embeddings LOCALE (réplique FAISS dans le Core) — OPT-IN ──
+    # Active uniquement si FAISS_LOCAL=true. Sinon : comportement inchangé
+    # (recherche via HTTP backend). Tout échec ici → repli HTTP automatique.
+    if getattr(settings, "FAISS_LOCAL", False):
+        try:
+            from core import face_index
+            ready = face_index.init(
+                reconcile_interval=getattr(settings, "FAISS_LOCAL_RECONCILE_SECONDS", 15)
+            )
+            logger.info(
+                "[face_index] recherche locale %s",
+                "ACTIVE" if ready else "en repli HTTP (chargement initial KO, réessai auto)",
+            )
+        except Exception as e:
+            logger.error("[face_index] init impossible (repli HTTP) : %s", e)
+
     # Démarrer le serveur web en premier pour que le healthcheck réponde
     # même si aucune caméra n'est encore configurée.
     if settings.ENABLE_WEB_STREAMING:
@@ -53,6 +69,12 @@ def main():
 
     finally:
         system.stop()
+        if getattr(settings, "FAISS_LOCAL", False):
+            try:
+                from core import face_index
+                face_index.stop()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

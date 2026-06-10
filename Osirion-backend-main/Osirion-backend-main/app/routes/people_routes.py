@@ -16,6 +16,7 @@ from pathlib import Path
 from app.models.people import People
 from app.database import engine
 from sqlmodel import Session, select
+from sqlalchemy import func
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -324,3 +325,57 @@ def search_people(
             f"[k={req.k}, caller={request.client.host}]"
         )
     return {"results": results}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /embeddings/ et /embeddings/version
+# Réplique LECTURE SEULE de la galerie pour le Core (recherche FAISS locale).
+# PostgreSQL reste géré uniquement par le backend ; ces routes ne font qu'EXPOSER
+# les embeddings + métadonnées pour que le Core en garde une copie en RAM.
+# Additif : aucune route existante n'est modifiée.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _gallery_version(session: Session) -> str:
+    """Empreinte légère de la galerie : change à chaque enrôlement ou toggle
+    blacklist. Sert au Core de filet de sécurité (poll périodique) pour détecter
+    qu'il doit recharger sa copie locale."""
+    total = session.execute(select(func.count(People.id))).scalar() or 0
+    blacklisted = session.execute(
+        select(func.count(People.id)).where(People.is_blacklisted == True)  # noqa: E712
+    ).scalar() or 0
+    last_created = session.execute(select(func.max(People.created_at))).scalar()
+    return f"{total}:{blacklisted}:{last_created.isoformat() if last_created else '0'}"
+
+
+@router.get("/embeddings/version")
+def embeddings_version(_current_user=Depends(require_viewer)):
+    """Version courante de la galerie (sans transférer les embeddings)."""
+    with Session(engine) as session:
+        total = session.execute(select(func.count(People.id))).scalar() or 0
+        return {"version": _gallery_version(session), "count": int(total)}
+
+
+@router.get("/embeddings/")
+def list_embeddings(_current_user=Depends(require_viewer)):
+    """Galerie complète (id + nom + embedding 512D + statut blacklist) pour la
+    construction de l'index FAISS local du Core. Appelé rarement (démarrage +
+    réconciliation), jamais sur le chemin chaud de reconnaissance."""
+    with Session(engine) as session:
+        people = session.execute(
+            select(People).where(People.embeddings.is_not(None))
+        ).scalars().all()
+        items = [
+            {
+                "id": p.id,
+                "name": f"{p.first_name} {p.last_name}",
+                "embedding": np.asarray(p.embeddings, dtype=float).tolist(),
+                "is_blacklisted": bool(getattr(p, "is_blacklisted", False)),
+                "blacklist_reason": getattr(p, "blacklist_reason", None),
+                "phone": p.phone,
+                "email": p.email,
+                "image_url": p.image_url,
+            }
+            for p in people
+        ]
+        version = _gallery_version(session)
+    return {"version": version, "count": len(items), "people": items}
