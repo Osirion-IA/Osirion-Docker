@@ -1,10 +1,13 @@
 from fastapi import APIRouter, HTTPException, Depends
 from sqlmodel import Session, select
+from sqlalchemy import delete as sa_delete
 from typing import List
 
 from app.models.cameras import Camera
+from app.models.events import Event
+from app.models.alerts import Alert
 from app.database import engine
-from app.schemas.camera_schema import CameraCreate, CameraRead
+from app.schemas.camera_schema import CameraCreate, CameraRead, CameraActiveUpdate
 from app.utils.security_utils import crypter, decrypter
 
 # AJOUT : Import des middlewares de sécurité
@@ -154,28 +157,101 @@ def update_camera(
 
 
 # ─────────────────────────────────────────────
+# (DÉS)ACTIVATION CAMÉRA (Protégé - USER ou ADMIN)
+# ─────────────────────────────────────────────
+
+@router.patch("/{camera_id}/active", response_model=CameraRead)
+def set_camera_active(
+    camera_id: int,
+    payload: CameraActiveUpdate,
+    current_user: User = Depends(can_manage_cameras),
+    session: Session = Depends(get_session)
+):
+    """
+    Active ou désactive une caméra (toggle léger : ne touche QUE is_active).
+
+    C'est le mécanisme RECOMMANDÉ pour retirer une caméra du système sans perdre
+    son historique : le Core (supervision) arrête ses threads et la synchro
+    MediaMTX supprime son chemin automatiquement au cycle suivant. Réversible.
+
+    Permissions requises : USER ou ADMIN
+    """
+    camera = session.get(Camera, camera_id)
+    if not camera:
+        raise HTTPException(status_code=404, detail="Caméra non trouvée")
+
+    camera.is_active = payload.is_active
+    session.add(camera)
+    session.commit()
+    session.refresh(camera)
+
+    # Décrypte la rtsp_url pour rester cohérent avec GET /cameras/.
+    return CameraRead(
+        id=camera.id,
+        cam_name=camera.cam_name,
+        rtsp_url=decrypter(camera.rtsp_url),
+        location=camera.location,
+        is_active=camera.is_active,
+        created_at=camera.created_at,
+    )
+
+
+# ─────────────────────────────────────────────
 # DELETE CAMERA (Protégé - USER ou ADMIN)
 # ─────────────────────────────────────────────
 
 @router.delete("/delete/{camera_id}")
 def delete_camera(
     camera_id: int,
+    force: bool = False,
     current_user: User = Depends(can_manage_cameras),  # ← Protection ajoutée
     session: Session = Depends(get_session)
 ):
     """
     Supprime une caméra.
-    
+
+    Une caméra référencée par des événements ne peut pas être supprimée
+    directement (FK non-nullable event.camera_id → l'ancien comportement plantait
+    en 500). Désormais :
+      - sans `force` : si des événements existent, renvoie un 409 explicite
+        invitant à DÉSACTIVER la caméra (recommandé, préserve l'historique) ;
+      - avec `force=true` : supprime EN CASCADE, dans l'ordre des contraintes FK,
+        les alertes liées → les événements → la caméra (historique perdu).
+
     Permissions requises : USER ou ADMIN
     """
     camera = session.get(Camera, camera_id)
     if not camera:
         raise HTTPException(status_code=404, detail="Caméra non trouvée")
-    
-    session.delete(camera)
-    session.commit()
+
+    # Événements rattachés (event.camera_id est un FK NON-nullable).
+    event_ids = session.exec(select(Event.id).where(Event.camera_id == camera_id)).all()
+    n_events = len(event_ids)
+
+    if n_events > 0 and not force:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Cette caméra est référencée par {n_events} événement(s). "
+                "Désactivez-la (recommandé, conserve l'historique) ou relancez la "
+                "suppression avec force=true pour supprimer aussi ces événements et "
+                "leurs alertes."
+            ),
+        )
+
+    try:
+        if n_events > 0:
+            # Ordre imposé par les FK : alertes (alert.event_id) → événements → caméra.
+            session.execute(sa_delete(Alert).where(Alert.event_id.in_(event_ids)))
+            session.execute(sa_delete(Event).where(Event.camera_id == camera_id))
+        session.delete(camera)
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise HTTPException(status_code=500, detail="Échec de la suppression de la caméra.")
 
     return {
         "message": f"Caméra {camera_id} supprimée avec succès !",
+        "deleted_events": n_events,
         "deleted_by": current_user.email  # ← Traçabilité
     }

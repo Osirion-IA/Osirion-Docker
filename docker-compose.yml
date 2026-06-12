@@ -152,6 +152,9 @@ services:
       # physique (MediaMTX), partagée entre l'IA (Core) et la vidéo (WebRTC).
       READ_FROM_MEDIAMTX: "true"
       MEDIAMTX_RTSP_BASE: mediamtx:8554
+      # API MediaMTX (réseau interne) : le Core y déclare/supprime à chaud 1 chemin
+      # par caméra à partir du rtsp_url backend (cf. services.mediamtx_path_service).
+      MEDIAMTX_API_BASE: http://mediamtx:9997
       AUTH_EMAIL: ${AUTH_EMAIL}
       AUTH_PASSWORD: ${AUTH_PASSWORD}
       FLASK_SECRET_KEY: ${FLASK_SECRET_KEY}
@@ -226,11 +229,16 @@ services:
   # MediaMTX — proxy média (RTSP ingest → WebRTC/WHEP)   [Phase 2]
   # Décharge TOTALEMENT le transport vidéo du Core : le frontend lit la vidéo en
   # WebRTC natif (décodage accéléré matériellement par le navigateur) et superpose
-  # les bounding boxes reçues en JSON via Socket.IO. Configuration : ./mediamtx.yml
-  # + source RTSP par caméra injectée depuis .env (MTX_PATHS_CAM3_SOURCE).
+  # les bounding boxes reçues en JSON via Socket.IO. Configuration : ./mediamtx.yml.
+  # Les chemins caméra (cam<id>) ne sont PLUS injectés ici : le Core les crée à
+  # chaud via l'API MediaMTX (source = rtsp_url backend).
   # ---------------------------------------------------------------------------
   mediamtx:
-    image: bluenviron/mediamtx:latest
+    # Variante -ffmpeg : ffmpeg est embarqué dans l'image. Indispensable car le
+    # Core configure chaque chemin caméra en relais FFmpeg (runOnDemand) — voir
+    # services.mediamtx_path_service — pour ingérer les caméras dont le H264
+    # n'est pas en packetization-mode 1 (refusé par l'ingest RTSP natif).
+    image: bluenviron/mediamtx:latest-ffmpeg
     container_name: osirion-mediamtx
     restart: unless-stopped
     networks:
@@ -239,10 +247,8 @@ services:
       - "8554:8554"        # RTSP (ingest / republish)
       - "8889:8889"        # WebRTC — signalisation HTTP (WHEP / WHIP)
       - "8189:8189/udp"    # WebRTC — mux ICE UDP (DOIT être publié pour la lecture navigateur)
-    environment:
-      # URL RTSP déchiffrée de la caméra 3, injectée depuis .env (jamais versionnée).
-      # MediaMTX mappe MTX_PATHS_CAM3_SOURCE → paths.cam3.source.
-      MTX_PATHS_CAM3_SOURCE: ${MTX_PATHS_CAM3_SOURCE}
+      # NB : port 9997 (API) volontairement NON publié → API joignable uniquement
+      # depuis le Core sur le réseau Docker interne.
     volumes:
       - ./mediamtx.yml:/mediamtx.yml:ro
 

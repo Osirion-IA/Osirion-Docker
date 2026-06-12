@@ -118,6 +118,26 @@ class WebStreamingServer:
 
             return jsonify({"cameras": cameras, "count": len(cameras)})
 
+        @self.app.route('/api/cameras/health')
+        def cameras_health():
+            """Santé temps réel par caméra (état, FPS, reconnexions, viewers…)."""
+            try:
+                cams = self.surveillance_system.camera_health()
+            except Exception:
+                logger.error("Erreur lors du calcul de la santé des caméras", exc_info=True)
+                cams = []
+            # Enrichir avec le nb de clients qui regardent (info propre au serveur web).
+            with self.stream_lock:
+                viewers = {cid: len(s) for cid, s in self.camera_viewers.items()}
+            for c in cams:
+                c["viewers"] = viewers.get(c["id"], 0)
+            return jsonify({
+                "cameras": cams,
+                "count": len(cams),
+                "online": sum(1 for c in cams if c.get("state") == "online"),
+                "server_time": time.time(),
+            })
+
         @self.app.route('/api/stats')
         def system_stats():
             with self.stream_lock:
