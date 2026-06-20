@@ -15,6 +15,8 @@ from core.tracking_processor import TrackingProcessor
 from core.global_person_tracker import GlobalPersonTracker
 from core.runtime_control import RuntimeControl
 from utils.logger import get_logger
+from utils.measurement import get_measurement
+from utils.gpu_monitor import get_gpu_stats
 
 logger = get_logger(__name__)
 
@@ -46,6 +48,7 @@ class SurveillanceSystem:
         self.camera_stop_events: Dict[int, threading.Event] = {}   # {cam_id: Event}
         self.camera_threads: Dict[int, List] = {}                  # {cam_id: [capture_thread, processing_thread]}
         self.camera_captures: Dict[int, CameraCapture] = {}        # {cam_id: CameraCapture} — pour la santé
+        self.camera_processors: Dict[int, object] = {}             # {cam_id: TrackingProcessor} — pour la mesure (latence)
         # Sérialise les ajouts/retraits/réconciliations de caméras (démarrage + supervision).
         self.camera_lock = threading.Lock()
         self._supervisor_thread = None
@@ -128,7 +131,8 @@ class SurveillanceSystem:
         capture_thread.start()
         processing_thread.start()
         self.camera_threads[cam_id] = [capture_thread, processing_thread]
-        self.camera_captures[cam_id] = capture   # exposé pour la santé caméras
+        self.camera_captures[cam_id] = capture       # exposé pour la santé caméras
+        self.camera_processors[cam_id] = processor   # exposé pour la mesure (latence)
         self.threads.extend([capture_thread, processing_thread])
 
         # Publier la caméra par REMPLACEMENT ATOMIQUE de la référence de liste :
@@ -174,6 +178,7 @@ class SurveillanceSystem:
         self.camera_stop_events.pop(cam_id, None)
         self.camera_threads.pop(cam_id, None)
         self.camera_captures.pop(cam_id, None)
+        self.camera_processors.pop(cam_id, None)
         self.frame_queues.pop(cam_id, None)
         self.result_frames.pop(cam_id, None)
         self.trackers.pop(cam_id, None)
@@ -321,6 +326,59 @@ class SurveillanceSystem:
                 logger.error("Erreur dans la boucle de supervision des caméras", exc_info=True)
         logger.info("Supervision des caméras arrêtée.")
 
+    def _measure_sampler_loop(self) -> None:
+        """Échantillonneur de MESURE (chapitre 4) : émet périodiquement un
+        `system_sample` dans metrics.jsonl — débit/latence par caméra, taux de
+        succès du cache, occupation GPU — pour les tableaux 4.4 et 4.5.
+
+        Le débit RÉEL de traitement par caméra est déduit du nombre de frames
+        inférées sur l'intervalle (n_face / durée), indépendamment de la cadence
+        de capture. Best-effort : aucune erreur n'interrompt la boucle.
+        """
+        measure = get_measurement()
+        interval = max(1, int(getattr(self.config, 'MEASURE_SAMPLE_SECONDS', 5)))
+        logger.info(f"[MESURE] échantillonnage système actif (toutes les {interval}s).")
+        last = time.monotonic()
+        while not self.stop_event.wait(interval):
+            now = time.monotonic()
+            dt = now - last
+            last = now
+            try:
+                cams_payload = []
+                health = {h["id"]: h for h in self.camera_health()}
+                for cam in self.active_cameras:
+                    cid = cam["id"]
+                    proc = self.camera_processors.get(cid)
+                    snap = proc.latency_snapshot(reset=True) if proc is not None else {}
+                    h = health.get(cid, {})
+                    n_face = snap.get("n_face", 0)
+                    cams_payload.append({
+                        "id": cid,
+                        "name": cam.get("cam_name"),
+                        "capture_fps": h.get("fps"),
+                        "state": h.get("state"),
+                        # Débit réel d'inférence = frames traitées / durée d'intervalle.
+                        "processed_fps": round(n_face / dt, 2) if dt > 0 else None,
+                        "face_ms": snap.get("face_ms"),
+                        "lpr_ms": snap.get("lpr_ms"),
+                        "n_processed": n_face,
+                    })
+                try:
+                    cache = self.global_tracker.get_statistics()
+                except Exception:
+                    cache = {}
+                measure.emit(
+                    "system_sample",
+                    interval_s=round(dt, 2),
+                    n_cameras=len(self.active_cameras),
+                    cameras=cams_payload,
+                    cache=cache,
+                    gpu=get_gpu_stats(),
+                )
+            except Exception:
+                logger.error("[MESURE] erreur dans l'échantillonneur système", exc_info=True)
+        logger.info("[MESURE] échantillonnage système arrêté.")
+
     def run(self):
         """Démarre le système de surveillance (avec supervision à chaud des caméras)."""
         cameras = fetch_camera_list()
@@ -358,6 +416,13 @@ class SurveillanceSystem:
             self._supervisor_thread.start()
         else:
             logger.info("Supervision des caméras désactivée (CAMERA_REFRESH_SECONDS=0).")
+
+        # Échantillonneur de MESURE (chapitre 4) — démarré seulement si activé.
+        if get_measurement().enabled:
+            self._measure_sampler_thread = threading.Thread(
+                target=self._measure_sampler_loop, daemon=True, name="measure-sampler"
+            )
+            self._measure_sampler_thread.start()
 
         time.sleep(3)
         logger.info("Système multi-caméras prêt en mode headless (sans affichage)")

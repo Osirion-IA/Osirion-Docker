@@ -91,6 +91,16 @@ FRAME_FAILURE_THRESHOLD = 10      # Nombre d'échecs consécutifs avant de décl
 CAMERA_REFRESH_SECONDS = int(os.getenv('CAMERA_REFRESH_SECONDS', '15'))
 
 # ----------------------
+# Dispositif de MESURE (évaluation du chapitre 4 du mémoire)
+# ----------------------
+# Le Core journalise des métriques exploitables hors-ligne (latence, débit, cache,
+# GPU, décisions de reconnaissance + vérité terrain, lectures de plaques) dans un
+# fichier JSON Lines (MEASURE_FILE), dépouillé par tools/analyze_metrics.py.
+# Activation/fichier sont lus directement par utils.measurement (MEASURE_ENABLED,
+# MEASURE_FILE). Ici : seul l'intervalle d'échantillonnage système (s).
+MEASURE_SAMPLE_SECONDS = int(os.getenv('MEASURE_SAMPLE_SECONDS', '5'))
+
+# ----------------------
 # Source de capture vidéo (architecture VMS — Phase 2)
 # ----------------------
 # READ_FROM_MEDIAMTX=true : le Core lit le flux RTSP REPUBLIÉ par MediaMTX

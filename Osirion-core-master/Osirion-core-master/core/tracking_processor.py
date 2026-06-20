@@ -6,6 +6,8 @@ import cv2
 import numpy as np
 import asyncio
 import aiohttp
+import time
+from collections import deque
 from typing import Dict, List, Optional, Tuple
 import queue
 import threading
@@ -18,6 +20,7 @@ from core.adaptive_threshold import AdaptiveThreshold
 from core.blacklist_cache import get_blacklist_cache
 from utils.logger import get_logger
 from utils.monitoring import emit_recognition_metric, emit_blur_metric
+from utils.measurement import get_measurement
 
 logger = get_logger(__name__)
 
@@ -65,6 +68,16 @@ class TrackingProcessor:
         self.loop = None
         self._session = None
         self._blur_skip_count = 0  # compteur de frames rejetées pour flou (monitoring)
+
+        # ── Mesure (chapitre 4) : latence d'inférence par frame TRAITÉE ──────
+        # Accumulateurs vidés à chaque échantillon par le sampler (fenêtre non
+        # chevauchante). face_ms = SCRFD+alignement+ArcFace (1 passe GPU) ;
+        # lpr_ms = coût SYNCHRONE du LPR sur le thread caméra (l'OCR et le réseau
+        # tournent dans des workers → preuve de non-blocage attendue au §4.6).
+        self.measure = get_measurement()
+        self._lat_lock = threading.Lock()
+        self._face_ms: deque = deque(maxlen=4000)
+        self._lpr_ms: deque = deque(maxlen=4000)
 
         # ── Worker réseau découplé pour la reconnaissance faciale ────────────
         # Le thread caméra ne bloque JAMAIS sur le réseau : il pousse un job
@@ -267,6 +280,9 @@ class TrackingProcessor:
         track_id = item["track_id"]
         embedding = item["embedding"]
 
+        # Vérité terrain attendue devant cette caméra (mode mesure ; None sinon).
+        expected = self.measure.get_expected(self.cam_id)
+
         name = "Inconnu"
         recognition_score = 0.0
         person_id = None
@@ -300,6 +316,21 @@ class TrackingProcessor:
                 logger.info(
                     f"✓ Cache global : {name} — score={recognition_score:.2f} ({recognition_score:.0%})"
                     f" [cam={self.cam_name}, track_id={track_id}]"
+                )
+                # Mesure : décision servie par le cache (sortie de bout en bout).
+                # from_cache=True → l'analyse l'EXCLUT du balayage EER (le score
+                # n'est pas une similarité FAISS fraîche), mais l'inclut pour la
+                # précision de bout en bout de l'identification.
+                emit_recognition_metric(
+                    camera_id=self.cam_id,
+                    camera_name=self.cam_name,
+                    track_id=track_id,
+                    cosine_score=recognition_score,
+                    adaptive_threshold=self.adaptive_threshold.value,
+                    accepted=True,
+                    candidate_name=name,
+                    from_cache=True,
+                    expected=expected,
                 )
 
         # ÉTAPE 2 : Si pas en cache, utiliser les résultats de l'API
@@ -340,6 +371,7 @@ class TrackingProcessor:
                     accepted=accepted,
                     candidate_name=api_name,
                     from_cache=False,
+                    expected=expected,
                 )
 
         pending_event = None
@@ -459,6 +491,49 @@ class TrackingProcessor:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         return float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
+    # ──────────────────────────────────────────────────────────────────────
+    # Mesure de latence (chapitre 4) — alimenté par run(), lu par le sampler
+    # ──────────────────────────────────────────────────────────────────────
+    def _record_latency(self, face_ms: Optional[float], lpr_ms: Optional[float]) -> None:
+        """Enregistre la latence d'inférence d'une frame traitée (thread caméra)."""
+        with self._lat_lock:
+            if face_ms is not None:
+                self._face_ms.append(face_ms)
+            if lpr_ms is not None:
+                self._lpr_ms.append(lpr_ms)
+
+    def latency_snapshot(self, reset: bool = True) -> Dict:
+        """Instantané des latences depuis le dernier appel (fenêtre non chevauchante).
+
+        Retourne le nombre de frames traitées et les p50/p95/moyenne (ms) pour le
+        facial et pour le coût synchrone du LPR. `reset` vide les accumulateurs →
+        l'échantillon suivant ne couvre que l'intervalle écoulé (le sampler en
+        déduit aussi le débit réel : n / durée d'intervalle).
+        """
+        with self._lat_lock:
+            face = list(self._face_ms)
+            lpr = list(self._lpr_ms)
+            if reset:
+                self._face_ms.clear()
+                self._lpr_ms.clear()
+
+        def _stats(a):
+            if not a:
+                return {"p50": None, "p95": None, "mean": None}
+            arr = np.asarray(a, dtype=float)
+            return {
+                "p50": round(float(np.percentile(arr, 50)), 2),
+                "p95": round(float(np.percentile(arr, 95)), 2),
+                "mean": round(float(arr.mean()), 2),
+            }
+
+        return {
+            "n_face": len(face),
+            "n_lpr": len(lpr),
+            "face_ms": _stats(face),
+            "lpr_ms": _stats(lpr),
+        }
+
     def _lpr_enabled(self) -> bool:
         """LPR actif ? Priorité au drapeau runtime (toggle frontend), sinon config."""
         if self.runtime_control is not None:
@@ -573,6 +648,10 @@ class TrackingProcessor:
                 # Déclaré AVANT le gate facial → toujours défini pour le LPR + payload.
                 detections: List[Dict] = []
 
+                # Mesure (chapitre 4) : latences de cette frame traitée.
+                face_ms: Optional[float] = None
+                lpr_ms: Optional[float] = None
+
                 # ── Pipeline FACIAL — activable/désactivable À CHAUD ──────────────
                 # Désactivé : on saute SCRFD/ArcFace + la reconnaissance (GPU non
                 # sollicité pour les visages) et aucune box visage n'est produite.
@@ -581,9 +660,11 @@ class TrackingProcessor:
                 if self._face_recognition_enabled():
                     # Single GPU pass: SCRFD detection + alignment + ArcFace embedding.
                     # frame_annotated est ignoré : on ne dessine plus (overlay côté client).
+                    _t_face = time.perf_counter()
                     _, faces_data = detect_faces_with_embeddings(
                         frame, confidence_threshold=self.config.FACE_DETECTION_CONFIDENCE
                     )
+                    face_ms = (time.perf_counter() - _t_face) * 1000.0
 
                     output_results, faces_indexed = self.prepare_detections(faces_data)
                     img_info = [frame.shape[0], frame.shape[1]]
@@ -642,7 +723,12 @@ class TrackingProcessor:
                     self.cleanup_cache(frame_idx)
 
                 # ── LPR : détection + lecture des plaques → détections JSON ──
+                _t_lpr = time.perf_counter()
                 detections.extend(self._collect_plate_detections(frame, frame_idx))
+                lpr_ms = (time.perf_counter() - _t_lpr) * 1000.0
+
+                # ── Mesure : enregistrer les latences de cette frame traitée ──
+                self._record_latency(face_ms, lpr_ms)
 
                 # ── Publier le payload de métadonnées (overlay frontend) ──
                 # Les bbox sont exprimées dans le repère de la frame traitée

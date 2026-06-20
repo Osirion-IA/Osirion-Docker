@@ -193,6 +193,13 @@ services:
       PLATE_MIN_CROP_HEIGHT: ${PLATE_MIN_CROP_HEIGHT:-18}
       PLATE_CROP_MIN_SHARPNESS: ${PLATE_CROP_MIN_SHARPNESS:-0.0} # 0 = filtre netteté désactivé
       PLATE_FORMAT_REGEX: ${PLATE_FORMAT_REGEX:-}               # vide = pas de filtre de format
+      # ── MESURE (évaluation chapitre 4 du mémoire) ───────────────────────────
+      # Journalise latence/débit/cache/GPU + décisions reco + lectures plaques
+      # dans /app/measurements/metrics.jsonl (bind mount → ./measurements sur l'hôte),
+      # dépouillé hors-ligne par tools/analyze_metrics.py. MEASURE_ENABLED=false → no-op.
+      MEASURE_ENABLED: ${MEASURE_ENABLED:-true}
+      MEASURE_FILE: /app/measurements/metrics.jsonl
+      MEASURE_SAMPLE_SECONDS: ${MEASURE_SAMPLE_SECONDS:-5}
     volumes:
       # ── Bind mounts — packages Python modifiés ──────────────────────────────
       # ByteTrack (/app/ByteTrack) et yolov11n-face.pt restent dans l'image.
@@ -211,6 +218,8 @@ services:
       - ./Osirion-core-master/Osirion-core-master/patches/byte_tracker.py:/app/ByteTrack/yolox/tracker/byte_tracker.py
       # ── Named volume — logs persistants ────────────────────────────────────
       - core_logs:/app/logs
+      # ── Mesure (chapitre 4) — journal metrics.jsonl directement sur l'hôte ──
+      - ./measurements:/app/measurements
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:5000/api/cameras"]
       interval: 30s
