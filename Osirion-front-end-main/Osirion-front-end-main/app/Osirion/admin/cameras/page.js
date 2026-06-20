@@ -132,12 +132,76 @@ export default function CamerasPage() {
     }
   };
 
-  const handleDeleteCamera = async (cameraId) => {
-    if (!window.confirm("Supprimer cette caméra ?")) return;
+  // (Dés)active une caméra (toggle is_active). Le Core + MediaMTX réagissent au
+  // cycle de supervision suivant (arrêt des threads / retrait du chemin).
+  const handleToggleActive = async (camera) => {
+    const next = !camera.is_active;
     try {
-      const response = await fetch(`/api/cameras/${cameraId}`, { method: "DELETE" });
-      if (response.ok) setCameras((prev) => prev.filter((c) => c.id !== cameraId));
-    } catch {}
+      const response = await fetch(`/api/cameras/${camera.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_active: next }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        window.alert(data?.message || "Échec de la mise à jour.");
+        return;
+      }
+      setCameras((prev) =>
+        prev.map((c) => (c.id === camera.id ? { ...c, is_active: next } : c))
+      );
+    } catch {
+      window.alert("Erreur réseau.");
+    }
+  };
+
+  // Active/désactive en lot les caméras sélectionnées.
+  const handleBulkActive = async (isActive) => {
+    const targets = cameras.filter((c) => selectedCameras.includes(c.id));
+    await Promise.all(
+      targets
+        .filter((c) => c.is_active !== isActive)
+        .map((c) =>
+          fetch(`/api/cameras/${c.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ is_active: isActive }),
+          })
+        )
+    );
+    setCameras((prev) =>
+      prev.map((c) => (selectedCameras.includes(c.id) ? { ...c, is_active: isActive } : c))
+    );
+    setSelectedCameras([]);
+  };
+
+  const handleDeleteCamera = async (cameraId, force = false) => {
+    if (!force && !window.confirm("Supprimer définitivement cette caméra ?")) return;
+    try {
+      const response = await fetch(
+        `/api/cameras/${cameraId}${force ? "?force=true" : ""}`,
+        { method: "DELETE" }
+      );
+      if (response.ok) {
+        setCameras((prev) => prev.filter((c) => c.id !== cameraId));
+        return;
+      }
+      const data = await response.json().catch(() => ({}));
+      // 409 : caméra référencée par des événements → proposer la désactivation
+      // (recommandé) ou la suppression en cascade.
+      if (response.status === 409) {
+        const forceConfirm = window.confirm(
+          `${data?.message || "Caméra référencée par des événements."}\n\n` +
+          "OK = supprimer quand même (événements + alertes liés perdus).\n" +
+          "Annuler = garder (vous pouvez plutôt la désactiver)."
+        );
+        if (forceConfirm) await handleDeleteCamera(cameraId, true);
+        return;
+      }
+      window.alert(data?.message || "Erreur lors de la suppression.");
+    } catch {
+      window.alert("Erreur réseau.");
+    }
   };
 
   const getStatusBadge = (status) => {
@@ -584,15 +648,22 @@ export default function CamerasPage() {
                   {selectedCameras.length} caméra(s) sélectionnée(s)
                 </div>
                 <div className="flex-1" />
-                <button className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium transition-colors">
-                  Activer
-                </button>
-                <button className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium transition-colors">
-                  Maintenance
-                </button>
-                <button className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-medium transition-colors">
-                  Désactiver
-                </button>
+                {canWrite && (
+                  <>
+                    <button
+                      onClick={() => handleBulkActive(true)}
+                      className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium transition-colors"
+                    >
+                      Activer
+                    </button>
+                    <button
+                      onClick={() => handleBulkActive(false)}
+                      className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium transition-colors"
+                    >
+                      Désactiver
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -669,6 +740,24 @@ export default function CamerasPage() {
                               <circle cx="12" cy="12" r="3" />
                             </svg>
                           </button>
+                          {canWrite && (
+                          <button
+                            onClick={() => handleToggleActive(camera)}
+                            title={camera.is_active ? "Désactiver" : "Activer"}
+                            className="p-2 rounded-lg bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm hover:bg-white dark:hover:bg-gray-800 transition-colors"
+                          >
+                            <svg
+                              className={`h-4 w-4 ${camera.is_active ? "text-emerald-500" : "text-gray-400"}`}
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                            >
+                              <path d="M18.36 6.64a9 9 0 1 1-12.73 0" />
+                              <line x1="12" y1="2" x2="12" y2="12" />
+                            </svg>
+                          </button>
+                          )}
                           {canWrite && (
                           <button
                             onClick={() => handleDeleteCamera(camera.id)}
@@ -870,6 +959,24 @@ export default function CamerasPage() {
                                     <circle cx="12" cy="12" r="3" />
                                   </svg>
                                 </button>
+                                {canWrite && (
+                                <button
+                                  onClick={() => handleToggleActive(camera)}
+                                  title={camera.is_active ? "Désactiver" : "Activer"}
+                                  className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
+                                >
+                                  <svg
+                                    className={`h-4 w-4 ${camera.is_active ? "text-emerald-500" : "text-gray-400"}`}
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeWidth="2"
+                                  >
+                                    <path d="M18.36 6.64a9 9 0 1 1-12.73 0" />
+                                    <line x1="12" y1="2" x2="12" y2="12" />
+                                  </svg>
+                                </button>
+                                )}
                                 {canWrite && (
                                 <button
                                   onClick={() => handleDeleteCamera(camera.id)}

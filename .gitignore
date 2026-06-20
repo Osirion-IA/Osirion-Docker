@@ -8,6 +8,12 @@
 !**/.env.example
 
 # ─────────────────────────────────────────────
+# Mesure (évaluation chapitre 4) — journaux bruts non versionnés
+# ─────────────────────────────────────────────
+measurements/*.jsonl
+!measurements/.gitkeep
+
+# ─────────────────────────────────────────────
 # Python
 # ─────────────────────────────────────────────
 __pycache__/

@@ -75,10 +75,30 @@ FAISS_LOCAL_RECONCILE_SECONDS = int(os.getenv('FAISS_LOCAL_RECONCILE_SECONDS', '
 # Configuration de la reconnexion RTSP
 # ----------------------
 RECONNECTION_SLEEP = 0.1          # Délai avant tentative de reconnexion RTSP (secondes)
-MAX_RECONNECTION_ATTEMPTS = 5     # Nombre maximum de tentatives de reconnexion avant abandon
+MAX_RECONNECTION_ATTEMPTS = 5     # Tentatives avant d'escalader le log en ERROR (la reconnexion ne s'arrête JAMAIS : on continue ensuite au délai plafond — reprise auto après longue coupure)
 RECONNECTION_BASE_DELAY = 1.0     # Délai de base pour le backoff exponentiel (secondes)
 MAX_RECONNECTION_DELAY = 30.0     # Délai maximum entre les tentatives de reconnexion (secondes)
 FRAME_FAILURE_THRESHOLD = 10      # Nombre d'échecs consécutifs avant de déclencher une reconnexion
+
+# ----------------------
+# Supervision des caméras à chaud (hot-add / hot-remove)
+# ----------------------
+# Intervalle (s) du thread de supervision : le Core ré-interroge périodiquement
+# la liste des caméras du backend et applique les changements À CHAUD, sans
+# redémarrage — ajout d'une nouvelle caméra active, (dé)activation, suppression,
+# et redémarrage d'un thread caméra mort. 0 = supervision désactivée (ancien
+# comportement : snapshot unique au démarrage).
+CAMERA_REFRESH_SECONDS = int(os.getenv('CAMERA_REFRESH_SECONDS', '15'))
+
+# ----------------------
+# Dispositif de MESURE (évaluation du chapitre 4 du mémoire)
+# ----------------------
+# Le Core journalise des métriques exploitables hors-ligne (latence, débit, cache,
+# GPU, décisions de reconnaissance + vérité terrain, lectures de plaques) dans un
+# fichier JSON Lines (MEASURE_FILE), dépouillé par tools/analyze_metrics.py.
+# Activation/fichier sont lus directement par utils.measurement (MEASURE_ENABLED,
+# MEASURE_FILE). Ici : seul l'intervalle d'échantillonnage système (s).
+MEASURE_SAMPLE_SECONDS = int(os.getenv('MEASURE_SAMPLE_SECONDS', '5'))
 
 # ----------------------
 # Source de capture vidéo (architecture VMS — Phase 2)
@@ -90,6 +110,21 @@ FRAME_FAILURE_THRESHOLD = 10      # Nombre d'échecs consécutifs avant de décl
 # perte de paquets. false = ancien comportement (Core ouvre cam["rtsp_url"]).
 READ_FROM_MEDIAMTX = os.getenv('READ_FROM_MEDIAMTX', 'false').lower() == 'true'
 MEDIAMTX_RTSP_BASE = os.getenv('MEDIAMTX_RTSP_BASE', 'mediamtx:8554')  # hôte:port RTSP interne
+
+# ----------------------
+# Chemins MediaMTX dynamiques (1 par caméra) — voir services.mediamtx_path_service
+# ----------------------
+# Plutôt que de déclarer chaque caméra dans mediamtx.yml + .env
+# (MTX_PATHS_CAM<id>_SOURCE), le Core crée/met à jour/supprime à chaud le chemin
+# `cam<id>` via l'API HTTP de MediaMTX, à partir du rtsp_url renvoyé par le
+# backend. Une caméra ajoutée à chaud obtient ainsi automatiquement sa source.
+# L'API n'est PAS publiée vers l'hôte (réseau Docker interne uniquement).
+MANAGE_MEDIAMTX_PATHS = os.getenv('MANAGE_MEDIAMTX_PATHS', 'true').lower() == 'true'
+MEDIAMTX_API_BASE = os.getenv('MEDIAMTX_API_BASE', 'http://mediamtx:9997')
+# Transport RTSP imposé au pull caméra côté MediaMTX (tcp = pas de perte RTP).
+MEDIAMTX_RTSP_TRANSPORT = os.getenv('MEDIAMTX_RTSP_TRANSPORT', 'tcp')
+# Fermeture du flux caméra après X sans lecteur (sourceOnDemand).
+MEDIAMTX_ON_DEMAND_CLOSE_AFTER = os.getenv('MEDIAMTX_ON_DEMAND_CLOSE_AFTER', '30s')
 
 # ----------------------
 # Constantes de couleurs (BGR format)

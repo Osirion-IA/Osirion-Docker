@@ -12,6 +12,7 @@ from flask_socketio import SocketIO, emit, join_room, leave_room
 import threading
 import time
 from utils.logger import get_logger
+from utils.measurement import get_measurement
 
 # flask_cors est optionnel : autorise le navigateur (frontend) à appeler les
 # routes REST /api/* du Core (ex. toggle LPR). Sans lui, le toggle même-origine
@@ -118,6 +119,26 @@ class WebStreamingServer:
 
             return jsonify({"cameras": cameras, "count": len(cameras)})
 
+        @self.app.route('/api/cameras/health')
+        def cameras_health():
+            """Santé temps réel par caméra (état, FPS, reconnexions, viewers…)."""
+            try:
+                cams = self.surveillance_system.camera_health()
+            except Exception:
+                logger.error("Erreur lors du calcul de la santé des caméras", exc_info=True)
+                cams = []
+            # Enrichir avec le nb de clients qui regardent (info propre au serveur web).
+            with self.stream_lock:
+                viewers = {cid: len(s) for cid, s in self.camera_viewers.items()}
+            for c in cams:
+                c["viewers"] = viewers.get(c["id"], 0)
+            return jsonify({
+                "cameras": cams,
+                "count": len(cams),
+                "online": sum(1 for c in cams if c.get("state") == "online"),
+                "server_time": time.time(),
+            })
+
         @self.app.route('/api/stats')
         def system_stats():
             with self.stream_lock:
@@ -195,6 +216,41 @@ class WebStreamingServer:
         def gpu_stats():
             from utils.gpu_monitor import get_gpu_stats
             return jsonify(get_gpu_stats())
+
+        # ── MESURE (chapitre 4) — pilotage de campagne via localhost (hors-ligne)
+        # Permet de marquer les scénarios et de poser la vérité terrain sans
+        # internet : tout est journalisé dans metrics.jsonl (cf. utils/measurement).
+        @self.app.route('/api/measure/status')
+        def measure_status():
+            return jsonify(get_measurement().status())
+
+        @self.app.route('/api/measure/mark', methods=['POST'])
+        def measure_mark():
+            data = request.get_json(silent=True) or {}
+            label = data.get('label') or request.args.get('label')
+            get_measurement().mark(label)
+            return jsonify({"ok": True, "scenario": label})
+
+        @self.app.route('/api/measure/expect', methods=['POST'])
+        def measure_expect():
+            """Vérité terrain visage : {camera_id:int, person:str}. person vide = efface."""
+            data = request.get_json(silent=True) or {}
+            cam_raw = data.get('camera_id', request.args.get('camera_id'))
+            person = data.get('person', request.args.get('person'))
+            try:
+                camera_id = int(cam_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "camera_id (int) requis"}), 400
+            get_measurement().set_expected(camera_id, person)
+            return jsonify({"ok": True, "camera_id": camera_id, "expected": person or None})
+
+        @self.app.route('/api/measure/plate', methods=['POST'])
+        def measure_plate():
+            """Vérité terrain plaque courante : {plate:str}. plate vide = efface."""
+            data = request.get_json(silent=True) or {}
+            plate = data.get('plate', request.args.get('plate'))
+            get_measurement().set_expected_plate(plate)
+            return jsonify({"ok": True, "expected_plate": plate or None})
 
     def _setup_socketio(self):
         """Configure les événements WebSocket"""

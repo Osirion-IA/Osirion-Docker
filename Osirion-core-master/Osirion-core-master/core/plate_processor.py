@@ -43,6 +43,7 @@ mis en cache pour ce track_id et l'OCR est COMPLÈTEMENT sauté ensuite.
 import queue
 import re
 import threading
+import time
 from collections import defaultdict
 from typing import Dict, List, Optional
 
@@ -57,6 +58,7 @@ from plate_detection import detect_plates, read_plate_text
 from services.plate_search_service import search_plate_async
 from services.event_services import send_plate_event_async
 from utils.logger import get_logger
+from utils.measurement import get_measurement
 
 logger = get_logger(__name__)
 
@@ -113,6 +115,10 @@ class PlateProcessor:
         self._active_ids: set = set()
         self._proc_count = 0   # compteur interne pour la cadence de détection
 
+        # ── Mesure (chapitre 4 §4.6) ────────────────────────────────────────
+        self.measure = get_measurement()
+        self._last_detect_ms = 0.0   # latence YOLO de la dernière frame de détection
+
         self._stop = threading.Event()
 
         # ── Worker OCR découplé (Step 4) ──────────────────────────────────────
@@ -164,7 +170,9 @@ class PlateProcessor:
         if self._proc_count % self.process_every_n != 0:
             return
 
+        _t_det = time.perf_counter()
         detections = detect_plates(frame, confidence_threshold=self.det_conf)
+        self._last_detect_ms = (time.perf_counter() - _t_det) * 1000.0
 
         # Préparer pour ByteTrack : (N,5) [x1,y1,x2,y2,score]
         if detections:
@@ -305,10 +313,25 @@ class PlateProcessor:
             if entry["finalized"]:
                 continue
             entry["attempts"] += 1
+
+            # Mesure : latence OCR + mémorisation de la 1re lecture mono-image.
+            ocr_ms = float(r.get("ocr_ms", 0.0))
+            entry["ocr_ms_sum"] += ocr_ms
+            entry["ocr_count"] += 1
+            if entry.get("first_text") is None and r["text"]:
+                entry["first_text"] = r["text"]      # lecture mono-image (1 passe OCR)
+                entry["first_ocr_ms"] = ocr_ms
+
             logger.info(f"[LPR][DBG] résultat OCR tid={r['track_id']} "  # TEMP DEBUG
                         f"text='{r['text']}' conf={r['conf']:.2f} "
                         f"(ocr_min={self.ocr_min}) attempts={entry['attempts']}")
             self._apply_reading(entry, r["text"], r["conf"])
+
+            # Mesure : émettre une seule fois quand la plaque devient définitive
+            # (compare lecture mono-image vs consensus voté → tableau 4.6).
+            if entry["finalized"] and not entry.get("read_emitted"):
+                self._emit_plate_read(r["track_id"], entry)
+                entry["read_emitted"] = True
 
     def _apply_reading(self, entry: Dict, text: str, conf: float) -> None:
         """Agrège une lecture OCR dans l'entrée (vote temporel / finalisation)."""
@@ -346,12 +369,14 @@ class PlateProcessor:
             if job is None:                   # sentinelle d'arrêt
                 break
             try:
+                _t_ocr = time.perf_counter()
                 text, conf = read_plate_text(job["crop"])
+                ocr_ms = (time.perf_counter() - _t_ocr) * 1000.0
             except Exception as e:
                 logger.error(f"[LPR][cam={self.cam_name}] worker OCR : {e}")
-                text, conf = "", 0.0
+                text, conf, ocr_ms = "", 0.0, 0.0
             self._ocr_results.put(
-                {"track_id": job["track_id"], "text": text, "conf": conf}
+                {"track_id": job["track_id"], "text": text, "conf": conf, "ocr_ms": ocr_ms}
             )
 
     @staticmethod
@@ -404,7 +429,41 @@ class PlateProcessor:
             "vehicle_id": None, "is_blacklisted": False, "owner_name": None,
             "looked_up_for": None, "lookup_inflight": None,
             "event_sent": False, "last_updated": frame_idx,
+            # ── Mesure (§4.6) : latence + comparaison mono-image / vote ──
+            "created_ts": time.time(),   # pour le temps jusqu'à finalisation
+            "first_text": None,          # 1re lecture OCR (mono-image)
+            "first_ocr_ms": None,
+            "ocr_ms_sum": 0.0, "ocr_count": 0,
+            "read_emitted": False,
         }
+
+    def _emit_plate_read(self, tid: int, entry: Dict) -> None:
+        """Émet un événement `plate_read` (mesure §4.6) à la finalisation d'une plaque.
+
+        Compare la lecture MONO-IMAGE (1re passe OCR) au consensus VOTÉ, et fournit
+        les latences (détection YOLO, OCR, temps total jusqu'à finalisation) pour
+        que tools/analyze_metrics.py calcule CER + exactitude plaque entière et la
+        latence du pipeline LPR, mono vs vote temporel.
+        """
+        n = entry.get("ocr_count", 0)
+        created = entry.get("created_ts")
+        self.measure.emit(
+            "plate_read",
+            camera_id=self.cam_id,
+            track_id=tid,
+            mono=(entry.get("first_text") or ""),     # lecture mono-image
+            voted=(entry.get("plate_text") or ""),    # consensus vote temporel
+            conf=round(float(entry.get("ocr_conf", 0.0)), 3),
+            attempts=entry.get("attempts"),
+            n_readings=len(entry.get("readings", [])),
+            detect_ms=round(self._last_detect_ms, 2),
+            first_ocr_ms=(round(entry["first_ocr_ms"], 2)
+                          if entry.get("first_ocr_ms") is not None else None),
+            avg_ocr_ms=(round(entry["ocr_ms_sum"] / n, 2) if n else None),
+            time_to_finalize_ms=(round((time.time() - created) * 1000.0, 1)
+                                 if created else None),
+            expected=self.measure.get_expected_plate(),
+        )
 
     # ──────────────────────────────────────────────────────────────────────
     # Résolution réseau DÉCOUPLÉE (worker thread + file FIFO)
@@ -505,6 +564,18 @@ class PlateProcessor:
 
         match = await search_plate_async(
             session, plate_text, threshold=self.search_threshold, k=1
+        )
+        # Mesure (§4.6) : trace brute de la recherche floue (plaque lue → match).
+        self.measure.emit(
+            "plate_lookup",
+            camera_id=self.cam_id,
+            query=plate_text,
+            matched=bool(match),
+            matched_plate=(match.get("plate") or match.get("plate_number")) if match else None,
+            score=(match.get("score") if match else None),
+            vehicle_id=(match.get("id") if match else None),
+            is_blacklisted=bool(match.get("is_blacklisted")) if match else False,
+            expected=self.measure.get_expected_plate(),
         )
         if match:
             result["vehicle_id"] = match.get("id")

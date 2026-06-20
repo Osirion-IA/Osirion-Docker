@@ -9,6 +9,11 @@ class CameraCreate(BaseModel):
     location: Optional[str] = None
     is_active: Optional[bool] = True
 
+# Activation/désactivation d'une caméra sans réenvoyer tout l'objet (notamment
+# pas la rtsp_url, qui serait re-chiffrée). Utilisé par PATCH /cameras/{id}/active.
+class CameraActiveUpdate(BaseModel):
+    is_active: bool
+
 class CameraRead(BaseModel):
     id: int
     cam_name: str

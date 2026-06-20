@@ -22,17 +22,27 @@ import time
 import logging
 from typing import Optional
 
+from utils.measurement import get_measurement
+
 _monitor_logger = logging.getLogger("osirion.monitoring")
 
 
 def _emit(event: str, payload: dict) -> None:
-    """Émet un log structuré JSON. Compatible ELK / Loki / stdout."""
+    """Émet un log structuré JSON (console) ET dans le journal de mesure.
+
+    Le journal de mesure (metrics.jsonl) est la source dépouillée hors-ligne pour
+    les tableaux du chapitre 4 ; la sortie console reste compatible ELK/Loki.
+    """
     record = {
         "ts": time.time(),
         "event": event,
         **payload
     }
     _monitor_logger.info(json.dumps(record, ensure_ascii=False))
+    try:
+        get_measurement().emit(event, **payload)
+    except Exception:
+        pass
 
 
 # ─────────────────────────────────────────────────────────────
@@ -48,16 +58,21 @@ def emit_recognition_metric(
     accepted: bool,
     candidate_name: str,
     from_cache: bool = False,
+    expected: Optional[str] = None,
 ) -> None:
     """
     Émettre après chaque décision de reconnaissance.
+
+    `expected` : identité de VÉRITÉ TERRAIN attendue devant la caméra (mode
+    mesure). None hors campagne. Permet à tools/analyze_metrics.py de calculer
+    rang-1, précision/rappel/F1 et la courbe FAR/FRR → EER.
 
     Alertes à configurer :
       cosine_score > 0.95                  → doublon possible en base
       cosine_score < 0.35 and accepted     → faux positif probable (seuil trop bas)
       not accepted and cosine_score > 0.42 → faux rejet proche du seuil
     """
-    _emit("recognition", {
+    payload = {
         "camera_id": camera_id,
         "camera_name": camera_name,
         "track_id": track_id,
@@ -67,7 +82,10 @@ def emit_recognition_metric(
         "candidate": candidate_name,
         "from_cache": from_cache,
         "margin": round(cosine_score - adaptive_threshold, 4),  # positif = accepté avec marge
-    })
+    }
+    if expected is not None:
+        payload["expected"] = expected
+    _emit("recognition", payload)
 
 
 # ─────────────────────────────────────────────────────────────

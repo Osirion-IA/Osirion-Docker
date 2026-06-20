@@ -8,16 +8,49 @@
 #
 # Le Core ne fait plus QUE de l'IA + des métadonnées JSON (bounding boxes).
 #
-# La source RTSP de chaque caméra est injectée par variable d'environnement
-# (compose → .env : MTX_PATHS_CAM3_SOURCE) pour ne pas versionner les
-# identifiants caméra. MediaMTX échoue au démarrage sur toute clé inconnue :
-# ce fichier reste volontairement minimal et n'utilise que des clés stables.
+# La source RTSP de chaque caméra n'est PLUS déclarée ici : le Core crée /
+# met à jour / supprime dynamiquement un chemin `cam<id>` via l'API HTTP de
+# MediaMTX (voir services.mediamtx_path_service). Ce chemin utilise un RELAIS
+# FFmpeg (runOnDemand) qui pompe le flux caméra et le re-publie en `-c:v copy` :
+# indispensable pour les caméras dont le H264 n'est pas en packetization-mode 1
+# (ex. Hikvision), refusées par l'ingest RTSP natif de gortsplib. Image requise :
+# bluenviron/mediamtx:latest-ffmpeg. Aucun identifiant caméra n'est versionné.
+# MediaMTX échoue au démarrage sur toute clé inconnue : ce fichier reste
+# volontairement minimal et n'utilise que des clés stables.
 # =============================================================================
 
 logLevel: info
 
+# ── API HTTP de contrôle (création dynamique des chemins par le Core) ─────────
+# Joignable UNIQUEMENT sur le réseau Docker interne (http://mediamtx:9997) : le
+# port 9997 n'est PAS publié vers l'hôte (cf. docker-compose). Le Core y déclare
+# un chemin par caméra à chaud.
+api: yes
+apiAddress: :9997
+
+# ── Authentification interne ─────────────────────────────────────────────────
+# Par défaut, MediaMTX n'autorise l'action 'api' QUE depuis 127.0.0.1 : le Core,
+# dans un autre conteneur (IP 172.x), reçoit alors 401. On redéfinit les
+# utilisateurs internes pour autoriser 'api' depuis le réseau Docker. Le port
+# 9997 n'étant PAS publié vers l'hôte, l'API reste injoignable de l'extérieur.
+# IMPORTANT : redéfinir cette liste ÉCRASE les défauts → on RÉ-inclut
+# publish/read/playback, sinon le pull caméra et la lecture WHEP du frontend
+# tomberaient en échec d'authentification.
+authInternalUsers:
+  - user: any
+    pass:
+    ips: []
+    permissions:
+      - action: publish
+      - action: read
+      - action: playback
+  - user: any
+    pass:
+    ips: []
+    permissions:
+      - action: api
+
 # ── Serveurs inutilisés désactivés (image légère, surface réduite) ───────────
-api: no
 metrics: no
 hls: no
 rtmp: no
@@ -39,18 +72,11 @@ webrtcAdditionalHosts: [127.0.0.1]
 
 # ── Chemins (1 par caméra) ──────────────────────────────────────────────────
 # Convention : path = "cam<id>"  →  le frontend lit  /cam<id>/whep
-# 'source' fourni via MTX_PATHS_CAM3_SOURCE (env). 'sourceOnDemand' : connexion
-# à la caméra uniquement lorsqu'un lecteur WebRTC est réellement présent.
+# Les chemins caméra ne sont PLUS déclarés statiquement ici : le Core les crée à
+# chaud via l'API (un par caméra, source = rtsp_url backend, sourceOnDemand + TCP).
+# Voir services.mediamtx_path_service. Seul le catch-all reste, pour les flux
+# poussés à la volée (mire de test, push WHIP/RTSP) non gérés par le Core.
 paths:
-  cam3:
-    source: rtsp://overridden-by-MTX_PATHS_CAM3_SOURCE-env
-    sourceOnDemand: yes
-    sourceOnDemandCloseAfter: 30s
-    # Forcer le transport TCP pour le pull caméra (comme le Core). En UDP, la
-    # caméra HIKVISION perdait des centaines de paquets RTP/s (FU-A invalides,
-    # vidéo saccadée) ; le TCP retransmet → flux propre. Lien local fiable.
-    rtspTransport: tcp
-
   # Catch-all : autorise les autres chemins (flux publiés à la volée, mire de
-  # test, futures caméras via WHIP/RTSP push) sans devoir les déclarer un à un.
+  # test, push WHIP/RTSP) sans devoir les déclarer un à un.
   all_others:
