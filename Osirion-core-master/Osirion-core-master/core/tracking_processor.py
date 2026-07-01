@@ -72,6 +72,15 @@ class TrackingProcessor:
         self.plate_processor = None                 # créé à la 1re activation LPR
         self._lpr_init_failed = False               # évite de réessayer en boucle
 
+        # ── Config EFFECTIVE des modules PAR CAMÉRA (VMS — groupes) ───────────
+        # Calculée côté backend (drapeau local ∧ tous les groupes de la caméra),
+        # transmise dans le payload caméra. La boucle de supervision la met à jour
+        # À CHAUD via apply_effective_config() SANS redémarrer ce thread. Défaut
+        # True → aucune régression si le backend ne renvoie pas encore ces champs.
+        # Lecture/écriture d'un bool = atomique sous le GIL (pas de verrou requis).
+        self._effective_facial_active = bool(cam.get("effective_facial_active", True))
+        self._effective_lpr_active = bool(cam.get("effective_lpr_active", True))
+
         self.frame_counter = 0
         self.loop = None
         self._session = None
@@ -867,8 +876,39 @@ class TrackingProcessor:
             "lpr_ms": _stats(lpr),
         }
 
+    def apply_effective_config(self, facial_active: bool, lpr_active: bool) -> None:
+        """Applique À CHAUD la config effective (facial/LPR) de CETTE caméra.
+
+        Appelée par la boucle de supervision quand la config effective change
+        (bascule de groupe ou drapeau local). Ne redémarre PAS le thread : le
+        prochain tour de boucle lit simplement les nouveaux drapeaux et saute
+        l'étape désactivée, libérant immédiatement les ressources GPU/CPU.
+        """
+        facial_active = bool(facial_active)
+        lpr_active = bool(lpr_active)
+        if facial_active != self._effective_facial_active:
+            logger.info(
+                f"[cam={self.cam_name}] pipeline FACIAL "
+                f"{'activé' if facial_active else 'désactivé'} à chaud (config groupe/caméra)."
+            )
+            self._effective_facial_active = facial_active
+        if lpr_active != self._effective_lpr_active:
+            logger.info(
+                f"[cam={self.cam_name}] pipeline LPR "
+                f"{'activé' if lpr_active else 'désactivé'} à chaud (config groupe/caméra)."
+            )
+            self._effective_lpr_active = lpr_active
+
     def _lpr_enabled(self) -> bool:
-        """LPR actif ? Priorité au drapeau runtime (toggle frontend), sinon config."""
+        """LPR actif pour CETTE caméra ?
+
+        Deux niveaux, combinés en ET : (1) le toggle runtime GLOBAL (système),
+        (2) la config effective PAR CAMÉRA (drapeau local ∧ tous ses groupes).
+        Couper le module au niveau d'un groupe désactive donc le LPR ici même si
+        le système l'autorise globalement.
+        """
+        if not self._effective_lpr_active:
+            return False
         if self.runtime_control is not None:
             return self.runtime_control.lpr_enabled
         return getattr(self.config, 'ENABLE_PLATE_RECOGNITION', False)
@@ -881,9 +921,14 @@ class TrackingProcessor:
         return getattr(self.config, 'ENABLE_UNKNOWN_FACE_EVENT', False)
 
     def _face_recognition_enabled(self) -> bool:
-        """Reconnaissance faciale active ? Priorité au drapeau runtime (toggle
-        frontend), sinon config. DÉFAUT = True (pipeline principal) : sans
-        runtime_control ni config, le facial reste ACTIVÉ → aucune régression."""
+        """Reconnaissance faciale active pour CETTE caméra ?
+
+        Combinaison en ET : (1) toggle runtime GLOBAL (système), (2) config
+        effective PAR CAMÉRA (drapeau local ∧ tous ses groupes). DÉFAUT = True
+        aux deux niveaux → aucune régression. Désactiver le facial pour un groupe
+        coupe SCRFD/ArcFace et la file de reconnaissance ici, libérant le GPU."""
+        if not self._effective_facial_active:
+            return False
         if self.runtime_control is not None:
             return self.runtime_control.face_recognition_enabled
         return getattr(self.config, 'ENABLE_FACE_RECOGNITION', True)

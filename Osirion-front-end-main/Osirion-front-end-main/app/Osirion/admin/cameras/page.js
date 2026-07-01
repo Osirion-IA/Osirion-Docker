@@ -18,8 +18,10 @@ export default function CamerasPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  const EMPTY_CAM_FORM = { cam_name: "", rtsp_url: "", location: "", is_active: true, latitude: "", longitude: "", bearing: "" };
   const [showModal, setShowModal] = useState(false);
-  const [modalForm, setModalForm] = useState({ cam_name: "", rtsp_url: "", location: "", is_active: true });
+  const [editingId, setEditingId] = useState(null); // null = mode ajout
+  const [modalForm, setModalForm] = useState(EMPTY_CAM_FORM);
   const [submitting, setSubmitting] = useState(false);
   const [modalError, setModalError] = useState("");
 
@@ -107,23 +109,66 @@ export default function CamerasPage() {
     if (r.ok) setCameras(await r.json());
   };
 
-  const handleAddCamera = async (e) => {
+  // Ouvre la modale en mode AJOUT (formulaire vierge).
+  const openAddModal = () => {
+    setEditingId(null);
+    setModalForm(EMPTY_CAM_FORM);
+    setModalError("");
+    setShowModal(true);
+  };
+
+  // Ouvre la modale en mode ÉDITION (préremplie ; géo null → "" pour l'input).
+  const openEditModal = (camera) => {
+    setEditingId(camera.id);
+    setModalForm({
+      cam_name: camera.cam_name || "",
+      rtsp_url: camera.rtsp_url || "",
+      location: camera.location || "",
+      is_active: !!camera.is_active,
+      latitude: camera.latitude ?? "",
+      longitude: camera.longitude ?? "",
+      bearing: camera.bearing ?? "",
+    });
+    setModalError("");
+    setShowModal(true);
+  };
+
+  const closeModal = () => {
+    setShowModal(false);
+    setEditingId(null);
+  };
+
+  // Ajout (POST /api/cameras) ou édition (PUT /api/cameras/{id}). Les champs géo
+  // vides sont envoyés à null ; bearing par défaut 0.
+  const handleSubmitCamera = async (e) => {
     e.preventDefault();
     setSubmitting(true);
     setModalError("");
+    const toNum = (v) => (v === "" || v === null || v === undefined ? null : Number(v));
+    const payload = {
+      cam_name: modalForm.cam_name,
+      rtsp_url: modalForm.rtsp_url,
+      location: modalForm.location,
+      is_active: modalForm.is_active,
+      latitude: toNum(modalForm.latitude),
+      longitude: toNum(modalForm.longitude),
+      bearing: modalForm.bearing === "" ? 0 : Number(modalForm.bearing),
+    };
     try {
-      const response = await fetch("/api/cameras", {
-        method: "POST",
+      const url = editingId ? `/api/cameras/${editingId}` : "/api/cameras";
+      const method = editingId ? "PUT" : "POST";
+      const response = await fetch(url, {
+        method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(modalForm),
+        body: JSON.stringify(payload),
       });
       const data = await response.json();
       if (!response.ok) {
-        setModalError(data?.message || "Erreur lors de l'ajout.");
+        setModalError(data?.message || "Erreur lors de l'enregistrement.");
         return;
       }
-      setShowModal(false);
-      setModalForm({ cam_name: "", rtsp_url: "", location: "", is_active: true });
+      closeModal();
+      setModalForm(EMPTY_CAM_FORM);
       await refreshCameras();
     } catch {
       setModalError("Erreur réseau.");
@@ -247,9 +292,11 @@ export default function CamerasPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-2xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 shadow-2xl">
             <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-800">
-              <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Ajouter une caméra</h2>
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+                {editingId ? "Modifier la caméra" : "Ajouter une caméra"}
+              </h2>
               <button
-                onClick={() => setShowModal(false)}
+                onClick={closeModal}
                 className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
               >
                 <svg className="h-5 w-5 text-gray-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -257,7 +304,7 @@ export default function CamerasPage() {
                 </svg>
               </button>
             </div>
-            <form onSubmit={handleAddCamera} className="p-6 space-y-4">
+            <form onSubmit={handleSubmitCamera} className="p-6 space-y-4">
               {modalError && (
                 <div className="px-4 py-3 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-sm text-red-700 dark:text-red-400">
                   {modalError}
@@ -301,6 +348,47 @@ export default function CamerasPage() {
                   className="w-full px-4 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:text-white"
                 />
               </div>
+
+              {/* Géolocalisation (cartographie). Optionnel : sans lat/lng, la caméra
+                  n'apparaît pas sur la carte. bearing = cap 0–360° de l'objectif. */}
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Latitude</label>
+                  <input
+                    type="number"
+                    step="any"
+                    value={modalForm.latitude}
+                    onChange={(e) => setModalForm((f) => ({ ...f, latitude: e.target.value }))}
+                    placeholder="14.6928"
+                    className="w-full px-3 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Longitude</label>
+                  <input
+                    type="number"
+                    step="any"
+                    value={modalForm.longitude}
+                    onChange={(e) => setModalForm((f) => ({ ...f, longitude: e.target.value }))}
+                    placeholder="-17.4467"
+                    className="w-full px-3 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Cap (°)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="360"
+                    step="1"
+                    value={modalForm.bearing}
+                    onChange={(e) => setModalForm((f) => ({ ...f, bearing: e.target.value }))}
+                    placeholder="0"
+                    className="w-full px-3 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:text-white"
+                  />
+                </div>
+              </div>
+
               <div className="flex items-center gap-3">
                 <button
                   type="button"
@@ -322,7 +410,7 @@ export default function CamerasPage() {
               <div className="flex gap-3 pt-2">
                 <button
                   type="button"
-                  onClick={() => setShowModal(false)}
+                  onClick={closeModal}
                   className="flex-1 px-4 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
                 >
                   Annuler
@@ -332,7 +420,7 @@ export default function CamerasPage() {
                   disabled={submitting}
                   className="flex-1 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-sm font-medium transition-colors shadow-lg shadow-blue-500/30"
                 >
-                  {submitting ? "Ajout en cours..." : "Ajouter"}
+                  {submitting ? "Enregistrement..." : editingId ? "Enregistrer" : "Ajouter"}
                 </button>
               </div>
             </form>
@@ -375,7 +463,7 @@ export default function CamerasPage() {
 
                 {canWrite && (
                 <button
-                  onClick={() => { setModalError(""); setShowModal(true); }}
+                  onClick={openAddModal}
                   className="rounded-xl bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 text-sm font-medium transition-colors flex items-center gap-2 shadow-lg shadow-blue-500/30"
                 >
                   <svg
@@ -760,6 +848,18 @@ export default function CamerasPage() {
                           )}
                           {canWrite && (
                           <button
+                            onClick={() => openEditModal(camera)}
+                            title="Modifier"
+                            className="p-2 rounded-lg bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm hover:bg-white dark:hover:bg-gray-800 transition-colors"
+                          >
+                            <svg className="h-4 w-4 text-gray-700 dark:text-gray-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                              <path d="M12 20h9" />
+                              <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
+                            </svg>
+                          </button>
+                          )}
+                          {canWrite && (
+                          <button
                             onClick={() => handleDeleteCamera(camera.id)}
                             className="p-2 rounded-lg bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm hover:bg-red-100 dark:hover:bg-red-900/50 transition-colors"
                           >
@@ -974,6 +1074,18 @@ export default function CamerasPage() {
                                   >
                                     <path d="M18.36 6.64a9 9 0 1 1-12.73 0" />
                                     <line x1="12" y1="2" x2="12" y2="12" />
+                                  </svg>
+                                </button>
+                                )}
+                                {canWrite && (
+                                <button
+                                  onClick={() => openEditModal(camera)}
+                                  title="Modifier"
+                                  className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
+                                >
+                                  <svg className="h-4 w-4 text-gray-500 dark:text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                    <path d="M12 20h9" />
+                                    <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
                                   </svg>
                                 </button>
                                 )}

@@ -1,35 +1,7 @@
 import { NextResponse } from "next/server";
 
-export async function GET(req) {
-  try {
-    const backendUrl = process.env.NEXT_PUBLIC_BASE_BACKEND_URL;
-    const accessToken = req.cookies.get("access_token")?.value;
-    if (!accessToken) {
-      return NextResponse.json({ message: "Aucun access_token." }, { status: 401 });
-    }
-
-    // Propage le filtre optionnel ?group_id=<id> vers le backend.
-    const groupId = req.nextUrl.searchParams.get("group_id");
-    const query = groupId ? `?group_id=${encodeURIComponent(groupId)}` : "";
-    const response = await fetch(`${backendUrl}/cameras/${query}`, {
-      method: "GET",
-      headers: {
-        "Authorization": `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    const data = await response.json();
-    if (!response.ok) {
-      return NextResponse.json({ message: data?.message || "Erreur lors de la récupération des caméras." }, { status: 500 });
-    }
-    return NextResponse.json(data);
-  } catch (err) {
-    return NextResponse.json({ message: "Erreur serveur." }, { status: 500 });
-  }
-}
-
-export async function POST(req) {
+// Ajout d'une caméra à un groupe → backend POST /groups/{id}/cameras/{camera_id}
+export async function POST(req, { params }) {
   try {
     const backendUrl = process.env.NEXT_PUBLIC_BASE_BACKEND_URL;
     const accessToken = req.cookies.get("access_token")?.value;
@@ -37,19 +9,46 @@ export async function POST(req) {
       return NextResponse.json({ message: "Non authentifié." }, { status: 401 });
     }
 
-    const body = await req.json();
-    const response = await fetch(`${backendUrl}/cameras/add`, {
+    const { id, camera_id } = params;
+    const response = await fetch(`${backendUrl}/groups/${id}/cameras/${camera_id}`, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(body),
     });
 
     const data = await response.json();
     if (!response.ok) {
-      return NextResponse.json({ message: data?.detail || "Erreur lors de l'ajout." }, { status: response.status });
+      return NextResponse.json({ message: data?.detail || "Erreur lors de l'ajout de la caméra au groupe." }, { status: response.status });
+    }
+    return NextResponse.json(data);
+  } catch (err) {
+    return NextResponse.json({ message: "Erreur serveur." }, { status: 500 });
+  }
+}
+
+// Retrait d'une caméra d'un groupe → backend DELETE /groups/{id}/cameras/{camera_id}
+export async function DELETE(req, { params }) {
+  try {
+    const backendUrl = process.env.NEXT_PUBLIC_BASE_BACKEND_URL;
+    const accessToken = req.cookies.get("access_token")?.value;
+    if (!accessToken) {
+      return NextResponse.json({ message: "Non authentifié." }, { status: 401 });
+    }
+
+    const { id, camera_id } = params;
+    const response = await fetch(`${backendUrl}/groups/${id}/cameras/${camera_id}`, {
+      method: "DELETE",
+      headers: {
+        "Authorization": `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      return NextResponse.json({ message: data?.detail || "Erreur lors du retrait de la caméra du groupe." }, { status: response.status });
     }
     return NextResponse.json(data);
   } catch (err) {

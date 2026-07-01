@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
-export async function DELETE(req, { params }) {
+// Détail d'un groupe → backend GET /groups/{id}
+export async function GET(req, { params }) {
   try {
     const backendUrl = process.env.NEXT_PUBLIC_BASE_BACKEND_URL;
     const accessToken = req.cookies.get("access_token")?.value;
@@ -9,11 +10,8 @@ export async function DELETE(req, { params }) {
     }
 
     const { id } = params;
-    // Propage ?force=true (suppression en cascade côté backend).
-    const force = req.nextUrl.searchParams.get("force") === "true";
-    const url = `${backendUrl}/cameras/delete/${id}${force ? "?force=true" : ""}`;
-    const response = await fetch(url, {
-      method: "DELETE",
+    const response = await fetch(`${backendUrl}/groups/${id}`, {
+      method: "GET",
       headers: {
         "Authorization": `Bearer ${accessToken}`,
         "Content-Type": "application/json",
@@ -22,7 +20,7 @@ export async function DELETE(req, { params }) {
 
     const data = await response.json();
     if (!response.ok) {
-      return NextResponse.json({ message: data?.detail || "Erreur lors de la suppression." }, { status: response.status });
+      return NextResponse.json({ message: data?.detail || "Erreur lors de la récupération du groupe." }, { status: response.status });
     }
     return NextResponse.json(data);
   } catch (err) {
@@ -30,7 +28,7 @@ export async function DELETE(req, { params }) {
   }
 }
 
-// Mise à jour complète d'une caméra → backend PUT /cameras/update/{id}.
+// Mise à jour d'un groupe → backend PUT /groups/{id}
 export async function PUT(req, { params }) {
   try {
     const backendUrl = process.env.NEXT_PUBLIC_BASE_BACKEND_URL;
@@ -41,7 +39,7 @@ export async function PUT(req, { params }) {
 
     const { id } = params;
     const body = await req.json();
-    const response = await fetch(`${backendUrl}/cameras/update/${id}`, {
+    const response = await fetch(`${backendUrl}/groups/${id}`, {
       method: "PUT",
       headers: {
         "Authorization": `Bearer ${accessToken}`,
@@ -52,7 +50,7 @@ export async function PUT(req, { params }) {
 
     const data = await response.json();
     if (!response.ok) {
-      return NextResponse.json({ message: data?.detail || "Erreur lors de la mise à jour." }, { status: response.status });
+      return NextResponse.json({ message: data?.detail || "Erreur lors de la mise à jour du groupe." }, { status: response.status });
     }
     return NextResponse.json(data);
   } catch (err) {
@@ -60,8 +58,8 @@ export async function PUT(req, { params }) {
   }
 }
 
-// (Dés)activation d'une caméra → backend PATCH /cameras/{id}/active.
-export async function PATCH(req, { params }) {
+// Suppression d'un groupe → backend DELETE /groups/{id}
+export async function DELETE(req, { params }) {
   try {
     const backendUrl = process.env.NEXT_PUBLIC_BASE_BACKEND_URL;
     const accessToken = req.cookies.get("access_token")?.value;
@@ -70,19 +68,17 @@ export async function PATCH(req, { params }) {
     }
 
     const { id } = params;
-    const body = await req.json();
-    const response = await fetch(`${backendUrl}/cameras/${id}/active`, {
-      method: "PATCH",
+    const response = await fetch(`${backendUrl}/groups/${id}`, {
+      method: "DELETE",
       headers: {
         "Authorization": `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(body),
     });
 
     const data = await response.json();
     if (!response.ok) {
-      return NextResponse.json({ message: data?.detail || "Erreur lors de la mise à jour." }, { status: response.status });
+      return NextResponse.json({ message: data?.detail || "Erreur lors de la suppression du groupe." }, { status: response.status });
     }
     return NextResponse.json(data);
   } catch (err) {

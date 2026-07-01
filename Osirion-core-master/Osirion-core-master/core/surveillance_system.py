@@ -300,8 +300,13 @@ class SurveillanceSystem:
                         exc_info=True, extra={'camera_id': cam_id}
                     )
 
-            # 3) Résurrection : une caméra censée être active dont (au moins) un
-            #    thread est mort (ex. exception non gérée) est redémarrée proprement.
+            # 3) Caméras déjà actives : deux traitements À CHAUD, sans coupure.
+            #    (a) Propagation de la config EFFECTIVE des modules (facial/LPR)
+            #        recalculée par le backend (bascule de groupe ou drapeau local)
+            #        → le processeur saute l'étape désactivée dès la frame suivante,
+            #        libérant immédiatement le GPU/CPU, SANS redémarrer les threads.
+            #    (b) Résurrection : si (au moins) un thread est mort (exception non
+            #        gérée), la caméra est redémarrée proprement.
             for cam_id in desired_ids & current_ids:
                 threads = self.camera_threads.get(cam_id, [])
                 if threads and any(not t.is_alive() for t in threads):
@@ -311,6 +316,21 @@ class SurveillanceSystem:
                     )
                     self._remove_camera(cam_id)
                     self._add_camera(desired[cam_id])
+                    continue
+
+                processor = self.camera_processors.get(cam_id)
+                if processor is not None:
+                    cam = desired[cam_id]
+                    try:
+                        processor.apply_effective_config(
+                            cam.get("effective_facial_active", True),
+                            cam.get("effective_lpr_active", True),
+                        )
+                    except Exception:
+                        logger.error(
+                            f"Échec application config effective à chaud caméra {cam_id}",
+                            exc_info=True, extra={'camera_id': cam_id}
+                        )
 
     def _supervise_loop(self) -> None:
         """Boucle de supervision : réconcilie périodiquement avec le backend."""

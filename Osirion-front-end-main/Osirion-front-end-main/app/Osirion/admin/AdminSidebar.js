@@ -43,6 +43,30 @@ export default function AdminSidebar({
       ),
     },
     {
+      label: "Groupes de caméras",
+      href: "/Osirion/admin/groups",
+      roles: ["admin", "user"],
+      icon: (
+        <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+          <rect x="3" y="3" width="7" height="7" rx="1.5" />
+          <rect x="14" y="3" width="7" height="7" rx="1.5" />
+          <rect x="3" y="14" width="7" height="7" rx="1.5" />
+          <rect x="14" y="14" width="7" height="7" rx="1.5" />
+        </svg>
+      ),
+    },
+    {
+      label: "Carte",
+      href: "/Osirion/admin/map",
+      roles: ["admin", "user", "viewer"],
+      icon: (
+        <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+          <path d="m9 4-6 2v14l6-2 6 2 6-2V4l-6 2-6-2z" />
+          <path d="M9 4v14M15 6v14" />
+        </svg>
+      ),
+    },
+    {
       label: "Live streamings",
       href: "/Osirion/admin/live",
       roles: ["admin", "user", "viewer"],

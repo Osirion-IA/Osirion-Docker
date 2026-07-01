@@ -1,13 +1,21 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query
 from sqlmodel import Session, select
 from sqlalchemy import delete as sa_delete
-from typing import List
+from sqlalchemy.orm import selectinload
+from typing import List, Optional
 
 from app.models.cameras import Camera
+from app.models.camera_groups import CameraGroup
 from app.models.events import Event
 from app.models.alerts import Alert
 from app.database import engine
-from app.schemas.camera_schema import CameraCreate, CameraRead, CameraActiveUpdate
+from app.schemas.camera_schema import (
+    CameraCreate,
+    CameraRead,
+    CameraActiveUpdate,
+    CameraMapData,
+)
+from app.services.camera_config_service import effective_modules, active_module_names
 from app.utils.security_utils import crypter, decrypter
 
 # AJOUT : Import des middlewares de sécurité
@@ -26,6 +34,32 @@ def get_session():
     """Dépendance pour obtenir une session de base de données"""
     with Session(engine) as session:
         yield session
+
+
+def _to_camera_read(cam: Camera) -> CameraRead:
+    """Sérialise une caméra ORM en CameraRead : décryptage rtsp_url, appartenance
+    aux groupes et calcul de la config EFFECTIVE des modules (ce que lit le Core).
+
+    `cam.groups` doit être chargé (lazy en session, ou eager via selectinload).
+    """
+    facial, lpr = effective_modules(cam)
+    return CameraRead(
+        id=cam.id,
+        cam_name=cam.cam_name,
+        rtsp_url=decrypter(cam.rtsp_url),
+        location=cam.location,
+        is_active=cam.is_active,
+        is_facial_active=cam.is_facial_active,
+        is_lpr_active=cam.is_lpr_active,
+        latitude=cam.latitude,
+        longitude=cam.longitude,
+        bearing=cam.bearing,
+        group_ids=[g.id for g in cam.groups],
+        effective_facial_active=facial,
+        effective_lpr_active=lpr,
+        active_modules=active_module_names(facial, lpr),
+        created_at=cam.created_at,
+    )
 
 
 # ─────────────────────────────────────────────
@@ -50,15 +84,20 @@ def add_camera(
 
     if not cam_name or not rtsp_url:
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail="Le nom et l'URL de la caméra sont obligatoires."
         )
 
     new_camera = Camera(
         cam_name=cam_name,
-        rtsp_url=crypter(rtsp_url), 
+        rtsp_url=crypter(rtsp_url),
         location=location,
-        is_active=is_active
+        is_active=is_active,
+        is_facial_active=camera.is_facial_active if camera.is_facial_active is not None else True,
+        is_lpr_active=camera.is_lpr_active if camera.is_lpr_active is not None else True,
+        latitude=camera.latitude,
+        longitude=camera.longitude,
+        bearing=camera.bearing if camera.bearing is not None else 0.0,
     )
 
     session.add(new_camera)
@@ -77,30 +116,75 @@ def add_camera(
 # ─────────────────────────────────────────────
 @router.get("/", response_model=List[CameraRead])
 def get_cameras(
+    group_id: Optional[int] = Query(
+        default=None,
+        description="Filtre : ne renvoyer que les caméras membres de ce groupe.",
+    ),
     current_user: User = Depends(require_viewer),  # Protection ajoutée
     session: Session = Depends(get_session)
 ):
     """
-    Liste toutes les caméras avec des informations explicites.
-    
+    Liste les caméras avec appartenance aux groupes, géo-coordonnées et config
+    EFFECTIVE des modules (ce que le Core lit pour (dé)activer le pipeline à chaud).
+
+    Filtre optionnel `?group_id={id}` : ne renvoie que les caméras de ce groupe.
+
     Permissions requises : VIEWER, USER ou ADMIN
     """
-    cameras = session.exec(select(Camera)).all()
-    
-    # Transformation pour rendre les données plus explicites
-    cameras_list = [
-        CameraRead(
+    # selectinload(Camera.groups) : charge les groupes en 1 requête → évite le N+1
+    # au calcul de la config effective.
+    stmt = select(Camera).options(selectinload(Camera.groups))
+    if group_id is not None:
+        # Restreint aux caméras liées au groupe demandé (jointure sur la N↔N).
+        stmt = stmt.where(Camera.groups.any(CameraGroup.id == group_id))
+    cameras = session.exec(stmt).all()
+
+    return [_to_camera_read(cam) for cam in cameras]
+
+
+# ─────────────────────────────────────────────
+# MAP DATA (Protégé - Tous les rôles)
+#
+# ⚠ DÉCLARÉ AVANT /{camera_id} : sinon FastAPI tenterait de parser « map-data »
+#   comme un entier camera_id (→ 422). L'ordre de déclaration prime.
+# ─────────────────────────────────────────────
+
+@router.get("/map-data", response_model=List[CameraMapData])
+def get_cameras_map_data(
+    current_user: User = Depends(require_viewer),
+    session: Session = Depends(get_session)
+):
+    """
+    Flux allégé pour le composant carte OpenStreetMap / Leaflet.
+
+    Ne renvoie QUE les caméras ACTIVES ET géolocalisées (latitude/longitude non
+    nuls), avec le strict nécessaire à l'affichage : id, name, latitude,
+    longitude, bearing et la liste des modules effectivement actifs. Aucune
+    rtsp_url ni secret n'est exposé.
+
+    Permissions requises : VIEWER, USER ou ADMIN
+    """
+    stmt = (
+        select(Camera)
+        .where(Camera.is_active == True)  # noqa: E712 (SQLAlchemy exige == True)
+        .where(Camera.latitude.is_not(None))
+        .where(Camera.longitude.is_not(None))
+        .options(selectinload(Camera.groups))
+    )
+    cameras = session.exec(stmt).all()
+
+    out: List[CameraMapData] = []
+    for cam in cameras:
+        facial, lpr = effective_modules(cam)
+        out.append(CameraMapData(
             id=cam.id,
-            cam_name=cam.cam_name,
-            rtsp_url=decrypter(cam.rtsp_url),  # URL lisible si nécessaire
-            location=cam.location,
-            is_active=cam.is_active,
-            created_at=cam.created_at
-        )
-        for cam in cameras
-    ]
-    
-    return cameras_list
+            name=cam.cam_name,
+            latitude=cam.latitude,
+            longitude=cam.longitude,
+            bearing=cam.bearing if cam.bearing is not None else 0.0,
+            active_modules=active_module_names(facial, lpr),
+        ))
+    return out
 
 
 # ─────────────────────────────────────────────
@@ -114,14 +198,14 @@ def get_camera(
     session: Session = Depends(get_session)
 ):
     """
-    Récupère une caméra par son ID.
-    
+    Récupère une caméra par son ID (avec groupes, géo et config effective).
+
     Permissions requises : VIEWER, USER ou ADMIN
     """
     camera = session.get(Camera, camera_id)
     if not camera:
         raise HTTPException(status_code=404, detail="Caméra non trouvée")
-    return camera
+    return _to_camera_read(camera)
 
 
 # ─────────────────────────────────────────────
@@ -148,12 +232,20 @@ def update_camera(
     camera.rtsp_url = crypter(camera_data.rtsp_url)
     camera.location = camera_data.location
     camera.is_active = camera_data.is_active
+    if camera_data.is_facial_active is not None:
+        camera.is_facial_active = camera_data.is_facial_active
+    if camera_data.is_lpr_active is not None:
+        camera.is_lpr_active = camera_data.is_lpr_active
+    camera.latitude = camera_data.latitude
+    camera.longitude = camera_data.longitude
+    if camera_data.bearing is not None:
+        camera.bearing = camera_data.bearing
 
     session.add(camera)
     session.commit()
     session.refresh(camera)
 
-    return camera
+    return _to_camera_read(camera)
 
 
 # ─────────────────────────────────────────────
@@ -185,15 +277,9 @@ def set_camera_active(
     session.commit()
     session.refresh(camera)
 
-    # Décrypte la rtsp_url pour rester cohérent avec GET /cameras/.
-    return CameraRead(
-        id=camera.id,
-        cam_name=camera.cam_name,
-        rtsp_url=decrypter(camera.rtsp_url),
-        location=camera.location,
-        is_active=camera.is_active,
-        created_at=camera.created_at,
-    )
+    # Décrypte la rtsp_url + expose groupes/géo/config effective (cohérent avec
+    # GET /cameras/).
+    return _to_camera_read(camera)
 
 
 # ─────────────────────────────────────────────

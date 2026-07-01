@@ -17,6 +17,7 @@ from app.routes.alerts_routes import router as alerts_router
 from app.routes.dashboard_routes import router as dashboard_router
 from app.routes.audit_routes import router as audit_router
 from app.routes.maintenance_routes import router as maintenance_router
+from app.routes.groups_routes import router as groups_router
 from app.services.Faiss_search_service import build_or_reload_faiss_index
 from app.middleware.rate_limit import limiter
 from app.config import settings
@@ -90,6 +91,7 @@ app.include_router(dashboard_router, prefix="/dashboard", tags=["📊 Dashboard"
 app.include_router(audit_router, prefix="/audit", tags=["📝 Audit"])
 app.include_router(maintenance_router, prefix="/maintenance", tags=["🧹 Maintenance"])
 app.include_router(camera_router, prefix="/cameras", tags=["📹 Cameras"])
+app.include_router(groups_router, prefix="/groups", tags=["🗂️ Camera Groups"])
 app.include_router(monitoring_router,prefix="/sysInfo", tags=["Syetem Informations"])
 
 # ─────────────────────────────────────────────

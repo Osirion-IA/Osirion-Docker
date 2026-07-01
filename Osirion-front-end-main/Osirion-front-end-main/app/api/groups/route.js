@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+// Liste des groupes de caméras → backend GET /groups/
 export async function GET(req) {
   try {
     const backendUrl = process.env.NEXT_PUBLIC_BASE_BACKEND_URL;
@@ -8,10 +9,7 @@ export async function GET(req) {
       return NextResponse.json({ message: "Aucun access_token." }, { status: 401 });
     }
 
-    // Propage le filtre optionnel ?group_id=<id> vers le backend.
-    const groupId = req.nextUrl.searchParams.get("group_id");
-    const query = groupId ? `?group_id=${encodeURIComponent(groupId)}` : "";
-    const response = await fetch(`${backendUrl}/cameras/${query}`, {
+    const response = await fetch(`${backendUrl}/groups/`, {
       method: "GET",
       headers: {
         "Authorization": `Bearer ${accessToken}`,
@@ -21,7 +19,7 @@ export async function GET(req) {
 
     const data = await response.json();
     if (!response.ok) {
-      return NextResponse.json({ message: data?.message || "Erreur lors de la récupération des caméras." }, { status: 500 });
+      return NextResponse.json({ message: data?.detail || "Erreur lors de la récupération des groupes." }, { status: response.status });
     }
     return NextResponse.json(data);
   } catch (err) {
@@ -29,6 +27,7 @@ export async function GET(req) {
   }
 }
 
+// Création d'un groupe → backend POST /groups/
 export async function POST(req) {
   try {
     const backendUrl = process.env.NEXT_PUBLIC_BASE_BACKEND_URL;
@@ -38,7 +37,7 @@ export async function POST(req) {
     }
 
     const body = await req.json();
-    const response = await fetch(`${backendUrl}/cameras/add`, {
+    const response = await fetch(`${backendUrl}/groups/`, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${accessToken}`,
@@ -49,7 +48,7 @@ export async function POST(req) {
 
     const data = await response.json();
     if (!response.ok) {
-      return NextResponse.json({ message: data?.detail || "Erreur lors de l'ajout." }, { status: response.status });
+      return NextResponse.json({ message: data?.detail || "Erreur lors de la création du groupe." }, { status: response.status });
     }
     return NextResponse.json(data);
   } catch (err) {
