@@ -93,6 +93,12 @@ services:
       ADMIN_PASSWORD: ${AUTH_PASSWORD:-adminadminadmin}
       CUDA_VISIBLE_DEVICES: "0"
       UVICORN_RELOAD: "true"
+      # ── Qualité de l'enrôlement facial (garde-fous, tunables) ───────────────
+      # NE PAS mettre plus strict que la reconnaissance en production (Core=0.7).
+      # Netteté mesurée sur le CROP du visage (pas la frame entière) → un portrait
+      # à fond flou/bokeh n'est plus rejeté à tort. 0 = filtre netteté désactivé.
+      ENROLL_FACE_MIN_CONFIDENCE: ${ENROLL_FACE_MIN_CONFIDENCE:-0.6}
+      ENROLL_FACE_CROP_MIN_SHARPNESS: ${ENROLL_FACE_CROP_MIN_SHARPNESS:-25.0}
       # ── Notifications d'alerte (SMTP/webhook) — valeurs dans .env (non versionné)
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
@@ -110,6 +116,7 @@ services:
       # ── Named volumes — données persistantes (non écrasées par le bind mount)
       - uploads_data:/app/uploads
       - cropped_data:/app/cropped
+      - snapshots_data:/app/snapshots
       - insightface_cache:/root/.insightface
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
@@ -306,5 +313,6 @@ volumes:
   db_data:
   uploads_data:
   cropped_data:
+  snapshots_data:
   insightface_cache:
   core_logs:

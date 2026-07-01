@@ -3,7 +3,9 @@ from fastapi import Form, File, UploadFile
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError
 from app.services.bytesToImage_service import bytes_to_image
-from app.services.embeddings_service import detect_and_embed, enroll_from_images
+from app.services.embeddings_service import (
+    detect_and_embed, enroll_from_images, format_enroll_diagnostics,
+)
 from app.services.saveImage_service import save_image_from_bytes, is_valid_image_format, MIME_TO_EXT
 from app.services.Faiss_search_service import search_similar_people, add_person_to_index
 from app.middleware.auth_middleware import can_add_people, require_viewer, require_user
@@ -130,11 +132,13 @@ async def add_people(
         return _err("Impossible de lire l'image.", 400)
 
     # Enrollment hybride CAS 1 : 1 image → augmentation → centroid
-    result = enroll_from_images([image], confidence_threshold=0.85)
+    diag: dict = {}
+    result = enroll_from_images([image], diagnostics=diag)
     if result is None:
         return _err(
-            "Aucun visage net détecté. "
-            "Utilisez une photo frontale, bien éclairée (confiance SCRFD requise ≥ 0.85).",
+            "Aucun visage exploitable détecté — "
+            f"{format_enroll_diagnostics(diag)}. "
+            "Utilisez une photo frontale, nette et bien éclairée.",
             422,
         )
 
@@ -227,11 +231,12 @@ async def add_people_multi(
         )
 
     # Enrollment hybride : si frames==1 → augmentation auto, sinon centroid direct
-    result = enroll_from_images(frames, confidence_threshold=0.85)
+    diag: dict = {}
+    result = enroll_from_images(frames, diagnostics=diag)
     if result is None:
         return _err(
-            "Aucun visage net détecté dans les images fournies "
-            "(confiance SCRFD requise ≥ 0.85, Laplacien ≥ 60).",
+            "Aucun visage exploitable dans les images fournies — "
+            f"{format_enroll_diagnostics(diag)}.",
             422,
         )
 
