@@ -1,3 +1,7 @@
+import os
+# albumentations (tiré par insightface) tente un check de version en ligne à
+# l'import → échoue hors-ligne. Désactivé AVANT d'importer insightface.
+os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1")
 import cv2
 import time
 import numpy as np
@@ -7,16 +11,21 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Pipeline identique au Core :
-#   - buffalo_l   → SCRFD (détection) + ArcFace 512D (reconnaissance)
+# Pipeline identique au Core — PARITÉ DE MODÈLE OBLIGATOIRE :
+#   - pack lu depuis INSIGHTFACE_MODEL_PACK (défaut 'antelopev2' = SCRFD + glintr100
+#     ResNet-100). Le Core (face_detection.py) lit la MÊME variable. Un pack
+#     différent ici produirait une galerie incompatible avec les requêtes du Core
+#     (espaces d'embedding distincts → aucune correspondance).
 #   - det_size=(640,640) → même résolution de détection que le Core → même qualité d'alignement
 #   - CPU pour le backend (uploads peu fréquents, évite la contention GPU avec le Core)
+_MODEL_PACK = os.getenv('INSIGHTFACE_MODEL_PACK', 'antelopev2')
 _app = FaceAnalysis(
-    name='buffalo_l',
+    name=_MODEL_PACK,
     providers=['CPUExecutionProvider'],
     allowed_modules=['detection', 'recognition']
 )
 _app.prepare(ctx_id=-1, det_size=(640, 640))
+logger.info(f"Enrôlement : pack InsightFace='{_MODEL_PACK}' (CPU)")
 
 _MAX_CENTROID_IMAGES = 5
 
@@ -98,18 +107,24 @@ def enroll_from_images(
     blur_threshold: float = 60.0,
 ) -> Optional[tuple]:
     """
-    Enrollment hybride :
+    Enrollment MULTI-VECTEURS (plus de centroïde moyenné).
 
-    CAS 1 — 1 image  → génère 4 variantes augmentées → centroid sur les embeddings valides
-    CAS 2 — ≥ 2 images → pas d'augmentation → centroid direct (max _MAX_CENTROID_IMAGES)
+    CAS 1 — 1 image  → génère 4 variantes augmentées → 1 vecteur par variante valide
+    CAS 2 — ≥ 2 images → pas d'augmentation → 1 vecteur par image valide (max _MAX_CENTROID_IMAGES)
+
+    Le moyennage en un centroïde unique est SUPPRIMÉ : il diluait les angles et
+    l'éclairage en un point « flou ». On conserve désormais CHAQUE vecteur 512-D
+    valide ; ils seront stockés en lignes séparées (table person_embeddings) et la
+    recherche fera du max-cosine par personne.
 
     Filtres qualité appliqués sur chaque candidat :
       - Variance Laplacienne ≥ blur_threshold  (0 = filtre désactivé)
       - Score de détection SCRFD ≥ confidence_threshold
 
     Returns:
-        (centroid_as_list_512d, face_crop_ndarray)  si au moins 1 embedding valide
-        None                                         sinon
+        (list_of_embeddings_512d, face_crop_ndarray)  si ≥ 1 embedding valide
+            où list_of_embeddings_512d = List[List[float]] (chaque élément normalisé L2)
+        None                                            sinon
     """
     if not images:
         return None
@@ -195,16 +210,17 @@ def enroll_from_images(
         )
         return None
 
-    centroid = compute_centroid_embedding(embeddings)
-    final_norm = float(np.linalg.norm(centroid))
+    # Multi-vecteurs : on retourne TOUS les embeddings valides (1 ligne chacun en
+    # base). Chaque vecteur est déjà L2-normalisé (_l2_normalize ci-dessus).
+    embeddings_out = [emb.astype(np.float32).tolist() for emb in embeddings]
     elapsed_ms = (time.perf_counter() - t0) * 1000
 
     logger.info(
-        f"Centroid calculé : n_embeddings={n_valid}, dim=512, "
-        f"norm={final_norm:.6f}, durée={elapsed_ms:.1f}ms"
+        f"Enrollment multi-vecteurs : {n_valid} vecteur(s) 512-D conservé(s) "
+        f"(aucun moyennage centroïde), durée={elapsed_ms:.1f}ms"
     )
 
-    return centroid.tolist(), best_face_crop
+    return embeddings_out, best_face_crop
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -219,7 +235,7 @@ def detect_and_embed(
     Passe unique : détection SCRFD + alignement + embedding ArcFace.
 
     Gardée pour les tests existants et les usages hors-enrollment.
-    Pour l'enrollment, utiliser enroll_from_images() qui calcule un centroid.
+    Pour l'enrollment, utiliser enroll_from_images() (galerie multi-vecteurs).
     """
     if image is None or image.size == 0:
         return None

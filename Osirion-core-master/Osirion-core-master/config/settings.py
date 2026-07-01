@@ -12,30 +12,51 @@ load_dotenv()
 # ----------------------
 # Configuration des frames
 # ----------------------
-FRAME_SIZE = (640, 480)           # Taille de chaque flux individuel
+# Résolution de TRAITEMENT (détection SCRFD + alignement/crop ArcFace). La vidéo
+# AFFICHÉE (WebRTC servie par MediaMTX) est indépendante de cette valeur : la
+# monter n'augmente QUE la qualité d'inférence et le coût GPU, jamais le débit
+# vidéo navigateur. 640×480 (ancien défaut) réduisait les visages distants sous
+# la taille exploitable par ArcFace (~50-60 px) → ils tombaient sous
+# FACE_MIN_RECOG_SIZE et n'étaient jamais reconnus. 1280×720 les fait remonter.
+# Dialer selon le budget GPU (RTX 4050 ↔ nombre de caméras) : 960×540 ou 640×480
+# pour alléger. Ordre (largeur, hauteur) — attendu par cv2.resize.
+FRAME_WIDTH = int(os.getenv('FRAME_WIDTH', '1280'))
+FRAME_HEIGHT = int(os.getenv('FRAME_HEIGHT', '720'))
+FRAME_SIZE = (FRAME_WIDTH, FRAME_HEIGHT)
 PROCESS_EVERY_N_FRAME = 3         # GPU RTX 4050 : 1 frame sur 3 (~10 FPS effectifs vs 3 FPS CPU)
 FRAME_QUEUE_MAXSIZE = 4           # Buffer légèrement plus grand pour absorber les pics GPU
 FRAME_QUEUE_TIMEOUT = 0.1         # Timeout pour récupérer une frame de la queue (secondes)
 
 # ----------------------
-# Configuration du ByteTrack
+# Configuration du tracker — OC-SORT (Observation-Centric SORT)
 # ----------------------
-_EFFECTIVE_FPS = 30 // PROCESS_EVERY_N_FRAME   # FPS réel du pipeline = 10
-
-# BYTETracker attend un objet namespace (args) + frame_rate séparé
+# OC-SORT remplace ByteTrack : moins de changements d'identité (ID switches) sur
+# les mouvements rapides/erratiques. L'implémentation est AUTONOME
+# (core/trackers/oc_sort.py, basée sur filterpy) et l'adaptateur OCSortTrackerAdapter
+# préserve à l'identique l'API historique update(dets, img_info, img_size).
 import types as _types
-BYTE_TRACK_ARGS = _types.SimpleNamespace(
-    track_thresh=0.5,
-    track_buffer=_EFFECTIVE_FPS * 1,   # 10 — garde un track perdu ~1s à 10fps réels
-    match_thresh=0.8,
-    mot20=False,
+
+OC_SORT_ARGS = _types.SimpleNamespace(
+    det_thresh=0.4,       # Seuil des détections haute confiance
+    max_age=30,           # Frames avant suppression d'un track perdu (≈ track_buffer)
+    iou_threshold=0.3,    # Seuil d'association IoU
+    delta_t=3,            # Fenêtre de look-back pour l'estimation de vitesse
+    inertia=0.2,          # Poids du terme d'inertie/momentum (OCM)
+    use_byte=True,        # Conserver la récupération BYTE des détections faibles
 )
-BYTE_TRACK_FRAME_RATE = _EFFECTIVE_FPS
 
 # ----------------------
 # Configuration de la reconnaissance faciale
 # ----------------------
 FACE_DETECTION_CONFIDENCE = 0.7   # Seuil de confiance pour la détection de visages
+
+# Résolution d'entrée du détecteur SCRFD (buffalo_l). DOIT suivre FRAME_SIZE :
+# si la frame est plus grande mais det_size reste petit, SCRFD réduit l'image en
+# interne → on perd le bénéfice de la montée en résolution (visages distants à
+# nouveau ratatinés). (960,960) = bon compromis précision/latence pour des frames
+# 720p sur RTX 4050. Repasser à 640 pour alléger si la latence GPU monte trop.
+_FACE_DET = int(os.getenv('FACE_DET_SIZE', '960'))
+FACE_DET_SIZE = (_FACE_DET, _FACE_DET)
 
 # Filtre qualité frame : variance de la transformée de Laplace sur la luminance
 # Références empiriques (frame 640×480 RTSP H.264) :
@@ -56,6 +77,144 @@ ADAPTIVE_THRESHOLD_FLOOR = 0.35   # plancher absolu — en dessous = non-match g
 ADAPTIVE_THRESHOLD_CEILING = 0.80 # plafond absolu — cohérent avec max cosine live (~0.85)
 REIDENTIFICATION_INTERVAL = 200   # Frames avant de ré-identifier un track existant
 CACHE_TTL_FRAMES = 600            # Durée de vie des tracks en cache (en frames)
+
+# ----------------------
+# Précision faciale — garde-fou de taille + vote temporel multi-frames
+# ----------------------
+# Garde-fou de taille de visage : on NE tente PAS de reconnaître un visage dont
+# la boîte est plus petite que ce seuil (en px, sur le plus petit côté). Un visage
+# minuscule donne un embedding ArcFace dégradé → décision peu fiable (faux
+# positifs). Symétrique du gating crop du LPR (PLATE_MIN_CROP_*). 0 = désactivé.
+#   Repère : les plaques de la caméra Hall font ~57 px ; un visage y est plus grand.
+#   Si la reconnaissance se met à tout rejeter, abaisser cette valeur (ou 0).
+# Relevé 40 → 70 px (qualité entreprise) : en dessous de ~70 px l'embedding ArcFace
+# se dégrade nettement et alimente des faux positifs ; on préfère rester « Inconnu »
+# et laisser le vote temporel rattraper le sujet quand il se rapproche.
+FACE_MIN_RECOG_SIZE = int(os.getenv('FACE_MIN_RECOG_SIZE', '70'))
+
+# Garde-fou de FRONTALITÉ : on NE tente PAS de reconnaître un visage de profil
+# extrême. Score ∈ [0,1] estimé GRATUITEMENT à partir des 5 points SCRFD (symétrie
+# horizontale nez↔yeux, cf. face_detection._frontality_from_kps) : 1.0 = frontal,
+# → 0 = profil. ArcFace se dégrade fortement sur les profils → faux négatifs ET
+# faux positifs. Repères : frontal ~0.7-1.0, ~30° yaw ~0.5, ~45° ~0.35, ~60° ~0.2.
+# 0.25 (défaut) = ne rejette que les quasi-profils (> ~55°) ; le track reste
+# « Inconnu » jusqu'à ce que la personne se tourne (le vote temporel le rattrape).
+# 0 = désactivé. Indépendant de la résolution (c'est un ratio).
+FACE_MIN_FRONTALITY = float(os.getenv('FACE_MIN_FRONTALITY', '0.25'))
+
+# Garde-fou de NETTETÉ ciblé sur le CROP du visage (variance du Laplacien), distinct
+# du BLUR_THRESHOLD qui porte sur la frame ENTIÈRE : un fond net avec un visage flou
+# (sujet en mouvement) passe le gate frame mais donne un embedding ArcFace dégradé.
+# DÉSACTIVÉ par défaut (0.0) car le seuil dépend de la taille du crop et de
+# l'exposition : une valeur trop haute rejette des visages valides (et fausserait
+# silencieusement les mesures EER du chapitre 4). Calibrer contre le harnais de
+# mesure puis activer (~20-30 est un point de départ raisonnable en 720p).
+# Activé par défaut à 25.0 (seuil CONSERVATEUR) : ne rejette que le flou de
+# mouvement franc, qui produit un embedding ArcFace inexploitable. Abaisser/0 si
+# des visages valides sont rejetés sur une caméra peu exposée.
+FACE_CROP_MIN_SHARPNESS = float(os.getenv('FACE_CROP_MIN_SHARPNESS', '25.0'))
+
+# ── Reconnaissance PONDÉRÉE par la QUALITÉ du visage (best-shot) ─────────────
+# Les gardes-fous ci-dessus (taille/frontalité/netteté) JETTENT les pires visages
+# (gates durs). Par-dessus, on pondère le vote temporel par un score de QUALITÉ
+# ∈ [0,1] (frontalité × taille × netteté) : l'identité d'un track est alors
+# décidée par ses BONNES frames, pas par n'importe quelle frame qui a passé les
+# gates. Une frame floue / de profil léger / petite pèse moins dans le vote →
+# moins de faux positifs (mauvais embedding qui matche par hasard) ET de faux
+# négatifs (bon visage noyé sous des mauvais). Si toutes les qualités sont égales,
+# le comportement est IDENTIQUE à l'ancien vote (aucune régression).
+FACE_QUALITY_WEIGHTED_VOTE = os.getenv('FACE_QUALITY_WEIGHTED_VOTE', 'true').lower() == 'true'
+# Tailles/nettetés de RÉFÉRENCE au-delà desquelles le facteur vaut 1.0 (qualité
+# « idéale »). 110 px ≈ résolution native d'ArcFace (112). Netteté = variance du
+# Laplacien sur le crop. En dessous, le facteur décroît linéairement vers 0.
+FACE_QUALITY_REF_SIZE = int(os.getenv('FACE_QUALITY_REF_SIZE', '110'))
+FACE_QUALITY_REF_SHARPNESS = float(os.getenv('FACE_QUALITY_REF_SHARPNESS', '120.0'))
+
+# Vote temporel facial : au lieu de figer l'identité sur UNE seule frame (fragile
+# quand le score cosinus frôle le seuil), on accumule les décisions FAISS le long
+# d'un track et on ne CONFIRME une identité que si la MÊME personne est retrouvée
+# au moins FACE_VOTE_MIN_AGREE fois avec un score moyen ≥ seuil adaptatif. Tant
+# que ce n'est pas confirmé, le track reste « Inconnu » (pas de nom prématuré, pas
+# d'alerte) et continue d'être ré-interrogé à chaque frame traitée. Au-delà de
+# FACE_VOTE_MAX_ATTEMPTS tentatives sans consensus → figé « Inconnu ». Symétrique
+# du vote temporel du LPR (PLATE_TEMPORAL_VOTING). false = ancien comportement
+# mono-frame (zéro régression).
+FACE_TEMPORAL_VOTING = os.getenv('FACE_TEMPORAL_VOTING', 'true').lower() == 'true'
+FACE_VOTE_MIN_AGREE = int(os.getenv('FACE_VOTE_MIN_AGREE', '2'))
+FACE_VOTE_MAX_ATTEMPTS = int(os.getenv('FACE_VOTE_MAX_ATTEMPTS', '5'))
+
+# ── Fusion temporelle d'embeddings (best-of-stream) ──────────────────────────
+# Au lieu d'interroger FAISS avec l'embedding d'UNE frame, on envoie la MOYENNE
+# re-normalisée L2 des derniers embeddings du track. Le bruit par frame s'annule →
+# requête plus stable, score cosinus plus haut et plus régulier. window ≤ 1 ⇒
+# comportement mono-frame d'origine (aucune régression).
+FACE_EMBEDDING_FUSION = os.getenv('FACE_EMBEDDING_FUSION', 'true').lower() == 'true'
+FACE_EMBED_FUSION_WINDOW = int(os.getenv('FACE_EMBED_FUSION_WINDOW', '5'))
+
+# ── Normalisation d'éclairage CLAHE (canal L, LAB) avant ArcFace ─────────────
+# Égalise localement le contraste du crop avant extraction → récupère les visages
+# en contre-jour / ombres dures. FACE_CLAHE_CLIP = limite d'écrêtage CLAHE.
+FACE_CLAHE_ENABLED = os.getenv('FACE_CLAHE_ENABLED', 'true').lower() == 'true'
+FACE_CLAHE_CLIP = float(os.getenv('FACE_CLAHE_CLIP', '2.0'))
+
+# ── Durcissement du cache global (anti faux-positif « collant ») ─────────────
+# Un hit du cache global ne court-circuite le vote temporel que si son score est
+# ≥ ce seuil. En dessous, le consensus multi-frames prime → un unique match
+# mono-frame de confiance moyenne ne peut plus figer une mauvaise identité pour
+# toute la durée du cache (GLOBAL_CACHE_TTL_SECONDS).
+CACHE_TRUST_THRESHOLD = float(os.getenv('CACHE_TRUST_THRESHOLD', '0.88'))
+
+# ----------------------
+# Sprint 2 — Backbone & accélération d'inférence
+# ----------------------
+# Pack de modèles InsightFace. 'antelopev2' = SCRFD-10G (détection) + glintr100
+# (ResNet-100, reconnaissance) → précision « entreprise », nettement au-dessus de
+# 'buffalo_l' (ResNet-50). Les deux produisent du 512-D MAIS dans des espaces
+# d'embedding DIFFÉRENTS et INCOMPATIBLES : changer de pack invalide TOUTE la
+# galerie existante → ré-enrôlement obligatoire. Le backend (enrôlement) DOIT
+# utiliser le MÊME pack (cf. app/services/embeddings_service.py qui lit la même
+# variable INSIGHTFACE_MODEL_PACK), sinon requête (Core) et galerie (backend) ne
+# sont pas comparables.
+INSIGHTFACE_MODEL_PACK = os.getenv('INSIGHTFACE_MODEL_PACK', 'antelopev2')
+
+# ── ONNX Runtime : SessionOptions (anti-monopolisation CPU) ──────────────────
+# Borne les pools de threads ORT pour ne pas saturer tous les cœurs (plusieurs
+# caméras + LPR + serveur web partagent la machine). Sur GPU, l'essentiel du
+# calcul est sur le device ; ces threads ne servent qu'au pré/post-traitement CPU.
+ONNX_INTRA_OP_THREADS = int(os.getenv('ONNX_INTRA_OP_THREADS', '4'))
+ONNX_INTER_OP_THREADS = int(os.getenv('ONNX_INTER_OP_THREADS', '2'))
+
+# ── ONNX Runtime : provider_options CUDA ─────────────────────────────────────
+# gpu_mem_limit = PLAFOND de l'arène mémoire (pas une réservation) → empêche une
+# session de monopoliser la VRAM (essentiel si plusieurs sessions cohabitent).
+ONNX_GPU_MEM_LIMIT_GB = float(os.getenv('ONNX_GPU_MEM_LIMIT_GB', '2'))
+ONNX_ARENA_EXTEND_STRATEGY = os.getenv('ONNX_ARENA_EXTEND_STRATEGY', 'kNextPowerOfTwo')
+# EXHAUSTIVE = recherche du meilleur noyau de convolution au 1er passage (coût de
+# démarrage, gain en régime permanent). 'HEURISTIC' pour un démarrage plus rapide.
+ONNX_CUDNN_CONV_ALGO = os.getenv('ONNX_CUDNN_CONV_ALGO', 'EXHAUSTIVE')
+
+# ── FP16 via TensorRT (optionnel) ────────────────────────────────────────────
+# Le CUDAExecutionProvider n'a PAS d'option FP16 (il exécute le graphe ONNX dans
+# sa précision native, FP32). Le vrai levier FP16 sans reconvertir le modèle est
+# le TensorrtExecutionProvider (trt_fp16_enable). Désactivé par défaut : le 1er
+# build de moteur TRT est long et dépend du paquet ORT. Activer en connaissance
+# de cause (un cache moteur est écrit dans ONNX_TRT_CACHE_DIR).
+FACE_TRT_FP16 = os.getenv('FACE_TRT_FP16', 'false').lower() == 'true'
+ONNX_TRT_CACHE_DIR = os.getenv('ONNX_TRT_CACHE_DIR', '/tmp/trt_cache')
+
+# ── Worker d'inférence dédié (producteur-consommateur) ───────────────────────
+# true (défaut) : toutes les caméras SOUMETTENT leurs frames à un (ou des) thread(s)
+# d'inférence dédié(s) et attendent le résultat → l'accès au GPU est sérialisé sur
+# un propriétaire unique (contexte CUDA stable, mémoire déterministe) au lieu que N
+# threads caméra tapent la même session ORT. false : appel direct (session partagée,
+# comportement Sprint 1).
+FACE_INFERENCE_WORKER = os.getenv('FACE_INFERENCE_WORKER', 'true').lower() == 'true'
+# Taille du pool de workers. 1 (défaut) = UNE session partagée (~1 GB VRAM). > 1 =
+# une session PROPRE par worker (≈ +1 GB chacune) → débit accru au prix de la VRAM.
+FACE_INFERENCE_WORKERS = max(1, int(os.getenv('FACE_INFERENCE_WORKERS', '1')))
+# Garde-fou : délai max d'attente d'un résultat d'inférence (s) avant d'abandonner
+# la frame (retourne 0 visage) plutôt que de bloquer le thread caméra indéfiniment.
+FACE_INFER_TIMEOUT = float(os.getenv('FACE_INFER_TIMEOUT', '10'))
 
 # ----------------------
 # Recherche d'embeddings LOCALE (réplique FAISS dans le Core) — OPT-IN
@@ -183,8 +342,18 @@ LOG_BACKUP_COUNT = int(os.getenv('LOG_BACKUP_COUNT', '5'))  # 5 fichiers de back
 # Configuration du tracking multi-caméra global
 # ----------------------
 GLOBAL_CACHE_TTL_SECONDS = int(os.getenv('GLOBAL_CACHE_TTL_SECONDS', '300'))  # 5 minutes par défaut
-# Recalibré : était 0.75 sur échelle (cosine+1)/2 = cosine brut 0.50 ; maintenant cosine direct
-GLOBAL_SIMILARITY_THRESHOLD = float(os.getenv('GLOBAL_SIMILARITY_THRESHOLD', '0.50'))  # cosine brut ∈ [0,1]
+# Seuil du cache global d'identité (cosine brut ∈ [0,1]). IMPORTANT : un hit cache
+# (core/tracking_processor._decide_cached) CONFIRME une identité immédiatement et
+# COURT-CIRCUITE le vote temporel multi-frames. Il doit donc être PLUS STRICT que
+# le seuil de première reconnaissance (RECOGNITION_THRESHOLD=0.45 / floor 0.35) :
+# seules des identités à HAUTE confiance peuplent et servent le cache, sinon une
+# erreur cache « colle » pendant tout le TTL (GLOBAL_CACHE_TTL_SECONDS) et se
+# propage entre caméras sans repasser par le vote. 0.55 (défaut) = nettement
+# au-dessus de la bande de reconnaissance, tout en captant les vraies ré-ID
+# (cosine live même personne ≈ 0.45-0.80). Monter vers 0.60 pour un cache encore
+# plus prudent (au prix de plus de recherches FAISS). Était 0.50 ; 0.75 dans
+# l'ancien .env relevait de l'échelle (cosine+1)/2, désormais caduque.
+GLOBAL_SIMILARITY_THRESHOLD = float(os.getenv('GLOBAL_SIMILARITY_THRESHOLD', '0.55'))  # cosine brut ∈ [0,1]
 # -----------------------------------------
 # configuration des événements (ex: reconnaissance, entrée/sortie)
 # -----------------------------------------

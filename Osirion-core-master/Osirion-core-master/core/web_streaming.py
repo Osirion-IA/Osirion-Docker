@@ -417,6 +417,11 @@ class WebStreamingServer:
 
     def _run_server(self):
         """Exécute le serveur Flask-SocketIO"""
+        # Serveur de dev Werkzeug ASSUMÉ pour le flux Socket.IO (léger, 1 endpoint) :
+        # allow_unsafe_werkzeug=True est déjà posé. On coupe l'avertissement
+        # « production deployment » du logger werkzeug (bruit, choix conscient).
+        import logging as _logging
+        _logging.getLogger("werkzeug").setLevel(_logging.ERROR)
         try:
             self.socketio.run(
                 self.app,

@@ -150,8 +150,8 @@ def test_enroll_empty_list_returns_none():
 
 def test_single_image_enrollment_augments(test_image_path):
     """
-    CAS 1 : avec 1 image, le système doit utiliser l'augmentation et retourner
-    un centroid valide (dim=512, norm≈1.0).
+    CAS 1 : avec 1 image, le système utilise l'augmentation et retourne une LISTE
+    de vecteurs (multi-vecteurs, plus de centroïde). Chaque vecteur : dim=512, norm≈1.0.
     """
     import cv2
     import numpy as np
@@ -170,18 +170,21 @@ def test_single_image_enrollment_augments(test_image_path):
             "utiliser une photo frontale nette."
         )
 
-    centroid, face_crop = result
-    assert len(centroid) == 512, f"Dimension={len(centroid)} (attendu 512)"
-
-    norm = np.linalg.norm(np.array(centroid, dtype=np.float32))
-    assert abs(norm - 1.0) < 1e-4, f"Norm={norm:.6f} (attendu ≈ 1.0)"
+    embeddings, face_crop = result
+    assert isinstance(embeddings, list) and len(embeddings) >= 1, (
+        f"Multi-vecteurs attendu (liste non vide), reçu : {type(embeddings)}"
+    )
+    for emb in embeddings:
+        assert len(emb) == 512, f"Dimension={len(emb)} (attendu 512)"
+        norm = np.linalg.norm(np.array(emb, dtype=np.float32))
+        assert abs(norm - 1.0) < 1e-4, f"Norm={norm:.6f} (attendu ≈ 1.0)"
     assert face_crop is not None and face_crop.size > 0
 
 
 def test_multi_image_enrollment_no_augmentation(test_image_path):
     """
-    CAS 2 : avec ≥ 2 images, pas d'augmentation — centroid sur les embeddings directs.
-    Résultat : dim=512, norm≈1.0.
+    CAS 2 : avec ≥ 2 images, pas d'augmentation — un vecteur par image valide.
+    Chaque vecteur : dim=512, norm≈1.0.
     """
     import cv2
     import numpy as np
@@ -194,16 +197,18 @@ def test_multi_image_enrollment_no_augmentation(test_image_path):
     if result is None:
         pytest.skip("Image de test insuffisante pour enrollment.")
 
-    centroid, face_crop = result
-    assert len(centroid) == 512
-    norm = np.linalg.norm(np.array(centroid, dtype=np.float32))
-    assert abs(norm - 1.0) < 1e-4, f"Norm={norm:.6f} (attendu ≈ 1.0)"
+    embeddings, face_crop = result
+    assert isinstance(embeddings, list) and len(embeddings) >= 1
+    for emb in embeddings:
+        assert len(emb) == 512
+        norm = np.linalg.norm(np.array(emb, dtype=np.float32))
+        assert abs(norm - 1.0) < 1e-4, f"Norm={norm:.6f} (attendu ≈ 1.0)"
 
 
 def test_enroll_final_norm_is_unit(test_image_path):
     """
     Invariant critique : quelle que soit la stratégie (1 ou N images),
-    l'embedding final doit avoir norme = 1.0 ± 1e-4.
+    CHAQUE vecteur retourné doit avoir norme = 1.0 ± 1e-4.
     """
     import cv2
     import numpy as np
@@ -220,11 +225,12 @@ def test_enroll_final_norm_is_unit(test_image_path):
         if result is None:
             pytest.skip("Image de test insuffisante.")
 
-        centroid, _ = result
-        norm = np.linalg.norm(np.array(centroid, dtype=np.float32))
-        assert abs(norm - 1.0) < 1e-4, (
-            f"n={n} images → norm={norm:.6f} (attendu 1.0 ± 1e-4)"
-        )
+        embeddings, _ = result
+        for emb in embeddings:
+            norm = np.linalg.norm(np.array(emb, dtype=np.float32))
+            assert abs(norm - 1.0) < 1e-4, (
+                f"n={n} images → norm={norm:.6f} (attendu 1.0 ± 1e-4)"
+            )
 
 
 def test_enroll_max_5_images_cap(test_image_path):

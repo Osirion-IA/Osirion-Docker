@@ -13,7 +13,7 @@ Optimisations (cf. config.settings, section « OPTIMISATIONS latence & précisio
   • LATENCE — OCR DÉCOUPLÉ : la lecture EasyOCR + l'ordre de lecture spatial 2D
     (filtrage hauteur, regroupement multi-lignes, validation) tournent dans un
     thread worker OCR dédié (file FIFO). Le thread caméra ne fait QUE détecter +
-    tracker (YOLO/ByteTrack) et soumettre des crops : il n'est JAMAIS bloqué par
+    tracker (YOLO + OC-SORT) et soumettre des crops : il n'est JAMAIS bloqué par
     l'OCR → aucune saccade sur la boucle de tracking vidéo WebRTC (avant : EasyOCR
     s'exécutait en ligne dans process() et pouvait figer le flux plusieurs ms/frame).
 
@@ -52,7 +52,7 @@ import aiohttp
 import cv2
 import numpy as np
 
-from ByteTrack.yolox.tracker.byte_tracker import BYTETracker
+from core.trackers.oc_sort import OCSortTrackerAdapter
 import plate_detection
 from plate_detection import detect_plates, read_plate_text
 from services.plate_search_service import search_plate_async
@@ -71,10 +71,8 @@ class PlateProcessor:
         self.cam_name = cam["cam_name"]
         self.config = config
 
-        # Tracker ByteTrack dédié aux plaques (parallèle à celui des visages).
-        self.tracker = BYTETracker(
-            config.BYTE_TRACK_ARGS, frame_rate=config.BYTE_TRACK_FRAME_RATE
-        )
+        # Tracker OC-SORT dédié aux plaques (parallèle à celui des visages).
+        self.tracker = OCSortTrackerAdapter(config.OC_SORT_ARGS)
 
         # Cache par track_id. Champs : plate_text, ocr_conf, attempts, finalized,
         #   bbox, readings[], ocr_inflight, vehicle_id, is_blacklisted, owner_name,
@@ -174,7 +172,7 @@ class PlateProcessor:
         detections = detect_plates(frame, confidence_threshold=self.det_conf)
         self._last_detect_ms = (time.perf_counter() - _t_det) * 1000.0
 
-        # Préparer pour ByteTrack : (N,5) [x1,y1,x2,y2,score]
+        # Préparer pour le tracker : (N,5) [x1,y1,x2,y2,score]
         if detections:
             dets = np.array(
                 [[x, y, x + w, y + h, conf] for (x, y, w, h), conf in detections],
@@ -228,7 +226,11 @@ class PlateProcessor:
             if not entry:
                 continue
             x, y, w, h = entry["bbox"]
-            text = entry["plate_text"] or "..."
+            # Sur une plaque CONNUE, on affiche la plaque enregistrée en base
+            # (canonique) et non la lecture OCR brute — sinon un OCR bruité
+            # (« 0J2179 » pour CJ2179) laisse croire à une incohérence avec la base.
+            ocr_text = entry["plate_text"] or "..."
+            text = entry.get("matched_plate") or ocr_text
             if entry["is_blacklisted"]:
                 label = f"{text} [BLACKLIST]"
             elif entry["owner_name"]:
@@ -274,10 +276,7 @@ class PlateProcessor:
             return
         # Gating taille : on ignore les plaques trop petites (illisibles).
         if w < self.min_crop_w or h < self.min_crop_h:
-            logger.info(f"[LPR][DBG] crop tid={tid} w={w} h={h} GATÉ "  # TEMP DEBUG
-                        f"(min w={self.min_crop_w} h={self.min_crop_h})")
             return
-        logger.info(f"[LPR][DBG] crop tid={tid} w={w} h={h} -> soumis au worker OCR")  # TEMP DEBUG
 
         crop = frame[y:y + h, x:x + w]
         if crop is None or crop.size == 0:
@@ -322,9 +321,6 @@ class PlateProcessor:
                 entry["first_text"] = r["text"]      # lecture mono-image (1 passe OCR)
                 entry["first_ocr_ms"] = ocr_ms
 
-            logger.info(f"[LPR][DBG] résultat OCR tid={r['track_id']} "  # TEMP DEBUG
-                        f"text='{r['text']}' conf={r['conf']:.2f} "
-                        f"(ocr_min={self.ocr_min}) attempts={entry['attempts']}")
             self._apply_reading(entry, r["text"], r["conf"])
 
             # Mesure : émettre une seule fois quand la plaque devient définitive
@@ -514,6 +510,7 @@ class PlateProcessor:
             entry["vehicle_id"] = r["vehicle_id"]
             entry["is_blacklisted"] = r["is_blacklisted"]
             entry["owner_name"] = r["owner_name"]
+            entry["matched_plate"] = r.get("matched_plate")
             entry["looked_up_for"] = r["plate_text"]
             entry["lookup_inflight"] = None
             if r["event_sent"]:
@@ -560,6 +557,10 @@ class PlateProcessor:
             "track_id": job["track_id"], "plate_text": plate_text,
             "vehicle_id": None, "is_blacklisted": False,
             "owner_name": None, "event_sent": False,
+            # Plaque CANONIQUE enregistrée en base (≠ texte OCR brut si l'OCR a
+            # confondu des caractères, ex. CJ2179 lu « 0J2179 »). Sert à AFFICHER
+            # la vraie plaque surveillée plutôt que la lecture bruitée.
+            "matched_plate": None,
         }
 
         match = await search_plate_async(
@@ -571,7 +572,7 @@ class PlateProcessor:
             camera_id=self.cam_id,
             query=plate_text,
             matched=bool(match),
-            matched_plate=(match.get("plate") or match.get("plate_number")) if match else None,
+            matched_plate=match.get("plate_text") if match else None,
             score=(match.get("score") if match else None),
             vehicle_id=(match.get("id") if match else None),
             is_blacklisted=bool(match.get("is_blacklisted")) if match else False,
@@ -581,6 +582,7 @@ class PlateProcessor:
             result["vehicle_id"] = match.get("id")
             result["is_blacklisted"] = bool(match.get("is_blacklisted"))
             result["owner_name"] = match.get("owner_name")
+            result["matched_plate"] = match.get("plate_text")
             logger.info(
                 f"[LPR][cam={self.cam_name}] plaque {plate_text} → connue "
                 f"(vehicle_id={result['vehicle_id']}, "

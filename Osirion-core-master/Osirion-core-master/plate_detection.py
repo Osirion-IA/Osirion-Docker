@@ -99,6 +99,11 @@ def _load_models() -> None:
     # 1) Détecteur de plaque (Ultralytics YOLO)
     try:
         from ultralytics import YOLO
+        # Coupe le spam du logger ultralytics (déprécation 'half' émise À CHAQUE
+        # inférence, création du fichier settings…). Nos erreurs d'inférence sont
+        # déjà gérées par nos propres try/except.
+        import logging as _logging
+        _logging.getLogger("ultralytics").setLevel(_logging.ERROR)
     except Exception as e:
         logger.warning(f"[LPR] ultralytics indisponible — module plaques désactivé ({e})")
         return
@@ -407,14 +412,14 @@ def read_plate_text(plate_crop: np.ndarray) -> Tuple[str, float]:
         logger.error(f"[LPR] Erreur OCR : {e}")
         return "", 0.0
 
-    logger.info(f"[LPR][DBG] OCR brut: {[(t, round(float(c), 2)) for _b, t, c in detections]}")  # TEMP DEBUG
+    logger.debug(f"[LPR][DBG] OCR brut: {[(t, round(float(c), 2)) for _b, t, c in detections]}")
     if not detections:
         return "", 0.0
 
     # Étapes 1 & 2 : filtrage hauteur + regroupement spatial multi-lignes.
     ordered = _spatial_reading_order(detections)
     if not ordered:
-        logger.info("[LPR][DBG] ordered VIDE après filtrage hauteur/normalisation")  # TEMP DEBUG
+        logger.debug("[LPR][DBG] ordered VIDE après filtrage hauteur/normalisation")
         return "", 0.0
 
     # ── Étape 3 : assemblage + validation universelle ─────────────────────────
@@ -425,7 +430,7 @@ def read_plate_text(plate_crop: np.ndarray) -> Tuple[str, float]:
 
     # Validateur permissif : uniquement A-Z et 0-9, longueur 4..10.
     valid = bool(_PLATE_VALIDATOR.match(plate))
-    logger.info(f"[LPR][DBG] assemblé='{plate}' len={len(plate)} valide={valid}")  # TEMP DEBUG
+    logger.debug(f"[LPR][DBG] assemblé='{plate}' len={len(plate)} valide={valid}")
     if not valid:
         return "", 0.0
 

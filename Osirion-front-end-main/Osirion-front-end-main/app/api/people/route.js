@@ -28,7 +28,10 @@ export async function POST(req) {
 
   try {
     const formData = await req.formData();
-    const res = await fetch(`${BACKEND}/people/upload/`, {
+    // ≥2 photos → champ "images" (endpoint multi) ; sinon "image_url" (endpoint mono).
+    const isMulti = formData.getAll("images").length > 0;
+    const endpoint = isMulti ? "/people/upload/multi/" : "/people/upload/";
+    const res = await fetch(`${BACKEND}${endpoint}`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}` },
       body: formData,

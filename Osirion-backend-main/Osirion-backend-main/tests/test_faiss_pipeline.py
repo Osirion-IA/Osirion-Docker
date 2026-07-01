@@ -89,25 +89,27 @@ def test_embedding_norms_in_database():
     import numpy as np
     from sqlmodel import Session, select
     from app.database import engine
-    from app.models.people import People
+    from app.models.people import PersonEmbedding
 
+    # Multi-vecteurs : les embeddings vivent désormais dans person_embeddings
+    # (plusieurs lignes par personne). On vérifie la norme de CHAQUE vecteur.
     with Session(engine) as session:
-        people = session.exec(select(People)).all()
+        rows = session.exec(select(PersonEmbedding.id, PersonEmbedding.embedding)).all()
 
-    if not people:
-        pytest.skip("Aucune personne en base — enroller au moins 1 personne.")
+    if not rows:
+        pytest.skip("Aucun embedding en base — enroller au moins 1 personne.")
 
-    norms = [np.linalg.norm(np.array(p.embeddings, dtype='float32')) for p in people]
-    norms = np.array(norms)
+    ids = [r[0] for r in rows]
+    norms = np.array([np.linalg.norm(np.array(r[1], dtype='float32')) for r in rows])
 
     assert norms.min() > 0.990, (
         f"Norme minimale trop basse : {norms.min():.6f} "
-        f"(personne id={people[np.argmin(norms)].id}) — "
+        f"(person_embedding id={ids[int(np.argmin(norms))]}) — "
         "vérifier le chemin de normalisation lors de l'enrollment."
     )
     assert norms.max() < 1.010, (
         f"Norme maximale trop haute : {norms.max():.6f} "
-        f"(personne id={people[np.argmax(norms)].id}) — "
+        f"(person_embedding id={ids[int(np.argmax(norms))]}) — "
         "drift float32 excessif lors du stockage pgvector."
     )
 

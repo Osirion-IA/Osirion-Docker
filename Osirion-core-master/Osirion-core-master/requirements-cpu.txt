@@ -35,12 +35,14 @@ numpy>=1.26.0,<2.0
 pillow==10.2.0
 
 # ----------------------
-# ByteTrack — dépendances
-# (ByteTrack lui-même est cloné dans le Dockerfile)
+# Tracker (OC-SORT) — dépendances
 # ----------------------
+# OC-SORT implémenté EN LOCAL (core/trackers/oc_sort.py) — aucun clone Git externe.
+# lapx (affectation linéaire) + scipy (repli) pour l'association ; filterpy pour
+# le filtre de Kalman. Aligné sur requirements.txt (build GPU).
 lapx>=0.5.2
 scipy>=1.12.0
-cython_bbox>=0.1.3
+filterpy>=1.4.5
 
 # ----------------------
 # Flask extensions (CORS pour le toggle LPR appelé par le navigateur)

@@ -30,7 +30,6 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     g++ \
-    git \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
@@ -73,7 +72,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         # réinstalle UNIQUEMENT onnxruntime-gpu EN DERNIER (son pybind l'emporte).
         pip uninstall -y onnxruntime onnxruntime-gpu && \
         pip install --user --retries 10 --timeout 120 --resume-retries 10 --no-deps \
-            "onnxruntime-gpu>=1.17.1" && \
+            "onnxruntime-gpu>=1.22.0,<1.23" && \
         # Garde-fou : échoue le build si le pybind embarqué est un build CPU
         # (sans symbole CUDAExecutionProvider) — empêche toute régression future.
         grep -aq CUDAExecutionProvider \
@@ -83,22 +82,24 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         pip install --user --retries 10 --timeout 120 --resume-retries 10 -r requirements-cpu.txt; \
     fi
 
-# ByteTrack cloné comme package local — import via PYTHONPATH=/app
-# from ByteTrack.yolox.tracker.byte_tracker import BYTETracker
-RUN git clone --depth 1 https://github.com/ifzhang/ByteTrack.git /build/ByteTrack
-
 # -----------------------------------------------------------------------------
 # Stage 2 : runtime — image finale, sans outils de compilation
 # -----------------------------------------------------------------------------
 FROM python:3.11-slim AS runtime
 
 ARG GPU
+# Pack de modèles InsightFace pré-téléchargé ET utilisé au runtime. antelopev2 =
+# SCRFD-10G + glintr100 (ResNet-100) → précision « entreprise ». Le backend
+# d'enrôlement DOIT utiliser le même pack (même variable d'env).
+ARG INSIGHTFACE_MODEL_PACK=antelopev2
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PATH="/root/.local/bin:$PATH"
-# /app pour "from ByteTrack.yolox..." et /app/ByteTrack pour les imports internes yolox
-ENV PYTHONPATH=/app:/app/ByteTrack
+# Propagé à l'application (face_detection.py lit INSIGHTFACE_MODEL_PACK).
+ENV INSIGHTFACE_MODEL_PACK=${INSIGHTFACE_MODEL_PACK}
+# /app : racine des packages applicatifs (config, core, services, utils, ...)
+ENV PYTHONPATH=/app
 
 LABEL org.opencontainers.image.title="Osirion-Core" \
       org.opencontainers.image.description="Système de surveillance multi-caméras avec détection et reconnaissance faciale"
@@ -125,9 +126,6 @@ RUN if [ "$GPU" = "1" ]; then \
 
 WORKDIR /app
 
-# ByteTrack comme package local (doit être dans PYTHONPATH=/app)
-COPY --from=builder /build/ByteTrack ./ByteTrack
-
 # Code source de l'application uniquement
 COPY config/            ./config/
 COPY core/              ./core/
@@ -142,19 +140,33 @@ COPY yolov11n-face.pt   .
 # Le module plaques se désactive proprement si le modèle est absent.
 COPY license_plate_detector.pt .
 
-# Pré-télécharger le modèle InsightFace buffalo_l (~183 MB) pour éviter un
-# téléchargement au premier démarrage du conteneur.
+# Pré-télécharger le pack InsightFace (antelopev2 ≈ 360 MB : SCRFD-10G + glintr100
+# ResNet-100) pour éviter un téléchargement au premier démarrage du conteneur.
 # Note : CPUExecutionProvider utilisé ici car le builder n'a pas de GPU ;
 #        en production GPU, face_detection.py sélectionne CUDAExecutionProvider.
-RUN python -c "\
-from insightface.app import FaceAnalysis; \
-app = FaceAnalysis( \
-    name='buffalo_l', \
-    providers=['CPUExecutionProvider'], \
-    allowed_modules=['detection', 'recognition'] \
-); \
-app.prepare(ctx_id=-1, det_size=(320, 320)); \
-print('InsightFace buffalo_l prêt')"
+#
+# BUG antelopev2 : son .zip contient un dossier `antelopev2/`, donc l'auto-download
+# d'insightface l'extrait en DOUBLE (models/antelopev2/antelopev2/*.onnx) →
+# FaceAnalysis ne trouve aucun modèle (AssertionError: 'detection' in self.models).
+# On télécharge donc le zip et on l'extrait NOUS-MÊMES au bon niveau (models/), avec
+# repli de mise à plat si un dossier imbriqué subsiste. Les autres packs (buffalo_l)
+# passent par l'auto-download normal (verify ci-dessous).
+RUN if [ "$INSIGHTFACE_MODEL_PACK" = "antelopev2" ]; then \
+        python -c "import os,glob,zipfile,shutil,urllib.request; \
+root=os.path.expanduser('~/.insightface/models'); os.makedirs(root,exist_ok=True); \
+z='/tmp/antelopev2.zip'; \
+urllib.request.urlretrieve('https://github.com/deepinsight/insightface/releases/download/v0.7/antelopev2.zip', z); \
+zipfile.ZipFile(z).extractall(root); \
+n=os.path.join(root,'antelopev2','antelopev2'); \
+([shutil.move(f, os.path.join(root,'antelopev2')) for f in glob.glob(n+'/*')] if os.path.isdir(n) else None); \
+(os.rmdir(n) if os.path.isdir(n) else None); \
+os.remove(z); print('antelopev2 extrait dans', root)"; \
+    fi && \
+    python -c "import os; from insightface.app import FaceAnalysis; \
+pack=os.getenv('INSIGHTFACE_MODEL_PACK','antelopev2'); \
+app=FaceAnalysis(name=pack, providers=['CPUExecutionProvider'], allowed_modules=['detection','recognition']); \
+app.prepare(ctx_id=-1, det_size=(320,320)); \
+print('InsightFace', pack, 'OK —', list(app.models.keys()))"
 
 # Pré-télécharger les modèles EasyOCR (détecteur CRAFT + recognizer 'en', ~100 MB)
 # pour le module LPR — évite un téléchargement (et un blocage potentiel sans réseau)

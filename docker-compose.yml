@@ -23,7 +23,8 @@
 #             ./Osirion-backend-main/Osirion-backend-main/alembic → /app/alembic
 #   Core    : ./Osirion-core-master/Osirion-core-master/config  → /app/config
 #             (+ core/, services/, utils/, face_detection*.py)
-#   yolov11n-face.pt et ByteTrack restent dans l'image (non écrasés).
+#   yolov11n-face.pt reste dans l'image (non écrasé). Le tracker OC-SORT vit
+#   dans core/ (donc bind-monté et hot-reloadable).
 # =============================================================================
 
 networks:
@@ -123,7 +124,7 @@ services:
   # Se connecte au backend via le réseau interne Docker (http://backend:8000).
   #
   # Bind mounts granulaires : seuls les packages Python modifiés sont écrasés.
-  # ByteTrack (/app/ByteTrack) et yolov11n-face.pt restent dans l'image.
+  # yolov11n-face.pt reste dans l'image (le tracker OC-SORT vit dans core/, bind-monté).
   # Pas d'auto-reload (risque de coupure des flux RTSP) — faire :
   #   docker restart osirion-core   après modification du code.
   # ---------------------------------------------------------------------------
@@ -167,6 +168,11 @@ services:
       # en mettant true ici. Enregistre un événement distinct pour tout visage
       # détecté mais non identifié (person_id NULL). N'affecte pas le facial.
       ENABLE_UNKNOWN_FACE_EVENT: ${ENABLE_UNKNOWN_FACE_EVENT:-false}
+      # ── Précision faciale (garde-fou taille + vote temporel) — défauts sûrs ──
+      FACE_MIN_RECOG_SIZE: ${FACE_MIN_RECOG_SIZE:-40}          # visage <40px → pas de reco (0=off)
+      FACE_TEMPORAL_VOTING: ${FACE_TEMPORAL_VOTING:-true}      # vote identité multi-frames
+      FACE_VOTE_MIN_AGREE: ${FACE_VOTE_MIN_AGREE:-2}           # accords requis avant confirmation
+      FACE_VOTE_MAX_ATTEMPTS: ${FACE_VOTE_MAX_ATTEMPTS:-5}     # tentatives max avant « Inconnu »
       # ── LPR / ANPR (reconnaissance de plaques) ──────────────────────────────
       # OPT-IN : false par défaut. Activable à chaud via le frontend (toggle) ou
       # en mettant true ici. Nécessite un modèle YOLO de plaque (PLATE_MODEL_PATH).
@@ -202,7 +208,8 @@ services:
       MEASURE_SAMPLE_SECONDS: ${MEASURE_SAMPLE_SECONDS:-5}
     volumes:
       # ── Bind mounts — packages Python modifiés ──────────────────────────────
-      # ByteTrack (/app/ByteTrack) et yolov11n-face.pt restent dans l'image.
+      # Le tracker OC-SORT vit dans core/ (bind-monté → hot-reload du code).
+      # yolov11n-face.pt reste dans l'image.
       - ./Osirion-core-master/Osirion-core-master/config:/app/config
       - ./Osirion-core-master/Osirion-core-master/core:/app/core
       - ./Osirion-core-master/Osirion-core-master/services:/app/services
@@ -213,9 +220,6 @@ services:
       - ./Osirion-core-master/Osirion-core-master/main_refactored.py:/app/main_refactored.py
       # Modèle YOLO de plaque (LPR) — montage en lecture seule (évite un rebuild)
       - ./Osirion-core-master/Osirion-core-master/license_plate_detector.pt:/app/license_plate_detector.pt:ro
-      # ── Patches ByteTrack — fix np.float → float (NumPy ≥ 1.24) ────────────
-      - ./Osirion-core-master/Osirion-core-master/patches/matching.py:/app/ByteTrack/yolox/tracker/matching.py
-      - ./Osirion-core-master/Osirion-core-master/patches/byte_tracker.py:/app/ByteTrack/yolox/tracker/byte_tracker.py
       # ── Named volume — logs persistants ────────────────────────────────────
       - core_logs:/app/logs
       # ── Mesure (chapitre 4) — journal metrics.jsonl directement sur l'hôte ──

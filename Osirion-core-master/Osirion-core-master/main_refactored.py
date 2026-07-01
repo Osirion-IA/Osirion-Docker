@@ -4,6 +4,22 @@ Point d'entrée de l'application de surveillance multi-caméras
 Version modulaire et refactorisée
 """
 
+# ── Silence du bruit de logs tiers — DOIT précéder tout import de cv2/insightface/
+#    ultralytics (les variables d'env sont lues à l'import de ces libs). ──────────
+import os as _os
+import warnings as _warnings
+
+# ffmpeg/OpenCV : erreurs de décodage H264 sur perte de paquets RTSP (cosmétique,
+# spammé « [h264 @ …] error while decoding MB … »). 8 = niveau « fatal » only.
+_os.environ.setdefault("OPENCV_FFMPEG_LOGLEVEL", "8")
+# Ultralytics : évite le repli « ~/.config/Ultralytics non inscriptible ».
+_os.environ.setdefault("YOLO_CONFIG_DIR", "/tmp/Ultralytics")
+# insightface (face_align) émet un FutureWarning `estimate` PAR VISAGE → on le tait.
+_warnings.filterwarnings("ignore", category=FutureWarning, module="insightface")
+# albumentations (tiré par insightface) tente un check de version en ligne au boot
+# → échoue hors-ligne (« Temporary failure in name resolution »). On le désactive.
+_os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1")
+
 import signal
 import sys
 

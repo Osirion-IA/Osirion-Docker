@@ -72,7 +72,7 @@ async def search_embedding_async(session: aiohttp.ClientSession, embedding, top_
                 elif response.status == 401:
                     # Token expiré : refresh immédiat + 1 retry sans backoff
                     logger.debug(f"[search] HTTP 401 — refresh token (attempt {attempt})")
-                    refreshed_headers = get_auth_headers()
+                    refreshed_headers = get_auth_headers(force=True)
                     async with session.post(
                         url, json=payload, headers=refreshed_headers, timeout=_REQUEST_TIMEOUT
                     ) as retry_resp:

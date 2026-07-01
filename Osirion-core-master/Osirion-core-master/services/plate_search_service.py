@@ -47,7 +47,7 @@ async def search_plate_async(
                     return results[0] if results else None
 
                 if resp.status == 401:
-                    refreshed = get_auth_headers()
+                    refreshed = get_auth_headers(force=True)
                     async with session.post(
                         url, json=payload, headers=refreshed, timeout=_REQUEST_TIMEOUT
                     ) as retry_resp:

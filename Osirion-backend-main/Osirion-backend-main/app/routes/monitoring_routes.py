@@ -18,7 +18,7 @@ class SystemInfoResponse(BaseModel):
     network_interfaces: Dict[str, Dict[str, Any]]
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "general": {"system": "Linux", "hostname": "my-server"},
                 # ... etc

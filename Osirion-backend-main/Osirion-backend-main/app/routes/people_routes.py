@@ -1,5 +1,7 @@
 from fastapi import APIRouter, Depends, Request
 from fastapi import Form, File, UploadFile
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import IntegrityError
 from app.services.bytesToImage_service import bytes_to_image
 from app.services.embeddings_service import detect_and_embed, enroll_from_images
 from app.services.saveImage_service import save_image_from_bytes, is_valid_image_format, MIME_TO_EXT
@@ -13,7 +15,7 @@ from typing import List
 import cv2
 import logging
 from pathlib import Path
-from app.models.people import People
+from app.models.people import People, PersonEmbedding
 from app.database import engine
 from sqlmodel import Session, select
 from sqlalchemy import func
@@ -22,15 +24,29 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+def _err(message: str, status: int = 400) -> JSONResponse:
+    """Réponse d'erreur avec un VRAI code HTTP (pas 200) + corps {"error": ...}.
+    Le frontend distingue ainsi un échec d'un succès (res.ok == false)."""
+    return JSONResponse(status_code=status, content={"error": message})
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers internes
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _check_duplicate(embeddings: list) -> dict | None:
-    """Retourne le doublon si cosine > 0.90, None sinon."""
-    hits = search_similar_people(embeddings, k=1)
-    if hits and hits[0]["score"] > 0.90:
-        return hits[0]
+    """Retourne le doublon si cosine > 0.90, None sinon.
+
+    `embeddings` est désormais une LISTE de vecteurs (multi-vecteurs). On interroge
+    avec chacun et on retient le meilleur score : si l'un des vecteurs candidats
+    correspond fortement à une personne existante, c'est un doublon."""
+    best: dict | None = None
+    for emb in embeddings:
+        hits = search_similar_people(emb, k=1)
+        if hits and (best is None or hits[0]["score"] > best["score"]):
+            best = hits[0]
+    if best and best["score"] > 0.90:
+        return best
     return None
 
 
@@ -38,7 +54,11 @@ async def _persist_person(
     first_name, last_name, phone, email, addresse,
     image_bytes, content_type, face_crop, embeddings
 ) -> dict:
-    """Sauvegarde images + DB + FAISS. Lève une exception en cas d'échec."""
+    """Sauvegarde images + DB + FAISS. Lève une exception en cas d'échec.
+
+    `embeddings` : liste de vecteurs 512-D (multi-vecteurs). On crée la personne
+    puis une ligne `person_embeddings` par vecteur, et on ajoute chaque vecteur à
+    l'index FAISS (mappé sur le person_id)."""
     original_path = await save_image_from_bytes(image_bytes, content_type, "uploads/")
 
     ext = MIME_TO_EXT.get(content_type, "jpg")
@@ -56,14 +76,21 @@ async def _persist_person(
         email=email,
         addresse=addresse,
         image_url=original_path,
-        embeddings=embeddings
     )
     with Session(engine) as session:
         session.add(new_person)
         session.commit()
         session.refresh(new_person)
+        person_id = new_person.id
+        # Une ligne person_embeddings par vecteur (galerie multi-vecteurs).
+        for emb in embeddings:
+            session.add(PersonEmbedding(person_id=person_id, embedding=emb))
+        session.commit()
 
-    add_person_to_index(new_person.id, embeddings)
+    # Index FAISS : chaque vecteur pointe vers le MÊME person_id (max-cosine côté
+    # recherche regroupe ensuite par personne).
+    for emb in embeddings:
+        add_person_to_index(person_id, emb)
     return {"original_path": original_path, "cropped_path": cropped_path}
 
 
@@ -94,23 +121,22 @@ async def add_people(
     await image_url.close()
 
     if not image_bytes:
-        return {"error": "L'image est vide."}
+        return _err("L'image est vide.", 400)
     if not is_valid_image_format(image_url):
-        return {"error": "Format d'image non supporté."}
+        return _err("Format d'image non supporté.", 400)
 
     image = bytes_to_image(image_bytes)
     if image is None:
-        return {"error": "Impossible de lire l'image."}
+        return _err("Impossible de lire l'image.", 400)
 
     # Enrollment hybride CAS 1 : 1 image → augmentation → centroid
     result = enroll_from_images([image], confidence_threshold=0.85)
     if result is None:
-        return {
-            "error": (
-                "Aucun visage net détecté. "
-                "Utilisez une photo frontale, bien éclairée (confiance SCRFD requise ≥ 0.85)."
-            )
-        }
+        return _err(
+            "Aucun visage net détecté. "
+            "Utilisez une photo frontale, bien éclairée (confiance SCRFD requise ≥ 0.85).",
+            422,
+        )
 
     embeddings, face_crop = result
 
@@ -119,23 +145,30 @@ async def add_people(
         logger.warning(
             f"Enrollment dupliqué refusé : candidat={dup['name']!r} score={dup['score']:.4f}"
         )
-        return {
-            "error": (
-                f"Personne similaire déjà en base : {dup['name']} "
-                f"(similarité={dup['score']:.2f}). "
-                "Supprimez l'entrée existante avant de re-enroller."
-            )
-        }
+        return _err(
+            f"Personne similaire déjà en base : {dup['name']} "
+            f"(similarité={dup['score']:.2f}). "
+            "Supprimez l'entrée existante avant de re-enroller.",
+            409,
+        )
 
     try:
         await _persist_person(
             first_name, last_name, phone, email, addresse,
             image_bytes, content_type, face_crop, embeddings
         )
-        return {"message": "Personne ajoutée avec succès (centroid sur image augmentée)."}
+        return {
+            "message": (
+                f"Personne ajoutée avec succès "
+                f"({len(embeddings)} vecteur(s) sur image augmentée)."
+            )
+        }
+    except IntegrityError:
+        logger.warning("Enrollment refusé : téléphone ou email déjà utilisé.")
+        return _err("Un compte avec ce téléphone ou cet email existe déjà.", 409)
     except Exception:
         logger.exception("Échec persist enrollment simple")
-        return {"error": "Erreur lors de la sauvegarde — voir logs."}
+        return _err("Erreur lors de la sauvegarde — voir logs.", 500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -160,9 +193,9 @@ async def add_people_multi(
     Recommandé pour de meilleures photos : différents angles, éclairages variés.
     """
     if not images:
-        return {"error": "Aucune image fournie."}
+        return _err("Aucune image fournie.", 400)
     if len(images) > 5:
-        return {"error": "Maximum 5 images acceptées par enrollment."}
+        return _err("Maximum 5 images acceptées par enrollment.", 400)
 
     frames: list = []
     primary_bytes: bytes | None = None
@@ -185,7 +218,7 @@ async def add_people_multi(
             primary_content_type = upload.content_type or "image/jpeg"
 
     if not frames:
-        return {"error": "Aucune image valide parmi les fichiers fournis."}
+        return _err("Aucune image valide parmi les fichiers fournis.", 400)
 
     if len(frames) == 1:
         logger.info(
@@ -196,12 +229,11 @@ async def add_people_multi(
     # Enrollment hybride : si frames==1 → augmentation auto, sinon centroid direct
     result = enroll_from_images(frames, confidence_threshold=0.85)
     if result is None:
-        return {
-            "error": (
-                "Aucun visage net détecté dans les images fournies "
-                "(confiance SCRFD requise ≥ 0.85, Laplacien ≥ 60)."
-            )
-        }
+        return _err(
+            "Aucun visage net détecté dans les images fournies "
+            "(confiance SCRFD requise ≥ 0.85, Laplacien ≥ 60).",
+            422,
+        )
 
     embeddings, face_crop = result
 
@@ -211,13 +243,12 @@ async def add_people_multi(
             f"Enrollment multi dupliqué refusé : candidat={dup['name']!r} "
             f"score={dup['score']:.4f}"
         )
-        return {
-            "error": (
-                f"Personne similaire déjà en base : {dup['name']} "
-                f"(similarité={dup['score']:.2f}). "
-                "Supprimez l'entrée existante avant de re-enroller."
-            )
-        }
+        return _err(
+            f"Personne similaire déjà en base : {dup['name']} "
+            f"(similarité={dup['score']:.2f}). "
+            "Supprimez l'entrée existante avant de re-enroller.",
+            409,
+        )
 
     try:
         await _persist_person(
@@ -227,12 +258,15 @@ async def add_people_multi(
         return {
             "message": (
                 f"Personne ajoutée avec succès "
-                f"(centroid sur {len(frames)} image(s))."
+                f"({len(embeddings)} vecteur(s) sur {len(frames)} image(s))."
             )
         }
+    except IntegrityError:
+        logger.warning("Enrollment multi refusé : téléphone ou email déjà utilisé.")
+        return _err("Un compte avec ce téléphone ou cet email existe déjà.", 409)
     except Exception:
         logger.exception("Échec persist enrollment multi-images")
-        return {"error": "Erreur lors de la sauvegarde — voir logs."}
+        return _err("Erreur lors de la sauvegarde — voir logs.", 500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -366,8 +400,11 @@ def _gallery_version(session: Session) -> str:
     blacklisted = session.execute(
         select(func.count(People.id)).where(People.is_blacklisted == True)  # noqa: E712
     ).scalar() or 0
+    # Compte des vecteurs : change aussi quand on ajoute des embeddings à une
+    # personne existante (multi-vecteurs), pas seulement à la création d'une personne.
+    n_emb = session.execute(select(func.count(PersonEmbedding.id))).scalar() or 0
     last_created = session.execute(select(func.max(People.created_at))).scalar()
-    return f"{total}:{blacklisted}:{last_created.isoformat() if last_created else '0'}"
+    return f"{total}:{n_emb}:{blacklisted}:{last_created.isoformat() if last_created else '0'}"
 
 
 @router.get("/embeddings/version")
@@ -380,25 +417,33 @@ def embeddings_version(_current_user=Depends(require_viewer)):
 
 @router.get("/embeddings/")
 def list_embeddings(_current_user=Depends(require_viewer)):
-    """Galerie complète (id + nom + embedding 512D + statut blacklist) pour la
-    construction de l'index FAISS local du Core. Appelé rarement (démarrage +
-    réconciliation), jamais sur le chemin chaud de reconnaissance."""
+    """Galerie complète pour la construction de l'index FAISS local du Core.
+
+    Multi-vecteurs : UNE entrée par vecteur (table person_embeddings), portant le
+    `id` de la PERSONNE (donc potentiellement répété). Le Core regroupe ensuite par
+    `id` en max-cosine (cf. core/face_index.py), à l'identique du backend. Appelé
+    rarement (démarrage + réconciliation), jamais sur le chemin chaud."""
     with Session(engine) as session:
-        people = session.execute(
-            select(People).where(People.embeddings.is_not(None))
-        ).scalars().all()
+        rows = session.execute(
+            select(
+                People.id, People.first_name, People.last_name,
+                People.is_blacklisted, People.blacklist_reason,
+                People.phone, People.email, People.image_url,
+                PersonEmbedding.embedding,
+            ).join(PersonEmbedding, PersonEmbedding.person_id == People.id)
+        ).all()
         items = [
             {
-                "id": p.id,
-                "name": f"{p.first_name} {p.last_name}",
-                "embedding": np.asarray(p.embeddings, dtype=float).tolist(),
-                "is_blacklisted": bool(getattr(p, "is_blacklisted", False)),
-                "blacklist_reason": getattr(p, "blacklist_reason", None),
-                "phone": p.phone,
-                "email": p.email,
-                "image_url": p.image_url,
+                "id": r[0],
+                "name": f"{r[1]} {r[2]}",
+                "is_blacklisted": bool(r[3]),
+                "blacklist_reason": r[4],
+                "phone": r[5],
+                "email": r[6],
+                "image_url": r[7],
+                "embedding": np.asarray(r[8], dtype=float).tolist(),
             }
-            for p in people
+            for r in rows
         ]
         version = _gallery_version(session)
     return {"version": version, "count": len(items), "people": items}

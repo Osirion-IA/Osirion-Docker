@@ -4,14 +4,24 @@ import threading
 import logging
 from sqlmodel import Session, select
 from app.database import engine
-from app.models.people import People
+from app.models.people import People, PersonEmbedding
 
 logger = logging.getLogger(__name__)
 
 d = 512
 index = None
+# Position FAISS → person_id (People.id). MULTI-VECTEURS : plusieurs positions
+# peuvent pointer vers le MÊME person_id (un visage par angle/éclairage).
 faiss_to_db_id: dict = {}
 _index_lock = threading.Lock()
+
+# Sur-échantillonnage pour le max-cosine : comme une personne possède désormais
+# plusieurs vecteurs, on récupère beaucoup plus de voisins que de personnes
+# voulues, puis on regroupe par person_id en gardant le MAX. Facteur large +
+# plancher pour que le top-k de PERSONNES soit fiable même si une personne
+# « monopolise » les premiers voisins.
+_POOL_OVERFETCH_FACTOR = 10
+_POOL_OVERFETCH_MIN = 50
 
 # Métrique : Inner Product sur vecteurs L2-normalisés = similarité cosinus ∈ [0, 1]
 # Avantage vs IndexFlatL2 : score direct sans conversion non-linéaire, range utile [0.05–0.95]
@@ -29,16 +39,18 @@ def build_or_reload_faiss_index() -> None:
 
     with _index_lock:
         with Session(engine) as session:
-            people = session.exec(
-                select(People.id, People.embeddings)
-                .where(People.embeddings.is_not(None))
+            # MULTI-VECTEURS : on charge toutes les lignes person_embeddings ;
+            # `ids` contient le person_id (répété) aligné sur chaque vecteur.
+            rows = session.exec(
+                select(PersonEmbedding.person_id, PersonEmbedding.embedding)
+                .where(PersonEmbedding.embedding.is_not(None))
             ).all()
 
-        if not people:
+        if not rows:
             logger.info("Aucun embedding en base — index FAISS non construit.")
             return
 
-        ids, embeddings = zip(*people)
+        ids, embeddings = zip(*rows)
         xb = np.array(embeddings, dtype='float32')
         n_vectors = len(xb)
 
@@ -122,6 +134,12 @@ def add_person_to_index(person_id: int, embedding: list) -> None:
 
 
 def search_similar_people(embedding: list, k: int = 1) -> list:
+    """Recherche max-cosine PAR PERSONNE.
+
+    Multi-vecteurs : une personne a plusieurs vecteurs dans l'index. On sur-échantillonne
+    les voisins FAISS, on regroupe par person_id en gardant le score MAXIMUM (la pose
+    la plus ressemblante décide), puis on renvoie les `k` MEILLEURES personnes —
+    jamais la même personne deux fois. Le format de sortie est inchangé."""
     global index, faiss_to_db_id
 
     if index is None or index.ntotal == 0:
@@ -130,42 +148,60 @@ def search_similar_people(embedding: list, k: int = 1) -> list:
     query = np.array([embedding], dtype='float32')
     _normalize(query)  # normalisation obligatoire — IndexFlatIP retourne cosine seulement si norme=1
 
+    # On récupère bien plus de voisins que de personnes voulues : plusieurs des
+    # premiers voisins peuvent appartenir à la même personne.
+    fetch_k = min(max(k * _POOL_OVERFETCH_FACTOR, _POOL_OVERFETCH_MIN), index.ntotal)
+
     if hasattr(index, 'nprobe'):
-        index.nprobe = 8 if k == 1 else 32
+        # nprobe relevé : le sur-échantillonnage doit explorer assez de cellules IVF
+        # pour ne pas rater la meilleure pose d'une personne.
+        index.nprobe = 32
 
-    effective_k = min(k, index.ntotal)
-    D, I = index.search(query, effective_k)
+    D, I = index.search(query, fetch_k)
 
-    # D[0] contient des similarités cosinus ∈ [−1, 1] (typiquement [0, 1] pour ArcFace)
-    # Pas de conversion non-linéaire — le score IS la similarité cosinus
+    # D[0] = similarités cosinus ∈ [−1, 1] (typiquement [0, 1] pour ArcFace).
     logger.debug(
-        f"FAISS search : top-{effective_k} scores bruts = "
+        f"FAISS search : top-{fetch_k} scores bruts = "
         f"{[round(float(s), 4) for s in D[0]]}"
     )
 
+    # ── Pooling max-cosine : person_id → meilleur score observé ──
+    best_by_person: dict[int, float] = {}
+    for cosine_sim, idx in zip(D[0], I[0]):
+        if idx == -1:
+            continue
+        person_id = faiss_to_db_id.get(int(idx))
+        if person_id is None:
+            continue
+        score = max(0.0, float(cosine_sim))  # clamp négatifs (jamais pour ArcFace normal)
+        if score > best_by_person.get(person_id, -1.0):
+            best_by_person[person_id] = score
+
+    if not best_by_person:
+        return []
+
+    # Top-k PERSONNES par score décroissant.
+    top_people = sorted(best_by_person.items(), key=lambda kv: kv[1], reverse=True)[:k]
+
     results = []
     with Session(engine) as session:
-        for cosine_sim, idx in zip(D[0], I[0]):
-            if idx == -1:
+        for person_id, score in top_people:
+            person = session.get(People, person_id)
+            if not person:
                 continue
-            db_id = faiss_to_db_id.get(int(idx))
-            if db_id is None:
-                continue
-            person = session.get(People, db_id)
-            if person:
-                score = round(max(0.0, float(cosine_sim)), 4)  # clamp négatifs (jamais pour ArcFace normal)
-                results.append({
-                    "id": person.id,
-                    "name": f"{person.first_name} {person.last_name}",
-                    "phone": person.phone,
-                    "email": person.email,
-                    "image_url": person.image_url,
-                    # Statut liste de surveillance — consommé par le Core pour
-                    # déclencher l'alerte (overlay rouge + toast/son).
-                    "is_blacklisted": bool(getattr(person, "is_blacklisted", False)),
-                    "blacklist_reason": getattr(person, "blacklist_reason", None),
-                    "cosine_similarity": score,  # renommé pour clarté sémantique
-                    "score": score,              # conservé pour rétrocompatibilité API
-                })
+            score = round(score, 4)
+            results.append({
+                "id": person.id,
+                "name": f"{person.first_name} {person.last_name}",
+                "phone": person.phone,
+                "email": person.email,
+                "image_url": person.image_url,
+                # Statut liste de surveillance — consommé par le Core pour
+                # déclencher l'alerte (overlay rouge + toast/son).
+                "is_blacklisted": bool(getattr(person, "is_blacklisted", False)),
+                "blacklist_reason": getattr(person, "blacklist_reason", None),
+                "cosine_similarity": score,  # renommé pour clarté sémantique
+                "score": score,              # conservé pour rétrocompatibilité API
+            })
 
     return results

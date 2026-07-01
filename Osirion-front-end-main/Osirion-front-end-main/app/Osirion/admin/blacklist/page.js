@@ -20,7 +20,8 @@ const EMPTY_FORM = {
 
 function AddPersonModal({ onClose, onSuccess }) {
   const [form, setForm] = useState(EMPTY_FORM);
-  const [preview, setPreview] = useState(null);
+  const [images, setImages] = useState([]);      // plusieurs photos (multi-vecteurs)
+  const [previews, setPreviews] = useState([]);  // URLs d'aperçu alignées sur images
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const fileRef = useRef();
@@ -30,18 +31,32 @@ function AddPersonModal({ onClose, onSuccess }) {
   };
 
   const handleFile = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setForm((prev) => ({ ...prev, image_url: file }));
-    setPreview(URL.createObjectURL(file));
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    setError("");
+    const room = Math.max(0, 5 - images.length);   // le backend accepte 5 photos max
+    const accepted = files.slice(0, room);
+    if (files.length > room) setError("Maximum 5 photos par personne.");
+    e.target.value = ""; // permet de re-sélectionner le même fichier
+    if (!accepted.length) return;
+    setImages((prev) => [...prev, ...accepted]);
+    setPreviews((prev) => [...prev, ...accepted.map((f) => URL.createObjectURL(f))]);
+  };
+
+  const removeImage = (idx) => {
+    setImages((prev) => prev.filter((_, i) => i !== idx));
+    setPreviews((prev) => {
+      URL.revokeObjectURL(prev[idx]);
+      return prev.filter((_, i) => i !== idx);
+    });
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
 
-    if (!form.image_url) {
-      setError("Veuillez sélectionner une photo.");
+    if (!images.length) {
+      setError("Veuillez sélectionner au moins une photo.");
       return;
     }
 
@@ -53,14 +68,22 @@ function AddPersonModal({ onClose, onSuccess }) {
       fd.append("phone", form.phone.trim());
       fd.append("email", form.email.trim());
       fd.append("addresse", form.addresse.trim());
-      fd.append("image_url", form.image_url);
+      // 1 photo → endpoint mono (augmentation auto) ; ≥2 → endpoint multi (un
+      // vecteur par image). Le proxy /api/people route selon le champ envoyé.
+      if (images.length === 1) {
+        fd.append("image_url", images[0]);
+      } else {
+        images.forEach((f) => fd.append("images", f));
+      }
 
       const res = await fetchWithRefresh("/api/people", { method: "POST", body: fd });
       if (!res) return;
 
       const data = await res.json();
-      if (!res.ok) {
-        setError(data?.message || "Erreur lors de l'ajout.");
+      // Échec si statut non-OK OU si le corps contient un champ "error"
+      // (garde-fou : un backend renvoyant 200 + {error} ne doit pas passer pour un succès).
+      if (!res.ok || data?.error) {
+        setError(data?.message || data?.error || "Erreur lors de l'ajout.");
       } else {
         onSuccess(data?.message || "Personne ajoutée avec succès.");
       }
@@ -88,7 +111,7 @@ function AddPersonModal({ onClose, onSuccess }) {
               Ajouter à la blacklist
             </h2>
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-              Une photo nette et frontale est requise pour la reconnaissance faciale
+              Plusieurs photos nettes (face, profils, éclairages variés) améliorent la reconnaissance
             </p>
           </div>
           <button
@@ -103,44 +126,61 @@ function AddPersonModal({ onClose, onSuccess }) {
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="px-6 py-5 space-y-4 max-h-[75vh] overflow-y-auto">
-          {/* Photo Upload */}
+          {/* Photos Upload (multi) */}
           <div>
             <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-2">
-              Photo <span className="text-red-500">*</span>
+              Photos <span className="text-red-500">*</span>
+              <span className="ml-1 normal-case font-normal text-gray-400">— plusieurs angles/éclairages = reconnaissance plus robuste</span>
             </label>
+
+            {/* Aperçus des photos sélectionnées */}
+            {previews.length > 0 && (
+              <div className="grid grid-cols-3 gap-2 mb-2">
+                {previews.map((src, idx) => (
+                  <div key={idx} className="relative group h-24 rounded-xl overflow-hidden border border-gray-200 dark:border-gray-700">
+                    <img src={src} alt={`Aperçu ${idx + 1}`} className="w-full h-full object-cover" />
+                    <button
+                      type="button"
+                      onClick={() => removeImage(idx)}
+                      className="absolute top-1 right-1 h-6 w-6 rounded-full bg-black/60 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                      title="Retirer cette photo"
+                    >
+                      <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 6L6 18M6 6l12 12" /></svg>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Zone d'ajout (toujours visible → on peut ajouter plusieurs photos) */}
             <div
               onClick={() => fileRef.current?.click()}
-              className="relative flex flex-col items-center justify-center h-36 rounded-xl border-2 border-dashed border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 cursor-pointer hover:border-blue-400 dark:hover:border-blue-500 transition-colors overflow-hidden"
+              className="relative flex flex-col items-center justify-center h-28 rounded-xl border-2 border-dashed border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 cursor-pointer hover:border-blue-400 dark:hover:border-blue-500 transition-colors"
             >
-              {preview ? (
-                <img src={preview} alt="Aperçu" className="w-full h-full object-cover" />
-              ) : (
-                <div className="flex flex-col items-center gap-2 text-gray-400 dark:text-gray-500">
-                  <svg className="h-10 w-10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                    <rect x="3" y="3" width="18" height="18" rx="2" />
-                    <circle cx="8.5" cy="8.5" r="1.5" />
-                    <path d="m21 15-5-5L5 21" />
-                  </svg>
-                  <span className="text-sm font-medium">Cliquer pour choisir une photo</span>
-                  <span className="text-xs">JPG, PNG — photo frontale recommandée</span>
-                </div>
-              )}
+              <div className="flex flex-col items-center gap-2 text-gray-400 dark:text-gray-500">
+                <svg className="h-9 w-9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <rect x="3" y="3" width="18" height="18" rx="2" />
+                  <circle cx="8.5" cy="8.5" r="1.5" />
+                  <path d="m21 15-5-5L5 21" />
+                </svg>
+                <span className="text-sm font-medium">
+                  {previews.length ? "Ajouter d'autres photos" : "Cliquer pour choisir des photos"}
+                </span>
+                <span className="text-xs">JPG, PNG — sélection multiple possible</span>
+              </div>
             </div>
             <input
               ref={fileRef}
               type="file"
+              multiple
               accept="image/jpeg,image/png,image/webp"
               className="hidden"
               onChange={handleFile}
             />
-            {preview && (
-              <button
-                type="button"
-                onClick={() => { setPreview(null); setForm((p) => ({ ...p, image_url: null })); fileRef.current.value = ""; }}
-                className="mt-1.5 text-xs text-red-500 hover:text-red-700 dark:hover:text-red-400"
-              >
-                Supprimer la photo
-              </button>
+            {previews.length > 0 && (
+              <p className="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                {previews.length} photo(s) sélectionnée(s)
+              </p>
             )}
           </div>
 

@@ -30,6 +30,11 @@ logger = get_logger(__name__)
 
 _DIM = 512
 
+# Sur-échantillonnage pour le max-cosine par personne (galerie multi-vecteurs :
+# plusieurs lignes partagent le même `id` de personne). Identique au backend.
+_POOL_OVERFETCH_FACTOR = 10
+_POOL_OVERFETCH_MIN = 50
+
 # État global protégé par _lock (réentrant : _build appelé sous chargement).
 _lock = threading.RLock()
 _index = None          # faiss.IndexFlatIP | None
@@ -150,9 +155,13 @@ def is_ready() -> bool:
 
 
 def search(embedding, k: int = 1):
-    """Recherche locale. Retourne une liste (éventuellement vide) au MÊME format
-    que le backend, ou None pour signaler « index indisponible → repli HTTP ».
-    """
+    """Recherche locale max-cosine PAR PERSONNE. Retourne une liste (éventuellement
+    vide) au MÊME format que le backend, ou None pour signaler « index indisponible
+    → repli HTTP ».
+
+    Multi-vecteurs : plusieurs entrées FAISS partagent le même `id` de personne. On
+    sur-échantillonne les voisins puis on regroupe par `id` en gardant le score MAX,
+    et on renvoie les `k` meilleures personnes (jamais de doublon de personne)."""
     if not is_ready() or embedding is None:
         return None
     try:
@@ -161,20 +170,32 @@ def search(embedding, k: int = 1):
         with _lock:
             if _index is None or _index.ntotal == 0:
                 return []
-            effective_k = min(k, _index.ntotal)
-            distances, indices = _index.search(query, effective_k)
-            results = []
+            fetch_k = min(
+                max(k * _POOL_OVERFETCH_FACTOR, _POOL_OVERFETCH_MIN),
+                _index.ntotal,
+            )
+            distances, indices = _index.search(query, fetch_k)
+            # Pooling : id de personne → (meilleur score, meta de cette pose).
+            best: dict = {}
             for cosine_sim, idx in zip(distances[0], indices[0]):
                 if idx == -1:
                     continue
                 meta = _meta[idx]
-                score = round(max(0.0, float(cosine_sim)), 4)
-                results.append({
-                    **meta,
-                    "cosine_similarity": score,  # cohérent avec le backend
-                    "score": score,
-                })
-            return results
+                pid = meta.get("id")
+                score = max(0.0, float(cosine_sim))
+                if pid not in best or score > best[pid][0]:
+                    best[pid] = (score, meta)
+
+        top = sorted(best.values(), key=lambda sm: sm[0], reverse=True)[:k]
+        results = []
+        for score, meta in top:
+            s = round(score, 4)
+            results.append({
+                **meta,
+                "cosine_similarity": s,  # cohérent avec le backend
+                "score": s,
+            })
+        return results
     except Exception as exc:
         # Toute erreur locale → None pour forcer le repli HTTP (jamais de crash).
         logger.warning(f"[face_index] recherche locale en échec — repli HTTP : {exc}")

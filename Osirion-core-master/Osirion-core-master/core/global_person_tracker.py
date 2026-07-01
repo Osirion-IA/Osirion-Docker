@@ -64,7 +64,8 @@ class GlobalPersonTracker:
                  data["last_seen_camera"],
                  data["last_seen_time"],
                  data.get("is_blacklisted", False),
-                 data.get("db_id"))
+                 data.get("db_id"),
+                 data.get("recognition_score"))   # score GALERIE de confirmation (≠ auto-similarité cache)
                 for pid, data in self.global_persons.items()
                 if current_time - data["last_seen_time"] <= self.cache_ttl_seconds
             ]
@@ -76,7 +77,7 @@ class GlobalPersonTracker:
         #                les deux systèmes (FAISS + GlobalTracker) utilisent maintenant la même échelle
         best_match = None
         if snapshot:
-            pids, cached_embs, names, cameras, times, blacklists, db_ids = zip(*snapshot)
+            pids, cached_embs, names, cameras, times, blacklists, db_ids, gallery_scores = zip(*snapshot)
             matrix = np.stack(cached_embs)                    # (N, 512)
             query_norm = np.linalg.norm(embedding)
             matrix_norms = np.linalg.norm(matrix, axis=1)    # (N,)
@@ -96,7 +97,8 @@ class GlobalPersonTracker:
                 best_match = {
                     "person_id": pids[best_idx],
                     "name": names[best_idx],
-                    "score": best_score,
+                    "score": best_score,                        # auto-similarité (verrouillage cache)
+                    "gallery_score": gallery_scores[best_idx],  # VRAI score galerie (FAISS à la confirmation)
                     "is_blacklisted": bool(blacklists[best_idx]),
                     "db_id": db_ids[best_idx],
                     "previous_camera": cameras[best_idx],
@@ -169,6 +171,9 @@ class GlobalPersonTracker:
                     data["appearance_count"] += 1
                     data["track_history"].append((camera_id, track_id))
                     data["is_blacklisted"] = bool(is_blacklisted)   # rafraîchit le statut
+                    # Rafraîchit le score GALERIE avec la dernière confirmation FAISS
+                    # → l'affichage sur hit de cache reflète un vrai score galerie récent.
+                    data["recognition_score"] = recognition_score
                     if db_id is not None:
                         data["db_id"] = db_id                       # mémorise l'id backend
                     return pid
