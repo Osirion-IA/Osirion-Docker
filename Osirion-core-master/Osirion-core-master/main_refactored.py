@@ -20,6 +20,17 @@ _warnings.filterwarnings("ignore", category=FutureWarning, module="insightface")
 # → échoue hors-ligne (« Temporary failure in name resolution »). On le désactive.
 _os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1")
 
+# ── Bornage des threads CPU (anti sur-souscription) ──────────────────────────
+# Avec N caméras, chaque lib de calcul (OpenCV, PyTorch/OpenMP, BLAS) ouvre par
+# défaut autant de threads que de cœurs → à N caméras, N × cœurs threads qui se
+# disputent le CPU (thrashing) et DÉGRADENT le débit. Le parallélisme utile vient
+# déjà des N threads caméra : on borne donc le parallélisme INTERNE de chaque lib.
+# Surchargeable via OSIRION_CPU_THREADS_PER_LIB (défaut 1). DOIT précéder tout
+# import de numpy/torch/cv2 (ces variables d'env sont lues à l'import).
+_cpu_threads = _os.environ.setdefault("OSIRION_CPU_THREADS_PER_LIB", "1")
+for _var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+    _os.environ.setdefault(_var, _cpu_threads)
+
 import signal
 import sys
 
@@ -45,6 +56,20 @@ def main():
     import time
 
     logger.info("Démarrage d'Osirion-Core...")
+
+    # Bornage du pool interne OpenCV (complète les variables d'env de tête de
+    # module qui bornent torch/BLAS/OpenMP) : évite que chaque thread caméra ouvre
+    # autant de threads OpenCV que de cœurs → sur-souscription CPU à N caméras.
+    try:
+        import cv2
+        _n = int(_os.environ.get("OSIRION_CPU_THREADS_PER_LIB", "1"))
+        cv2.setNumThreads(_n)
+        logger.info(
+            "[perf] threads CPU bornés : OpenCV=%d, OMP/BLAS=%s (anti sur-souscription)",
+            _n, _os.environ.get("OMP_NUM_THREADS"),
+        )
+    except Exception as _e:
+        logger.warning("[perf] bornage des threads CPU impossible : %s", _e)
 
     system = SurveillanceSystem(config=settings)
 

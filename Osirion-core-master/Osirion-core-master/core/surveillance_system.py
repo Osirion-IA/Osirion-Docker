@@ -379,6 +379,7 @@ class SurveillanceSystem:
                         "processed_fps": round(n_face / dt, 2) if dt > 0 else None,
                         "face_ms": snap.get("face_ms"),
                         "lpr_ms": snap.get("lpr_ms"),
+                        "frame_ms": snap.get("frame_ms"),
                         "n_processed": n_face,
                     })
                 try:

@@ -344,7 +344,8 @@ def detect_faces_with_embeddings(
     reste sur le thread appelant.
 
     Returns:
-        frame_annotated: copie de la frame (compat. de signature ; aucun dessin)
+        frame_ref: la frame d'entrée telle quelle (compat. de signature ; AUCUNE
+                   copie, aucun dessin — le seul appelant ignore cette valeur)
         faces: liste de ((x, y, w, h), confidence, embedding_512d, frontality)
                frontality ∈ [0,1] (1=frontal) — exploité par le gate qualité du
                TrackingProcessor pour ignorer les profils extrêmes.
@@ -352,7 +353,10 @@ def detect_faces_with_embeddings(
     if frame is None or frame.size == 0:
         return frame, []
 
-    frame_annotated = frame.copy()
+    # Pas de copie : on renvoyait autrefois frame.copy() pour y dessiner les
+    # annotations, mais l'overlay se fait désormais côté client (WebRTC) et le
+    # SEUL appelant ignore cette valeur (`_, faces_data = ...`). Copier une frame
+    # ~1280×720×3 (~2,6 Mo) à CHAQUE frame traitée × N caméras était du gaspillage.
     h, w = frame.shape[:2]
     faces_out = []
 
@@ -377,4 +381,4 @@ def detect_faces_with_embeddings(
 
         faces_out.append(((x1, y1, x2 - x1, y2 - y1), conf, embedding, frontality))
 
-    return frame_annotated, faces_out
+    return frame, faces_out

@@ -143,6 +143,10 @@ services:
         GPU: "1"
     container_name: osirion-core
     restart: unless-stopped
+    # MediaMTX étant en network_mode: host, le Core (sur le bridge) l'atteint via
+    # la passerelle Docker → mappe host.docker.internal vers host-gateway.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - osirion
     depends_on:
@@ -159,14 +163,20 @@ services:
       # MediaMTX (rtsp://mediamtx:8554/cam<id>) → UNE seule connexion à la caméra
       # physique (MediaMTX), partagée entre l'IA (Core) et la vidéo (WebRTC).
       READ_FROM_MEDIAMTX: "true"
-      MEDIAMTX_RTSP_BASE: mediamtx:8554
-      # API MediaMTX (réseau interne) : le Core y déclare/supprime à chaud 1 chemin
-      # par caméra à partir du rtsp_url backend (cf. services.mediamtx_path_service).
-      MEDIAMTX_API_BASE: http://mediamtx:9997
+      # MediaMTX tourne en network_mode: host (cf. service mediamtx) → on l'atteint
+      # via l'hôte (host.docker.internal = passerelle Docker), plus par le DNS
+      # interne 'mediamtx' qui n'existe plus sur le bridge.
+      MEDIAMTX_RTSP_BASE: host.docker.internal:8554
+      # API MediaMTX : le Core y déclare/supprime à chaud 1 chemin par caméra
+      # (cf. services.mediamtx_path_service).
+      MEDIAMTX_API_BASE: http://host.docker.internal:9997
       AUTH_EMAIL: ${AUTH_EMAIL}
       AUTH_PASSWORD: ${AUTH_PASSWORD}
       FLASK_SECRET_KEY: ${FLASK_SECRET_KEY}
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+      # Mode de sécurité : development (CORS ouvert) | production (CORS strict).
+      OSIRION_ENV: ${OSIRION_ENV:-development}
+      # En dev, laisser vide → toute origine acceptée. En prod, lister les domaines HTTPS.
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_DIR: logs
       CUDA_VISIBLE_DEVICES: "0"
@@ -185,12 +195,13 @@ services:
       # en mettant true ici. Nécessite un modèle YOLO de plaque (PLATE_MODEL_PATH).
       ENABLE_PLATE_RECOGNITION: ${ENABLE_PLATE_RECOGNITION:-false}
       # ── Recherche d'embeddings LOCALE (réplique FAISS dans le Core) ──────────
-      # OPT-IN : false par défaut → comportement actuel (recherche via HTTP backend).
-      # true → recherche FAISS en RAM dans le Core (latence ~0.1 ms vs ~5-15 ms en
-      # HTTP). PostgreSQL reste géré uniquement par le backend ; le Core ne garde
-      # qu'une copie lecture seule, rechargée au démarrage + poll de version.
-      # Repli HTTP automatique si l'index local n'est pas prêt.
-      FAISS_LOCAL: ${FAISS_LOCAL:-false}
+      # Défaut : true → recherche FAISS en RAM dans le Core (latence ~0.1 ms vs
+      # ~5-15 ms en HTTP) + décharge le backend de N requêtes de reconnaissance/s.
+      # Mettre false pour revenir à la recherche via HTTP backend. PostgreSQL reste
+      # géré uniquement par le backend ; le Core ne garde qu'une copie lecture seule,
+      # rechargée au démarrage + poll de version. Repli HTTP automatique si l'index
+      # local n'est pas prêt (aucune régression possible).
+      FAISS_LOCAL: ${FAISS_LOCAL:-true}
       FAISS_LOCAL_RECONCILE_SECONDS: ${FAISS_LOCAL_RECONCILE_SECONDS:-15}
       PLATE_MODEL_PATH: ${PLATE_MODEL_PATH:-license_plate_detector.pt}
       PLATE_SEARCH_THRESHOLD: ${PLATE_SEARCH_THRESHOLD:-0.82}
@@ -261,16 +272,19 @@ services:
     image: bluenviron/mediamtx:latest-ffmpeg
     container_name: osirion-mediamtx
     restart: unless-stopped
-    networks:
-      - osirion
-    ports:
-      - "8554:8554"        # RTSP (ingest / republish)
-      - "8889:8889"        # WebRTC — signalisation HTTP (WHEP / WHIP)
-      - "8189:8189/udp"    # WebRTC — mux ICE UDP (DOIT être publié pour la lecture navigateur)
-      # NB : port 9997 (API) volontairement NON publié → API joignable uniquement
-      # depuis le Core sur le réseau Docker interne.
+    # network_mode: host → MediaMTX se lie DIRECTEMENT aux interfaces de l'hôte.
+    # Indispensable pour le WebRTC : derrière le NAT bridge Docker, l'ICE UDP ne
+    # s'établit pas pour les postes du LAN (« deadline exceeded while waiting
+    # connection ») — le chemin retour est cassé et MediaMTX ne voit pas les vraies
+    # adresses. En réseau hôte, il découvre les vraies IP (dont l'IP LAN) et l'ICE
+    # marche nativement, sans mapping de ports ni webrtcAdditionalHosts.
+    # Ports directement sur l'hôte : 8554 (RTSP), 8889 (WHEP), 8189 (ICE udp+tcp),
+    # 9997 (API — désormais joignable sur le LAN ; à restreindre en production).
+    network_mode: host
     volumes:
       - ./mediamtx.yml:/mediamtx.yml:ro
+      # Logs debug persistants sur l'hôte (capture de repro hors-ligne)
+      - ./logs-mediamtx:/logs
 
   # ---------------------------------------------------------------------------
   # Frontend — Next.js standalone (~200 MB)
@@ -293,6 +307,11 @@ services:
       - "3000:3000"
     environment:
       NODE_ENV: production
+      # Mode de sécurité (pilote le flag Secure des cookies d'auth) :
+      #   development → cookies non-Secure (HTTP LAN OK)  |  production → Secure (HTTPS).
+      OSIRION_ENV: ${OSIRION_ENV:-development}
+      # Override optionnel : COOKIE_SECURE=true|false force le flag ; vide → suit OSIRION_ENV.
+      COOKIE_SECURE: ${COOKIE_SECURE:-}
       # URL interne (server-side Next.js → backend dans Docker)
       BACKEND_URL: http://backend:8000
       NEXT_PUBLIC_BASE_BACKEND_URL: http://backend:8000

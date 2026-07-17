@@ -21,8 +21,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import io from "socket.io-client";
-
-const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:5000";
+import { SOCKET_URL } from "../../lib/publicUrls";
 const COOLDOWN_MS = 20000;   // anti-spam : même piste re-alertée au plus toutes les 20 s
 const MAX_TOASTS = 4;
 const TOAST_TTL = 9000;

@@ -308,25 +308,37 @@ JPEG_QUALITY = 85                 # Qualité JPEG pour le streaming (50-100)
 # Secret Flask pour signer les sessions (CRITIQUE : NE JAMAIS hardcoder)
 FLASK_SECRET_KEY = os.getenv('FLASK_SECRET_KEY', secrets.token_hex(32))
 
-# CORS : origines autorisées pour les connexions WebSocket.
-# En production : définir CORS_ALLOWED_ORIGINS dans .env avec les IPs/domaines exacts.
-# Format : "http://192.168.1.10:3000,https://dashboard.example.com"
-# ⚠️  '*' = wildcard — accepté UNIQUEMENT en développement local.
-#     En production vidéosurveillance, le wildcard permet à n'importe quel
-#     navigateur de se connecter au flux — risque de leak vidéo.
-_cors_raw = os.getenv('CORS_ALLOWED_ORIGINS', '')
-if not _cors_raw or _cors_raw.strip() == '*':
-    import warnings
-    if not os.getenv('OSIRION_DEV_MODE'):
-        warnings.warn(
-            "CORS_ALLOWED_ORIGINS non défini ou '*' — "
-            "restreindre aux origines connues en production "
-            "(définir CORS_ALLOWED_ORIGINS dans .env).",
-            stacklevel=1
+# Mode d'exécution — pilote toute la posture de sécurité (CORS ici, cookies côté
+# frontend). OSIRION_ENV = 'development' (défaut) | 'production'.
+#   • development : sécurité relâchée pour le travail/démo en HTTP sur le LAN.
+#     CORS ouvert à TOUTE origine — engineio ET Flask-CORS reflètent l'en-tête
+#     Origin dans Access-Control-Allow-Origin (jamais '*' littéral), donc reste
+#     compatible avec withCredentials. Un poste distant se connecte sans config.
+#   • production : sécurité stricte — CORS limité aux origines explicites de
+#     CORS_ALLOWED_ORIGINS (OBLIGATOIRE, wildcard interdit → risque de fuite vidéo).
+ENV = os.getenv('OSIRION_ENV', 'development').strip().lower()
+IS_PRODUCTION = ENV == 'production'
+
+# Format CORS_ALLOWED_ORIGINS : "https://vms.example.com,https://autre.example.com"
+_cors_raw = os.getenv('CORS_ALLOWED_ORIGINS', '').strip()
+
+if IS_PRODUCTION:
+    # Strict : origines explicites obligatoires, jamais de wildcard.
+    _origins = [o.strip() for o in _cors_raw.split(',')
+                if o.strip() and o.strip() != '*']
+    if not _origins:
+        raise RuntimeError(
+            "OSIRION_ENV=production exige CORS_ALLOWED_ORIGINS avec des origines "
+            "explicites (ex. https://vms.example.com). Le wildcard '*' est interdit "
+            "en production (risque de fuite vidéo)."
         )
-    CORS_ALLOWED_ORIGINS = ['*']   # dev fallback explicite
-else:
+    CORS_ALLOWED_ORIGINS = _origins
+elif _cors_raw and _cors_raw != '*':
+    # Dev avec liste explicite fournie → on la respecte (test du strict en local).
     CORS_ALLOWED_ORIGINS = [o.strip() for o in _cors_raw.split(',') if o.strip()]
+else:
+    # Dev sans liste → toute origine (reflétée → compatible credentials).
+    CORS_ALLOWED_ORIGINS = ['*']
 
 # ----------------------
 # Configuration du logging

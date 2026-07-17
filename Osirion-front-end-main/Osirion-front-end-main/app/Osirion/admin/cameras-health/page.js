@@ -13,8 +13,8 @@ import { useState, useEffect, useRef } from "react";
 import AdminSidebar from "../AdminSidebar";
 import AdminTopBar from "../AdminTopBar";
 import { useAuth } from "../AuthContext";
+import { CORE_URL } from "../../../lib/publicUrls";
 
-const CORE_URL = process.env.NEXT_PUBLIC_CORE_URL || "http://localhost:5000";
 const POLL_MS = 2000;
 const MAX_POINTS = 30;       // ~1 min d'historique FPS à 2 s/échantillon
 const FPS_SCALE = 30;        // échelle haute de la sparkline (fps)

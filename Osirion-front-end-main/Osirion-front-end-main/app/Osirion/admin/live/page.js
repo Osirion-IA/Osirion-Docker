@@ -6,8 +6,7 @@ import AdminSidebar from "../AdminSidebar";
 import AdminTopBar from "../AdminTopBar";
 import { useAuth } from "../AuthContext";
 import CameraStream from "./CameraStream";
-
-const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:5000";
+import { SOCKET_URL } from "../../../lib/publicUrls";
 
 export default function LiveStreamingPage() {
   const [isCollapsed, setIsCollapsed] = useState(false);

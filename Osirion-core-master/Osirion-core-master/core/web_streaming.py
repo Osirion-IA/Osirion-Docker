@@ -50,9 +50,13 @@ class WebStreamingServer:
         cors_origins = surveillance_system.config.CORS_ALLOWED_ORIGINS
         self.socketio = SocketIO(self.app, cors_allowed_origins=cors_origins, async_mode='threading')
 
-        # CORS sur les routes REST /api/* (toggle LPR appelé par le navigateur)
+        # CORS sur les routes REST /api/* (toggle LPR appelé par le navigateur).
+        # supports_credentials=True → Flask-CORS reflète l'Origin autorisée au lieu
+        # d'un '*' littéral (cohérent avec le Socket.IO, robuste si un fetch envoie
+        # des credentials).
         if _HAS_CORS:
-            CORS(self.app, resources={r"/api/*": {"origins": cors_origins}})
+            CORS(self.app, resources={r"/api/*": {"origins": cors_origins}},
+                 supports_credentials=True)
 
         # {session_id: camera_id}  — caméra regardée par chaque client
         self.active_streams = {}

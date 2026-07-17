@@ -1,10 +1,11 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+// CORE_URL dérivé de l'hôte d'accès (cf. lib/publicUrls) → OK depuis tout poste.
+import { CORE_URL } from "../../../lib/publicUrls";
 
 // Le GPU est sur le Core (moteur de surveillance). On interroge son endpoint
 // /api/gpu (CORS activé) directement depuis le navigateur, comme le toggle LPR.
-const CORE_URL = process.env.NEXT_PUBLIC_CORE_URL || "http://localhost:5000";
 const MAX_POINTS = 30;   // ~1 min d'historique à 2 s/échantillon
 const POLL_MS = 2000;
 

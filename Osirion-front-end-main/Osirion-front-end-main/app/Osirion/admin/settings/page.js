@@ -6,6 +6,7 @@ import AdminTopBar from "../AdminTopBar";
 import { useAuth } from "../AuthContext";
 import { AccessDenied } from "../RoleGuard";
 import { Settings, Shield, Target, Car, AlertTriangle, CheckCircle2, Save, RotateCcw, User } from "lucide-react";
+import { CORE_URL } from "../../../lib/publicUrls";
 
 // Paramètres persistés localement (Général + Sécurité). On NE persiste PAS ici
 // les toggles de Détection : le Core en est la source de vérité (lus/poussés via
@@ -37,8 +38,7 @@ export default function SettingsPage() {
     setHasUnsavedChanges(true);
   };
 
-  // URL publique du Core (moteur de surveillance) — expose l'API LPR / visage inconnu.
-  const CORE_URL = process.env.NEXT_PUBLIC_CORE_URL || "http://localhost:5000";
+  // CORE_URL (API LPR / visage inconnu) dérivé de l'hôte d'accès — cf. lib/publicUrls.
   const [lprAvailable, setLprAvailable] = useState(null);
 
   // Au montage : récupérer l'état RÉEL de la reconnaissance faciale côté Core.

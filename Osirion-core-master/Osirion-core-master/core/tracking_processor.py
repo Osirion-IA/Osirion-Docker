@@ -95,6 +95,7 @@ class TrackingProcessor:
         self._lat_lock = threading.Lock()
         self._face_ms: deque = deque(maxlen=4000)
         self._lpr_ms: deque = deque(maxlen=4000)
+        self._frame_ms: deque = deque(maxlen=4000)   # coût TOTAL par frame traitée
 
         # ── Worker réseau découplé pour la reconnaissance faciale ────────────
         # Le thread caméra ne bloque JAMAIS sur le réseau : il pousse un job
@@ -836,13 +837,16 @@ class TrackingProcessor:
     # ──────────────────────────────────────────────────────────────────────
     # Mesure de latence (chapitre 4) — alimenté par run(), lu par le sampler
     # ──────────────────────────────────────────────────────────────────────
-    def _record_latency(self, face_ms: Optional[float], lpr_ms: Optional[float]) -> None:
+    def _record_latency(self, face_ms: Optional[float], lpr_ms: Optional[float],
+                        frame_ms: Optional[float] = None) -> None:
         """Enregistre la latence d'inférence d'une frame traitée (thread caméra)."""
         with self._lat_lock:
             if face_ms is not None:
                 self._face_ms.append(face_ms)
             if lpr_ms is not None:
                 self._lpr_ms.append(lpr_ms)
+            if frame_ms is not None:
+                self._frame_ms.append(frame_ms)
 
     def latency_snapshot(self, reset: bool = True) -> Dict:
         """Instantané des latences depuis le dernier appel (fenêtre non chevauchante).
@@ -855,9 +859,11 @@ class TrackingProcessor:
         with self._lat_lock:
             face = list(self._face_ms)
             lpr = list(self._lpr_ms)
+            frame = list(self._frame_ms)
             if reset:
                 self._face_ms.clear()
                 self._lpr_ms.clear()
+                self._frame_ms.clear()
 
         def _stats(a):
             if not a:
@@ -872,8 +878,12 @@ class TrackingProcessor:
         return {
             "n_face": len(face),
             "n_lpr": len(lpr),
+            "n_frame": len(frame),
             "face_ms": _stats(face),
             "lpr_ms": _stats(lpr),
+            # Coût TOTAL par frame traitée. overhead CPU ≈ frame_ms − face_ms − lpr_ms
+            # (tracker, gating, build JSON) → permet de trancher GPU-bound vs CPU-bound.
+            "frame_ms": _stats(frame),
         }
 
     def apply_effective_config(self, facial_active: bool, lpr_active: bool) -> None:
@@ -1029,6 +1039,7 @@ class TrackingProcessor:
                 # Mesure (chapitre 4) : latences de cette frame traitée.
                 face_ms: Optional[float] = None
                 lpr_ms: Optional[float] = None
+                _t_frame = time.perf_counter()   # coût total de traitement de la frame
 
                 # ── Pipeline FACIAL — activable/désactivable À CHAUD ──────────────
                 # Désactivé : on saute SCRFD/ArcFace + la reconnaissance (GPU non
@@ -1037,7 +1048,7 @@ class TrackingProcessor:
                 # restent inchangés → couper le facial ne casse rien d'autre.
                 if self._face_recognition_enabled():
                     # Single GPU pass: SCRFD detection + alignment + ArcFace embedding.
-                    # frame_annotated est ignoré : on ne dessine plus (overlay côté client).
+                    # 1re valeur de retour ignorée : on ne dessine plus (overlay côté client).
                     _t_face = time.perf_counter()
                     _, faces_data = detect_faces_with_embeddings(
                         frame, confidence_threshold=self.config.FACE_DETECTION_CONFIDENCE
@@ -1161,7 +1172,8 @@ class TrackingProcessor:
                 lpr_ms = (time.perf_counter() - _t_lpr) * 1000.0
 
                 # ── Mesure : enregistrer les latences de cette frame traitée ──
-                self._record_latency(face_ms, lpr_ms)
+                frame_ms = (time.perf_counter() - _t_frame) * 1000.0
+                self._record_latency(face_ms, lpr_ms, frame_ms)
 
                 # ── Publier le payload de métadonnées (overlay frontend) ──
                 # Les bbox sont exprimées dans le repère de la frame traitée

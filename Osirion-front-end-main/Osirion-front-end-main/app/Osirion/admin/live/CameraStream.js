@@ -1,10 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import io from 'socket.io-client';
-
-// Socket.IO du Core : reçoit les métadonnées (bounding boxes JSON).
-const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:5000";
-// MediaMTX : vidéo WebRTC (WHEP). Le navigateur décode en natif (accéléré GPU).
-const MEDIAMTX_URL = process.env.NEXT_PUBLIC_MEDIAMTX_URL || "http://localhost:8889";
+// SOCKET_URL (Core) et MEDIAMTX_URL (vidéo WHEP) dérivés de l'hôte d'accès
+// (cf. lib/publicUrls) → la vidéo + l'overlay marchent depuis tout poste du LAN.
+import { SOCKET_URL, MEDIAMTX_URL } from "../../../lib/publicUrls";
 
 // Couleur d'overlay (CSS). Visages : vert=reconnu / rouge=inconnu.
 // Plaques : rouge=blacklist / cyan=connue / ambre=simplement détectée.
