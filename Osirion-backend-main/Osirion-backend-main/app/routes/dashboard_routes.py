@@ -14,7 +14,6 @@ import logging
 from app.database import get_session
 from app.models.events import Event
 from app.models.people import People
-from app.models.vehicles import Vehicle
 from app.models.cameras import Camera
 from app.models.alerts import Alert, ALERT_NEW
 from app.middleware.auth_middleware import require_viewer
@@ -41,8 +40,6 @@ def dashboard(
     counts = {
         "people": _count(session, People),
         "people_blacklisted": _count(session, People, People.is_blacklisted == True),  # noqa: E712
-        "vehicles": _count(session, Vehicle),
-        "vehicles_blacklisted": _count(session, Vehicle, Vehicle.is_blacklisted == True),  # noqa: E712
         "cameras": _count(session, Camera),
         "events_total": _count(session, Event),
         "alerts_total": _count(session, Alert),

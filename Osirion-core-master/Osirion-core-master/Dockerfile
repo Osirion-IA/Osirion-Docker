@@ -133,12 +133,8 @@ COPY services/          ./services/
 COPY utils/             ./utils/
 COPY templates/         ./templates/
 COPY face_detection.py  .
-COPY plate_detection.py .
 COPY main_refactored.py .
 COPY yolov11n-face.pt   .
-# Modèle YOLO de détection de plaque (LPR/ANPR).
-# Le module plaques se désactive proprement si le modèle est absent.
-COPY license_plate_detector.pt .
 
 # Pré-télécharger le pack InsightFace (antelopev2 ≈ 360 MB : SCRFD-10G + glintr100
 # ResNet-100) pour éviter un téléchargement au premier démarrage du conteneur.
@@ -167,11 +163,6 @@ pack=os.getenv('INSIGHTFACE_MODEL_PACK','antelopev2'); \
 app=FaceAnalysis(name=pack, providers=['CPUExecutionProvider'], allowed_modules=['detection','recognition']); \
 app.prepare(ctx_id=-1, det_size=(320,320)); \
 print('InsightFace', pack, 'OK —', list(app.models.keys()))"
-
-# Pré-télécharger les modèles EasyOCR (détecteur CRAFT + recognizer 'en', ~100 MB)
-# pour le module LPR — évite un téléchargement (et un blocage potentiel sans réseau)
-# au premier chargement du pipeline plaques. gpu=False suffit ici (builder sans GPU).
-RUN python -c "import easyocr; easyocr.Reader(['en'], gpu=False); print('EasyOCR prêt')"
 
 RUN mkdir -p logs
 

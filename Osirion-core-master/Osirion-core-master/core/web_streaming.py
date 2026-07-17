@@ -15,7 +15,7 @@ from utils.logger import get_logger
 from utils.measurement import get_measurement
 
 # flask_cors est optionnel : autorise le navigateur (frontend) à appeler les
-# routes REST /api/* du Core (ex. toggle LPR). Sans lui, le toggle même-origine
+# routes REST /api/* du Core (ex. toggle facial). Sans lui, le toggle même-origine
 # fonctionne quand même via le proxy Next.js — donc import non bloquant.
 try:
     from flask_cors import CORS
@@ -50,7 +50,7 @@ class WebStreamingServer:
         cors_origins = surveillance_system.config.CORS_ALLOWED_ORIGINS
         self.socketio = SocketIO(self.app, cors_allowed_origins=cors_origins, async_mode='threading')
 
-        # CORS sur les routes REST /api/* (toggle LPR appelé par le navigateur).
+        # CORS sur les routes REST /api/* (toggles appelés par le navigateur).
         # supports_credentials=True → Flask-CORS reflète l'Origin autorisée au lieu
         # d'un '*' littéral (cohérent avec le Socket.IO, robuste si un fetch envoie
         # des credentials).
@@ -156,28 +156,6 @@ class WebStreamingServer:
                 "uptime": time.time() - getattr(self, 'start_time', time.time())
             })
 
-        # ── LPR / ANPR — état et activation/désactivation à chaud ──────────────
-        @self.app.route('/api/lpr/status')
-        def lpr_status():
-            control = getattr(self.surveillance_system, 'runtime_control', None)
-            enabled = control.lpr_enabled if control else False
-            # `available` sans forcer le chargement des modèles : lu seulement si
-            # le module plate_detection a déjà été importé.
-            mod = sys.modules.get('plate_detection')
-            available = getattr(mod, 'LPR_AVAILABLE', None) if mod else None
-            return jsonify({"lpr_enabled": enabled, "lpr_available": available})
-
-        @self.app.route('/api/lpr/toggle', methods=['POST'])
-        def lpr_toggle():
-            control = getattr(self.surveillance_system, 'runtime_control', None)
-            if control is None:
-                return jsonify({"error": "runtime_control indisponible"}), 503
-            data = request.get_json(silent=True) or {}
-            if 'enabled' not in data:
-                return jsonify({"error": "champ 'enabled' (bool) requis"}), 400
-            new_state = control.set_lpr(bool(data['enabled']))
-            return jsonify({"lpr_enabled": new_state})
-
         # ── Événement « visage non reconnu » — état et activation à chaud ───────
         @self.app.route('/api/unknown-face/status')
         def unknown_face_status():
@@ -247,14 +225,6 @@ class WebStreamingServer:
                 return jsonify({"error": "camera_id (int) requis"}), 400
             get_measurement().set_expected(camera_id, person)
             return jsonify({"ok": True, "camera_id": camera_id, "expected": person or None})
-
-        @self.app.route('/api/measure/plate', methods=['POST'])
-        def measure_plate():
-            """Vérité terrain plaque courante : {plate:str}. plate vide = efface."""
-            data = request.get_json(silent=True) or {}
-            plate = data.get('plate', request.args.get('plate'))
-            get_measurement().set_expected_plate(plate)
-            return jsonify({"ok": True, "expected_plate": plate or None})
 
     def _setup_socketio(self):
         """Configure les événements WebSocket"""

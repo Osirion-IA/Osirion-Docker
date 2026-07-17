@@ -5,14 +5,9 @@ import io from 'socket.io-client';
 import { SOCKET_URL, MEDIAMTX_URL } from "../../../lib/publicUrls";
 
 // Couleur d'overlay (CSS). Visages : vert=reconnu / rouge=inconnu.
-// Plaques : rouge=blacklist / cyan=connue / ambre=simplement détectée.
 function detectionColor(det) {
-    // Alerte (blacklist) prioritaire, quel que soit le type : rouge soutenu.
+    // Alerte (blacklist) prioritaire : rouge soutenu.
     if (det.alert) return '#dc2626';
-    if (det.type === 'plate') {
-        if (det.known) return '#06b6d4';
-        return '#f59e0b';
-    }
     return det.recognized ? '#22c55e' : '#ef4444';
 }
 
@@ -41,9 +36,6 @@ export default function CameraStream({ cameraId, onLatencyUpdate, showStats = tr
     const [status, setStatus] = useState('connecting');
     const [latency, setLatency] = useState(0);
     const [fps, setFps] = useState(0);
-    // Les boxes plaques sont désormais dessinées CÔTÉ CLIENT (overlay canvas).
-    // Ce drapeau ne sert plus qu'au badge + à la légende des couleurs.
-    const [lprActive, setLprActive] = useState(false);
 
     // ── Vidéo WebRTC (WHEP) depuis MediaMTX ──────────────────────────────────
     useEffect(() => {
@@ -201,22 +193,6 @@ export default function CameraStream({ cameraId, onLatencyUpdate, showStats = tr
         };
     }, [cameraId]);
 
-    // Poll léger de l'état LPR du Core (badge + légende). Rafraîchi toutes les 15s.
-    useEffect(() => {
-        let active = true;
-        const fetchLpr = async () => {
-            try {
-                const res = await fetch(`${SOCKET_URL}/api/lpr/status`);
-                if (!res.ok) return;
-                const data = await res.json();
-                if (active) setLprActive(!!data.lpr_enabled);
-            } catch { /* Core injoignable : ignorer */ }
-        };
-        fetchLpr();
-        const id = setInterval(fetchLpr, 15000);
-        return () => { active = false; clearInterval(id); };
-    }, []);
-
     const latencyColor =
         latency === 0 ? 'text-gray-400' :
         latency < 150 ? 'text-emerald-400' :
@@ -260,20 +236,6 @@ export default function CameraStream({ cameraId, onLatencyUpdate, showStats = tr
                             <span className="text-white/50 text-sm font-medium">Signal perdu</span>
                         </>
                     )}
-                </div>
-            )}
-
-            {/* Badge LPR + légende des couleurs de plaques (overlay dessiné côté client) */}
-            {status === 'live' && lprActive && (
-                <div className="absolute top-3 left-3 flex flex-col gap-1">
-                    <div className="px-2 py-0.5 rounded-md bg-black/60 backdrop-blur-sm text-xs font-semibold text-amber-300 flex items-center gap-1">
-                        <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" /> LPR actif
-                    </div>
-                    <div className="px-2 py-1 rounded-md bg-black/50 backdrop-blur-sm text-[10px] text-white/80 leading-tight space-y-0.5">
-                        <div className="flex items-center gap-1"><span className="h-2 w-2 rounded-sm" style={{ background: '#f59e0b' }} /> Plaque détectée</div>
-                        <div className="flex items-center gap-1"><span className="h-2 w-2 rounded-sm" style={{ background: '#06b6d4' }} /> Plaque connue</div>
-                        <div className="flex items-center gap-1"><span className="h-2 w-2 rounded-sm" style={{ background: '#ef4444' }} /> Blacklist (alerte)</div>
-                    </div>
                 </div>
             )}
 

@@ -35,7 +35,7 @@ def _serialize(a: Alert, cam_name: Optional[str]) -> dict:
     return {
         "id": a.id, "kind": a.kind, "label": a.label, "reason": a.reason,
         "camera_id": a.camera_id, "camera_name": cam_name,
-        "person_id": a.person_id, "vehicle_id": a.vehicle_id,
+        "person_id": a.person_id,
         "snapshot_url": a.snapshot_url, "status": a.status,
         "acknowledged_at": a.acknowledged_at, "acknowledged_by": a.acknowledged_by,
         "notified_at": a.notified_at, "notified_channel": a.notified_channel,
@@ -133,7 +133,7 @@ def notify_alert(
     if not alert:
         raise HTTPException(status_code=404, detail="Alerte non trouvée.")
 
-    kind_fr = "Personne" if alert.kind == "person" else "Plaque"
+    kind_fr = "Personne"
     subject = f"[Osirion] Alerte — {kind_fr} blacklisté(e) : {alert.label}"
     body = (
         "Alerte de surveillance Osirion\n\n"

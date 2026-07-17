@@ -2,12 +2,11 @@
 
 /**
  * AlertNotifier — notification globale (toast + son) à la détection d'une
- * PERSONNE blacklistée ou d'une PLAQUE blacklistée.
+ * PERSONNE blacklistée.
  *
  * Source des signaux : flux Socket.IO 'metadata' du Core (le même que l'overlay
  * live), donc AUCUNE modification backend/Core requise :
- *   • plaque blacklistée → détection { type:'plate', alert:true }
- *   • personne blacklistée → détection { type:'face', recognized:true }
+ *   • personne blacklistée → détection { type:'face', alert:true }
  *     (dans cette app, la « blacklist » = la liste des personnes enrôlées
  *      /api/people ; une reconnaissance faciale = un membre de cette liste).
  *
@@ -33,7 +32,6 @@ const Svg = ({ className, children }) => (
        strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">{children}</svg>
 );
 const IconUser = ({ className }) => (<Svg className={className}><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></Svg>);
-const IconCar = ({ className }) => (<Svg className={className}><path d="M5 11l1.5-4.5A2 2 0 0 1 8.4 5h7.2a2 2 0 0 1 1.9 1.5L19 11" /><rect x="3" y="11" width="18" height="6" rx="2" /><circle cx="7.5" cy="17.5" r="1.5" /><circle cx="16.5" cy="17.5" r="1.5" /></Svg>);
 const IconX = ({ className }) => (<Svg className={className}><path d="M18 6 6 18M6 6l12 12" /></Svg>);
 const IconBellOn = ({ className }) => (<Svg className={className}><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.7 21a2 2 0 0 1-3.4 0" /></Svg>);
 const IconBellOff = ({ className }) => (<Svg className={className}><path d="M13.7 21a2 2 0 0 1-3.4 0" /><path d="M18 8a6 6 0 0 0-9.3-5" /><path d="M6 8c0 7-3 9-3 9h13" /><path d="m2 2 20 20" /></Svg>);
@@ -135,11 +133,9 @@ export default function AlertNotifier() {
       }
     }
     for (const det of data.detections) {
-      // On n'alerte QUE sur det.alert === true (vraie blacklist) : plaque
-      // blacklistée OU personne sur liste de surveillance (is_blacklisted).
-      // Une personne simplement reconnue (non blacklistée) ne déclenche RIEN.
+      // On n'alerte QUE sur det.alert === true (personne sur liste de
+      // surveillance). Une personne simplement reconnue ne déclenche RIEN.
       if (!det.alert) continue;
-      const isPlate = det.type === "plate";
 
       const key = `${data.camera_id}|${det.type}|${det.track_id}`;
       const last = cooldownRef.current.get(key) || 0;
@@ -147,12 +143,12 @@ export default function AlertNotifier() {
       cooldownRef.current.set(key, now);
 
       addAlert({
-        kind: isPlate ? "plate" : "person",
+        kind: "person",
         label: (det.label || "")
           .replace(/^⚠\s*/, "")
           .replace(/\s*\[BLACKLIST\]\s*$/i, "")
           .trim()
-          || (isPlate ? "Plaque inconnue" : "Personne"),
+          || "Personne",
         cameraName: cameraNamesRef.current.get(data.camera_id) || `Caméra ${data.camera_id}`,
       });
     }
@@ -206,13 +202,13 @@ export default function AlertNotifier() {
             <div className="h-1 w-full bg-gradient-to-r from-rose-600 to-red-500" />
             <div className="flex items-start gap-3 p-4">
               <div className="shrink-0 h-10 w-10 rounded-xl bg-rose-100 dark:bg-rose-900/40 text-rose-600 dark:text-rose-300 flex items-center justify-center">
-                {a.kind === "plate" ? <IconCar className="h-5 w-5" /> : <IconUser className="h-5 w-5" />}
+                <IconUser className="h-5 w-5" />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <span className="inline-flex h-2 w-2 rounded-full bg-rose-500 animate-pulse" />
                   <p className="text-sm font-bold text-rose-700 dark:text-rose-300 truncate">
-                    {a.kind === "plate" ? "Plaque blacklistée détectée" : "Personne blacklistée détectée"}
+                    Personne blacklistée détectée
                   </p>
                 </div>
                 <p className="mt-1 text-sm font-semibold text-gray-900 dark:text-white truncate">{a.label}</p>

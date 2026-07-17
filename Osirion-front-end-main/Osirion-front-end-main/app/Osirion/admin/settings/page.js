@@ -5,12 +5,12 @@ import AdminSidebar from "../AdminSidebar";
 import AdminTopBar from "../AdminTopBar";
 import { useAuth } from "../AuthContext";
 import { AccessDenied } from "../RoleGuard";
-import { Settings, Shield, Target, Car, AlertTriangle, CheckCircle2, Save, RotateCcw, User } from "lucide-react";
+import { Settings, Shield, Target, AlertTriangle, CheckCircle2, Save, RotateCcw, User } from "lucide-react";
 import { CORE_URL } from "../../../lib/publicUrls";
 
 // Paramètres persistés localement (Général + Sécurité). On NE persiste PAS ici
 // les toggles de Détection : le Core en est la source de vérité (lus/poussés via
-// /api/lpr et /api/unknown-face, appliqués à chaud).
+// /api/face et /api/unknown-face, appliqués à chaud).
 const SETTINGS_STORAGE_KEY = "osirion-settings";
 const PERSIST_KEYS = ["siteName", "sessionTimeout", "passwordMinLength"];
 
@@ -29,7 +29,6 @@ export default function SettingsPage() {
     sessionTimeout: 30,                 // → déconnexion auto après inactivité
     passwordMinLength: 8,               // → création d'utilisateur (longueur min)
     faceRecognition: true,              // → Core (pipeline facial), à chaud — DÉFAUT activé
-    licencePlateRecognition: true,      // → Core (LPR), à chaud
     unknownFaceEvent: false,            // → Core (événement visage non reconnu), à chaud
   });
 
@@ -38,8 +37,7 @@ export default function SettingsPage() {
     setHasUnsavedChanges(true);
   };
 
-  // CORE_URL (API LPR / visage inconnu) dérivé de l'hôte d'accès — cf. lib/publicUrls.
-  const [lprAvailable, setLprAvailable] = useState(null);
+  // CORE_URL (API facial / visage inconnu) dérivé de l'hôte d'accès — cf. lib/publicUrls.
 
   // Au montage : récupérer l'état RÉEL de la reconnaissance faciale côté Core.
   useEffect(() => {
@@ -72,41 +70,6 @@ export default function SettingsPage() {
       }
     } catch {
       console.warn("Face toggle: Core injoignable à", CORE_URL);
-    }
-  };
-
-  // Au montage : récupérer l'état RÉEL du LPR côté Core et l'afficher.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(`${CORE_URL}/api/lpr/status`);
-        if (!res.ok) return;
-        const data = await res.json();
-        if (cancelled) return;
-        setLprAvailable(data.lpr_available);
-        setSettings((prev) => ({ ...prev, licencePlateRecognition: !!data.lpr_enabled }));
-      } catch {
-        // Core injoignable : on laisse l'état local par défaut, sans bloquer la page.
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [CORE_URL]);
-
-  // Active/désactive le pipeline LPR côté Core (toggle Plaques d'immatriculation).
-  const toggleLPR = async (enabled) => {
-    try {
-      const res = await fetch(`${CORE_URL}/api/lpr/toggle`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setSettings((prev) => ({ ...prev, licencePlateRecognition: !!data.lpr_enabled }));
-      }
-    } catch {
-      console.warn("LPR toggle: Core injoignable à", CORE_URL);
     }
   };
 
@@ -413,40 +376,6 @@ export default function SettingsPage() {
                       </label>
                     </div>
 
-                    {/* Plaques (LPR) */}
-                    <div className="flex items-center justify-between p-5 rounded-xl bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700">
-                      <div className="flex items-center gap-3">
-                        <div className="h-10 w-10 rounded-lg bg-gray-700 dark:bg-gray-600 flex items-center justify-center text-white">
-                          <Car className="h-5 w-5" />
-                        </div>
-                        <div>
-                          <div className="text-sm font-bold text-gray-900 dark:text-white">Plaques d&apos;immatriculation</div>
-                          <div className="text-xs text-gray-600 dark:text-gray-400">Lire et identifier les plaques (LPR/ANPR)</div>
-                          {lprAvailable === false && (
-                            <div className="text-[11px] mt-1 text-amber-600 dark:text-amber-400">
-                              ⚠ Modèle de plaque non chargé côté Core
-                            </div>
-                          )}
-                          {lprAvailable === true && (
-                            <div className="text-[11px] mt-1 text-emerald-600 dark:text-emerald-400">
-                              ✓ Module LPR opérationnel
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={settings.licencePlateRecognition}
-                          onChange={(e) => {
-                            setSettings((p) => ({ ...p, licencePlateRecognition: e.target.checked }));
-                            toggleLPR(e.target.checked);
-                          }}
-                          className="sr-only peer"
-                        />
-                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-orange-300 dark:peer-focus:ring-orange-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-orange-600"></div>
-                      </label>
-                    </div>
 
                     {/* Visages non reconnus */}
                     <div className="flex items-center justify-between p-5 rounded-xl bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700">

@@ -27,12 +27,11 @@ const BarChart3 = ({ className }) => (<Svg className={className}><path d="M3 3v1
 const X = ({ className }) => (<Svg className={className}><path d="M18 6 6 18M6 6l12 12" /></Svg>);
 
 // ── Types d'événements : libellé FR + classes de badge ──────────────────────
-// Aligné sur backend app/models/events.py (RECOGNITION, PLATE_RECOGNITION,
-// UNKNOWN_FACE, ENTRY, EXIT, DETECTION).
+// Aligné sur backend app/models/events.py (RECOGNITION, UNKNOWN_FACE,
+// ENTRY, EXIT, DETECTION).
 const EVENT_TYPES = [
   { value: "RECOGNITION",       label: "Reconnaissance", badge: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" },
   { value: "UNKNOWN_FACE",      label: "Visage inconnu", badge: "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300" },
-  { value: "PLATE_RECOGNITION", label: "Plaque",         badge: "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300" },
   { value: "ENTRY",             label: "Entrée",         badge: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" },
   { value: "EXIT",              label: "Sortie",         badge: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300" },
   { value: "DETECTION",         label: "Détection",      badge: "bg-gray-200 text-gray-700 dark:bg-gray-700/50 dark:text-gray-300" },
@@ -41,7 +40,7 @@ const TYPE_LABEL = Object.fromEntries(EVENT_TYPES.map((t) => [t.value, t.label])
 const TYPE_BADGE = Object.fromEntries(EVENT_TYPES.map((t) => [t.value, t.badge]));
 
 // En-têtes de colonnes utilisées dans la table ET dans tous les exports.
-const COLUMNS = ["ID", "Date", "Heure", "Type", "Caméra", "Lieu", "Personne", "Plaque", "Confiance"];
+const COLUMNS = ["ID", "Date", "Heure", "Type", "Caméra", "Lieu", "Personne", "Confiance"];
 
 // ── Helpers de formatage ────────────────────────────────────────────────────
 function fmtDate(ts) {
@@ -63,7 +62,6 @@ function eventToRow(e) {
     e.camera_nom || `CAM-${e.camera_id}`,
     e.camera_location || "—",
     e.person_nom || "—",
-    e.plate_text_detected || "—",
     e.confidence != null ? `${Math.round(e.confidence * 100)}%` : "—",
   ];
 }
@@ -237,7 +235,7 @@ export default function ReportsPage() {
       if (q) {
         const hay = [
           e.event_type, e.camera_nom, e.camera_location,
-          e.person_nom, e.plate_text_detected,
+          e.person_nom,
         ].filter(Boolean).join(" ").toLowerCase();
         if (!hay.includes(q)) return false;
       }
@@ -441,7 +439,7 @@ export default function ReportsPage() {
                       type="text"
                       value={search}
                       onChange={(e) => setSearch(e.target.value)}
-                      placeholder="Personne, plaque, lieu..."
+                      placeholder="Personne, lieu..."
                       className="w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 pl-9 pr-3 py-2 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     />
                   </div>
@@ -494,7 +492,6 @@ export default function ReportsPage() {
                         <th className="px-4 py-3">Caméra</th>
                         <th className="px-4 py-3">Lieu</th>
                         <th className="px-4 py-3">Personne</th>
-                        <th className="px-4 py-3">Plaque</th>
                         <th className="px-4 py-3">Confiance</th>
                       </tr>
                     </thead>
@@ -513,7 +510,6 @@ export default function ReportsPage() {
                           <td className="px-4 py-3 text-gray-700 dark:text-gray-300 whitespace-nowrap">{e.camera_nom || `CAM-${e.camera_id}`}</td>
                           <td className="px-4 py-3 text-gray-500 dark:text-gray-400 whitespace-nowrap">{e.camera_location || "—"}</td>
                           <td className="px-4 py-3 text-gray-700 dark:text-gray-300 whitespace-nowrap">{e.person_nom || "—"}</td>
-                          <td className="px-4 py-3 whitespace-nowrap font-mono text-gray-900 dark:text-white">{e.plate_text_detected || "—"}</td>
                           <td className="px-4 py-3 text-gray-700 dark:text-gray-300">{e.confidence != null ? `${Math.round(e.confidence * 100)}%` : "—"}</td>
                         </tr>
                       ))}

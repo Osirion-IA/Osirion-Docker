@@ -190,10 +190,6 @@ services:
       FACE_TEMPORAL_VOTING: ${FACE_TEMPORAL_VOTING:-true}      # vote identité multi-frames
       FACE_VOTE_MIN_AGREE: ${FACE_VOTE_MIN_AGREE:-2}           # accords requis avant confirmation
       FACE_VOTE_MAX_ATTEMPTS: ${FACE_VOTE_MAX_ATTEMPTS:-5}     # tentatives max avant « Inconnu »
-      # ── LPR / ANPR (reconnaissance de plaques) ──────────────────────────────
-      # OPT-IN : false par défaut. Activable à chaud via le frontend (toggle) ou
-      # en mettant true ici. Nécessite un modèle YOLO de plaque (PLATE_MODEL_PATH).
-      ENABLE_PLATE_RECOGNITION: ${ENABLE_PLATE_RECOGNITION:-false}
       # ── Recherche d'embeddings LOCALE (réplique FAISS dans le Core) ──────────
       # Défaut : true → recherche FAISS en RAM dans le Core (latence ~0.1 ms vs
       # ~5-15 ms en HTTP) + décharge le backend de N requêtes de reconnaissance/s.
@@ -203,22 +199,8 @@ services:
       # local n'est pas prêt (aucune régression possible).
       FAISS_LOCAL: ${FAISS_LOCAL:-true}
       FAISS_LOCAL_RECONCILE_SECONDS: ${FAISS_LOCAL_RECONCILE_SECONDS:-15}
-      PLATE_MODEL_PATH: ${PLATE_MODEL_PATH:-license_plate_detector.pt}
-      PLATE_SEARCH_THRESHOLD: ${PLATE_SEARCH_THRESHOLD:-0.82}
-      # ── Optimisations LPR (latence & précision) — défauts sûrs dans le code ──
-      PLATE_PROCESS_EVERY_N: ${PLATE_PROCESS_EVERY_N:-2}        # détection YOLO 1 frame/2
-      PLATE_TEMPORAL_VOTING: ${PLATE_TEMPORAL_VOTING:-true}     # vote OCR multi-frames
-      PLATE_VOTE_MIN_AGREE: ${PLATE_VOTE_MIN_AGREE:-2}
-      PLATE_PREPROCESS: ${PLATE_PREPROCESS:-true}               # upscale+CLAHE avant OCR
-      PLATE_ILLUMINATION_ROBUST: ${PLATE_ILLUMINATION_ROBUST:-true} # anti forte lumière (glare/surexpo)
-      PLATE_DESKEW: ${PLATE_DESKEW:-false}                      # correction de perspective (agressif)
-      PLATE_YOLO_HALF: ${PLATE_YOLO_HALF:-true}                 # FP16 GPU (repli FP32 auto)
-      PLATE_MIN_CROP_WIDTH: ${PLATE_MIN_CROP_WIDTH:-60}
-      PLATE_MIN_CROP_HEIGHT: ${PLATE_MIN_CROP_HEIGHT:-18}
-      PLATE_CROP_MIN_SHARPNESS: ${PLATE_CROP_MIN_SHARPNESS:-0.0} # 0 = filtre netteté désactivé
-      PLATE_FORMAT_REGEX: ${PLATE_FORMAT_REGEX:-}               # vide = pas de filtre de format
       # ── MESURE (évaluation chapitre 4 du mémoire) ───────────────────────────
-      # Journalise latence/débit/cache/GPU + décisions reco + lectures plaques
+      # Journalise latence/débit/cache/GPU + décisions reco
       # dans /app/measurements/metrics.jsonl (bind mount → ./measurements sur l'hôte),
       # dépouillé hors-ligne par tools/analyze_metrics.py. MEASURE_ENABLED=false → no-op.
       MEASURE_ENABLED: ${MEASURE_ENABLED:-true}
@@ -234,10 +216,7 @@ services:
       - ./Osirion-core-master/Osirion-core-master/utils:/app/utils
       - ./Osirion-core-master/Osirion-core-master/face_detection.py:/app/face_detection.py
       - ./Osirion-core-master/Osirion-core-master/face_detection_new.py:/app/face_detection_new.py
-      - ./Osirion-core-master/Osirion-core-master/plate_detection.py:/app/plate_detection.py
       - ./Osirion-core-master/Osirion-core-master/main_refactored.py:/app/main_refactored.py
-      # Modèle YOLO de plaque (LPR) — montage en lecture seule (évite un rebuild)
-      - ./Osirion-core-master/Osirion-core-master/license_plate_detector.pt:/app/license_plate_detector.pt:ro
       # ── Named volume — logs persistants ────────────────────────────────────
       - core_logs:/app/logs
       # ── Mesure (chapitre 4) — journal metrics.jsonl directement sur l'hôte ──

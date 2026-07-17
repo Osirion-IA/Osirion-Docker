@@ -12,7 +12,6 @@ from app.routes.monitoring_routes import router as monitoring_router
 from app.routes.events_routes import router as events_router
 from app.routes.auth_routes import router as auth_router
 from app.routes.users_routes import router as users_router
-from app.routes.plates_routes import router as plates_router
 from app.routes.alerts_routes import router as alerts_router
 from app.routes.dashboard_routes import router as dashboard_router
 from app.routes.audit_routes import router as audit_router
@@ -85,7 +84,6 @@ app.include_router(auth_router, prefix="/auth", tags=["🔐 Authentication"])
 app.include_router(events_router, prefix="/events", tags=[" Events"])
 app.include_router(users_router, prefix="/users", tags=["👥 Users Management"])
 app.include_router(people_router, prefix="/people", tags=["👤 People"])
-app.include_router(plates_router, prefix="/plates", tags=["🚗 License Plates"])
 app.include_router(alerts_router, prefix="/alerts", tags=["🚨 Alerts"])
 app.include_router(dashboard_router, prefix="/dashboard", tags=["📊 Dashboard"])
 app.include_router(audit_router, prefix="/audit", tags=["📝 Audit"])

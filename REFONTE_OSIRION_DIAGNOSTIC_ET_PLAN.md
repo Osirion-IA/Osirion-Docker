@@ -234,3 +234,49 @@ Puisque l'objectif est produit (et non plus prototype), la Phase A intègre dès
 - **Contrat de plugin Vision** : formaliser l'interface `détecteur → Scene Model` pour que le facial soit « juste un plugin » — rend l'ajout futur de modules (comptage objets, véhicules par couleur…) trivial, et documente proprement le *retrait* du LPR comme désactivation d'un plugin.
 - **Point d'ancrage multi-tenant** : introduire (sans le peupler) la notion d'`organization_id` dans les nouvelles tables (`zone`, `analytics_kpi`, `rule`, `report`) pour ne pas avoir à re-migrer plus tard. Les tables existantes ne sont pas touchées à ce stade.
 
+---
+
+## 10. Mise à jour MAJEURE (2026-07-17, 2ᵉ tour) — retrait AUSSI du facial + recentrage « analytics anonyme »
+
+Après discussion perf/ressources, décision de **retirer également la reconnaissance faciale** et de recentrer le produit sur des cas d'usage **anonymes**.
+
+### 10.1 Nouvelle cible du Vision Engine
+Il ne reste comme IA que **détection de personnes + tracking**. On supprime :
+InsightFace (SCRFD + ArcFace), **onnxruntime-gpu**, **FAISS** (Core + backend), **pgvector** + `person_embeddings` + tout l'enrôlement, EasyOCR + détecteur de plaques.
+→ Vision Engine = **un seul petit modèle YOLO « personne »** (COCO classe 0, `PERSON_MODEL_PATH`, défaut `yolo11n.pt`, FP16, batchable) + OC-SORT. **Scene Model anonyme** : `track_id`, bbox, point au sol, vitesse, direction, zones — **aucune identité**.
+
+**Bénéfices :** sobriété maximale (un modèle léger vs pile multi-modèles) ; robustesse (détection >> reco fragile lumière/angle) ; **RGPD** (aucune biométrie → pas de consentement — argument d'achat banques/hôpitaux).
+
+**Limites assumées :** sous-comptage en foule très dense/occluse (OK pour agences/guichets ; modèle de densité type CSRNet = *futur* si besoin) ; pas d'identité → intrusion = « toute présence », armement par **zone + planning** ; caméras **plongeantes** recommandées.
+
+### 10.2 Fonctionnalités cibles (recentrées)
+1. **Affluence / attroupement** : **seuil d'occupation configurable par zone** (`occupation(zone) ≥ N pendant T s → CROWD_DETECTED`). Ex. guichets d'agence.
+2. **Intrusion horaire** : `présence(zone armée) pendant plage interdite → AFTER_HOURS_PRESENCE`. **Pas de distinction employé/intrus** (confirmé) — armement par planning.
+3. **Capture photo sur événement** : **action de règle générique** (frame pleine + crop de la personne, stockée en événement), déclenchable par n'importe quel type d'événement. Réutilise le stockage snapshot existant.
+4. + comptage E/S, files d'attente, occupation, dwell, courbes d'affluence.
+
+### 10.3 Réponses de cadrage (validées)
+| Question | Réponse |
+|---|---|
+| Distinguer employé / intrus ? | **Non** — toute présence en zone armée hors horaires. |
+| Attroupement = seuil ou densité ? | **Seuil d'occupation configurable** (par zone). |
+| Capture photo = action de règle générique ? | **Oui** (frame + crop, en événement). |
+
+### 10.4 Plan par phases (révisé, encore plus léger)
+| Phase | Contenu |
+|---|---|
+| **A** | Retrait **LPR + facial** (InsightFace/FAISS/pgvector/onnxruntime/easyocr) ; **bascule détection → YOLO-personne** + OC-SORT ; **Scene Model anonyme** typé ; tests golden |
+| **B** | Zones + lignes + **plages horaires/calendrier** (armement) + éditeur visuel |
+| **C** | Event Engine : `ZONE_OCCUPANCY_CHANGED`, `CROWD_DETECTED`, `LINE_CROSSED`, `QUEUE_UPDATED`, `AFTER_HOURS_PRESENCE` |
+| **D** | Analytics : affluence (courbes), comptage E/S, files, occupation, dwell |
+| **E** | Moteur de règles : seuils + fenêtres horaires + **action « capture snapshot + notif »** |
+| **F** | Dashboard opérationnel + reporting auto + notifications |
+| *(perf)* | Passe **inférence batchée** dédiée après C (mesurée avant/après) |
+
+### 10.5 Les 5 règles d'efficacité (contrainte de conception)
+1. Le GPU ne touche chaque frame **qu'une fois** — **batch** dès plusieurs caméras.
+2. Tout après le Scene Model = **CPU hors hot-path** (file async + agrégation background).
+3. Analytics depuis les **tracks (points)**, jamais les pixels.
+4. **Pas de nouveau service ni multi-tenant** tant que non mesuré nécessaire (analytics = module backend au départ).
+5. On persiste des **agrégats**, pas du brut → DB bornée.
+

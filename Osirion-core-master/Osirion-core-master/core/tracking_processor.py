@@ -66,11 +66,8 @@ class TrackingProcessor:
         # sans attendre l'expiration du cache global. Singleton partagé caméras.
         self.blacklist_cache = get_blacklist_cache()
 
-        # ── LPR / ANPR (module plaques, optionnel et indépendant du facial) ──
-        self.runtime_control = runtime_control      # drapeau activable au runtime
-        self._cam = cam                             # mémorisé pour init paresseuse
-        self.plate_processor = None                 # créé à la 1re activation LPR
-        self._lpr_init_failed = False               # évite de réessayer en boucle
+        # Drapeaux activables au runtime (toggles frontend : facial, unknown-face).
+        self.runtime_control = runtime_control
 
         # ── Config EFFECTIVE des modules PAR CAMÉRA (VMS — groupes) ───────────
         # Calculée côté backend (drapeau local ∧ tous les groupes de la caméra),
@@ -79,7 +76,6 @@ class TrackingProcessor:
         # True → aucune régression si le backend ne renvoie pas encore ces champs.
         # Lecture/écriture d'un bool = atomique sous le GIL (pas de verrou requis).
         self._effective_facial_active = bool(cam.get("effective_facial_active", True))
-        self._effective_lpr_active = bool(cam.get("effective_lpr_active", True))
 
         self.frame_counter = 0
         self.loop = None
@@ -88,13 +84,10 @@ class TrackingProcessor:
 
         # ── Mesure (chapitre 4) : latence d'inférence par frame TRAITÉE ──────
         # Accumulateurs vidés à chaque échantillon par le sampler (fenêtre non
-        # chevauchante). face_ms = SCRFD+alignement+ArcFace (1 passe GPU) ;
-        # lpr_ms = coût SYNCHRONE du LPR sur le thread caméra (l'OCR et le réseau
-        # tournent dans des workers → preuve de non-blocage attendue au §4.6).
+        # chevauchante). face_ms = SCRFD+alignement+ArcFace (1 passe GPU).
         self.measure = get_measurement()
         self._lat_lock = threading.Lock()
         self._face_ms: deque = deque(maxlen=4000)
-        self._lpr_ms: deque = deque(maxlen=4000)
         self._frame_ms: deque = deque(maxlen=4000)   # coût TOTAL par frame traitée
 
         # ── Worker réseau découplé pour la reconnaissance faciale ────────────
@@ -104,7 +97,7 @@ class TrackingProcessor:
         # d'événement, puis renvoie les résultats via _recognition_results. Le
         # thread caméra applique ces résultats à person_db (toutes les écritures
         # de person_db restent sur le thread caméra → pas de verrou nécessaire).
-        # Même patron que PlateProcessor (cf. core/plate_processor.py).
+        # Patron worker découplé (file de jobs + thread dédié).
         maxq = getattr(config, 'RECOGNITION_QUEUE_MAXSIZE', 64)
         self._recognition_jobs: "queue.Queue" = queue.Queue(maxsize=maxq)
         self._recognition_results: "queue.Queue" = queue.Queue()
@@ -837,14 +830,12 @@ class TrackingProcessor:
     # ──────────────────────────────────────────────────────────────────────
     # Mesure de latence (chapitre 4) — alimenté par run(), lu par le sampler
     # ──────────────────────────────────────────────────────────────────────
-    def _record_latency(self, face_ms: Optional[float], lpr_ms: Optional[float],
+    def _record_latency(self, face_ms: Optional[float],
                         frame_ms: Optional[float] = None) -> None:
         """Enregistre la latence d'inférence d'une frame traitée (thread caméra)."""
         with self._lat_lock:
             if face_ms is not None:
                 self._face_ms.append(face_ms)
-            if lpr_ms is not None:
-                self._lpr_ms.append(lpr_ms)
             if frame_ms is not None:
                 self._frame_ms.append(frame_ms)
 
@@ -852,17 +843,15 @@ class TrackingProcessor:
         """Instantané des latences depuis le dernier appel (fenêtre non chevauchante).
 
         Retourne le nombre de frames traitées et les p50/p95/moyenne (ms) pour le
-        facial et pour le coût synchrone du LPR. `reset` vide les accumulateurs →
+        facial. `reset` vide les accumulateurs →
         l'échantillon suivant ne couvre que l'intervalle écoulé (le sampler en
         déduit aussi le débit réel : n / durée d'intervalle).
         """
         with self._lat_lock:
             face = list(self._face_ms)
-            lpr = list(self._lpr_ms)
             frame = list(self._frame_ms)
             if reset:
                 self._face_ms.clear()
-                self._lpr_ms.clear()
                 self._frame_ms.clear()
 
         def _stats(a):
@@ -877,17 +866,15 @@ class TrackingProcessor:
 
         return {
             "n_face": len(face),
-            "n_lpr": len(lpr),
             "n_frame": len(frame),
             "face_ms": _stats(face),
-            "lpr_ms": _stats(lpr),
-            # Coût TOTAL par frame traitée. overhead CPU ≈ frame_ms − face_ms − lpr_ms
+            # Coût TOTAL par frame traitée. overhead CPU ≈ frame_ms − face_ms
             # (tracker, gating, build JSON) → permet de trancher GPU-bound vs CPU-bound.
             "frame_ms": _stats(frame),
         }
 
-    def apply_effective_config(self, facial_active: bool, lpr_active: bool) -> None:
-        """Applique À CHAUD la config effective (facial/LPR) de CETTE caméra.
+    def apply_effective_config(self, facial_active: bool) -> None:
+        """Applique À CHAUD la config effective (facial) de CETTE caméra.
 
         Appelée par la boucle de supervision quand la config effective change
         (bascule de groupe ou drapeau local). Ne redémarre PAS le thread : le
@@ -895,33 +882,12 @@ class TrackingProcessor:
         l'étape désactivée, libérant immédiatement les ressources GPU/CPU.
         """
         facial_active = bool(facial_active)
-        lpr_active = bool(lpr_active)
         if facial_active != self._effective_facial_active:
             logger.info(
                 f"[cam={self.cam_name}] pipeline FACIAL "
                 f"{'activé' if facial_active else 'désactivé'} à chaud (config groupe/caméra)."
             )
             self._effective_facial_active = facial_active
-        if lpr_active != self._effective_lpr_active:
-            logger.info(
-                f"[cam={self.cam_name}] pipeline LPR "
-                f"{'activé' if lpr_active else 'désactivé'} à chaud (config groupe/caméra)."
-            )
-            self._effective_lpr_active = lpr_active
-
-    def _lpr_enabled(self) -> bool:
-        """LPR actif pour CETTE caméra ?
-
-        Deux niveaux, combinés en ET : (1) le toggle runtime GLOBAL (système),
-        (2) la config effective PAR CAMÉRA (drapeau local ∧ tous ses groupes).
-        Couper le module au niveau d'un groupe désactive donc le LPR ici même si
-        le système l'autorise globalement.
-        """
-        if not self._effective_lpr_active:
-            return False
-        if self.runtime_control is not None:
-            return self.runtime_control.lpr_enabled
-        return getattr(self.config, 'ENABLE_PLATE_RECOGNITION', False)
 
     def _unknown_face_event_enabled(self) -> bool:
         """Événement « visage non reconnu » actif ? Priorité au drapeau runtime
@@ -943,44 +909,13 @@ class TrackingProcessor:
             return self.runtime_control.face_recognition_enabled
         return getattr(self.config, 'ENABLE_FACE_RECOGNITION', True)
 
-    def _ensure_plate_processor(self):
-        """Crée le PlateProcessor à la 1re activation (chargement modèles paresseux)."""
-        if self.plate_processor is not None or self._lpr_init_failed:
-            return self.plate_processor
-        try:
-            from core.plate_processor import PlateProcessor
-            logger.info(f"[LPR][cam={self.cam_name}] Initialisation du module plaques...")
-            self.plate_processor = PlateProcessor(self._cam, self.config)
-        except Exception as e:
-            self._lpr_init_failed = True
-            logger.error(
-                f"[LPR][cam={self.cam_name}] Init impossible — LPR désactivé pour cette "
-                f"caméra (le pipeline facial continue normalement) : {e}"
-            )
-        return self.plate_processor
-
-    def _collect_plate_detections(self, frame: np.ndarray, frame_idx: int) -> List[Dict]:
-        """Lance le pipeline LPR (détection + OCR, SANS dessin) et renvoie les
-        détections plaques au format JSON pour l'overlay frontend."""
-        if not self._lpr_enabled():
-            return []
-        pp = self._ensure_plate_processor()
-        if pp is None:
-            return []
-        try:
-            pp.process(frame, frame_idx)        # met à jour plate_db (aucun dessin)
-            return pp.get_detections()          # bounding boxes plaques en JSON
-        except Exception as e:
-            logger.error(f"[LPR][cam={self.cam_name}] erreur pipeline plaques : {e}")
-            return []
-
     def run(self):
         """Boucle principale de traitement"""
         # Plus aucune boucle asyncio / session HTTP sur le thread caméra : toute
         # la résolution réseau (recherche FAISS + événement) vit dans le worker
         # dédié ci-dessous, en fire-and-forget. Le thread caméra ne fait que de la
         # vision et la publication de métadonnées JSON (aucun encodage/dessin vidéo).
-        self.loop = None        # conservé pour compat. de signature (LPR l'ignore)
+        self.loop = None        # conservé pour compat. de signature
         self._session = None
         self._recognition_worker = threading.Thread(
             target=self._recognition_loop,
@@ -1032,19 +967,18 @@ class TrackingProcessor:
                             )
                         continue  # pas d'inférence ; l'overlay précédent reste affiché
 
-                # Détections de cette frame (visages + plaques) publiées en JSON.
-                # Déclaré AVANT le gate facial → toujours défini pour le LPR + payload.
+                # Détections de cette frame (visages) publiées en JSON.
+                # Déclaré AVANT le gate facial → toujours défini pour le payload.
                 detections: List[Dict] = []
 
                 # Mesure (chapitre 4) : latences de cette frame traitée.
                 face_ms: Optional[float] = None
-                lpr_ms: Optional[float] = None
                 _t_frame = time.perf_counter()   # coût total de traitement de la frame
 
                 # ── Pipeline FACIAL — activable/désactivable À CHAUD ──────────────
                 # Désactivé : on saute SCRFD/ArcFace + la reconnaissance (GPU non
                 # sollicité pour les visages) et aucune box visage n'est produite.
-                # Le LPR, le blur-gate et la publication des métadonnées (plus bas)
+                # Le blur-gate et la publication des métadonnées (plus bas)
                 # restent inchangés → couper le facial ne casse rien d'autre.
                 if self._face_recognition_enabled():
                     # Single GPU pass: SCRFD detection + alignment + ArcFace embedding.
@@ -1166,14 +1100,9 @@ class TrackingProcessor:
 
                     self.cleanup_cache(frame_idx)
 
-                # ── LPR : détection + lecture des plaques → détections JSON ──
-                _t_lpr = time.perf_counter()
-                detections.extend(self._collect_plate_detections(frame, frame_idx))
-                lpr_ms = (time.perf_counter() - _t_lpr) * 1000.0
-
                 # ── Mesure : enregistrer les latences de cette frame traitée ──
                 frame_ms = (time.perf_counter() - _t_frame) * 1000.0
-                self._record_latency(face_ms, lpr_ms, frame_ms)
+                self._record_latency(face_ms, frame_ms)
 
                 # ── Publier le payload de métadonnées (overlay frontend) ──
                 # Les bbox sont exprimées dans le repère de la frame traitée
@@ -1197,10 +1126,3 @@ class TrackingProcessor:
                 pass
             if self._recognition_worker is not None and self._recognition_worker.is_alive():
                 self._recognition_worker.join(timeout=3)
-
-            # Arrêt propre du worker réseau LPR (thread + session aiohttp dédiés).
-            if self.plate_processor is not None:
-                try:
-                    self.plate_processor.shutdown()
-                except Exception as e:
-                    logger.debug(f"[LPR][cam={self.cam_name}] arrêt worker LPR : {e}")

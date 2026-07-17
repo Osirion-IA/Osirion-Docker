@@ -17,7 +17,6 @@ from app.models.people import People, PersonEmbedding
 from app.models.cameras import Camera, CameraGroupLink
 from app.models.camera_groups import CameraGroup
 from app.models.events import Event
-from app.models.vehicles import Vehicle
 from app.models.alerts import Alert
 from app.models.audit import AuditLog
 

@@ -127,7 +127,7 @@ export default function AdminLayout({ children }) {
   return (
     <AuthContext.Provider value={user}>
       {children}
-      {/* Notifications globales (toast + son) sur détection blacklist personne/plaque */}
+      {/* Notifications globales (toast + son) sur détection blacklist personne */}
       <AlertNotifier />
     </AuthContext.Provider>
   );

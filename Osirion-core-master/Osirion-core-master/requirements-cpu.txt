@@ -56,10 +56,6 @@ python-dateutil==2.8.2
 rich==13.7.1
 
 # ----------------------
-# LPR / ANPR — reconnaissance de plaques (build CPU)
+# Vision — détection d'objets/personnes (YOLO)
 # ----------------------
-# ultralytics : détection de plaque (absent du build CPU d'origine car la
-#               détection faciale passait par InsightFace/onnxruntime).
-# easyocr     : OCR des caractères (fonctionne sur CPU, plus lent qu'en GPU).
 ultralytics>=8.0.0
-easyocr>=1.7.1

@@ -5,7 +5,7 @@ import { useState, useEffect, useRef } from "react";
 import { CORE_URL } from "../../../lib/publicUrls";
 
 // Le GPU est sur le Core (moteur de surveillance). On interroge son endpoint
-// /api/gpu (CORS activé) directement depuis le navigateur, comme le toggle LPR.
+// /api/gpu (CORS activé) directement depuis le navigateur, comme le toggle facial.
 const MAX_POINTS = 30;   // ~1 min d'historique à 2 s/échantillon
 const POLL_MS = 2000;
 

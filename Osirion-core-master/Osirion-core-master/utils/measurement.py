@@ -3,8 +3,8 @@
 Dispositif de MESURE pour l'évaluation du mémoire (chapitre 4).
 
 Objectif : produire, en fonctionnement réel et SANS connexion à l'extérieur, un
-journal exploitable hors-ligne pour renseigner les tableaux 4.4 (facial), 4.5
-(multi-caméras) et 4.6 (plaques). Tout est écrit en JSON Lines dans UN fichier
+journal exploitable hors-ligne pour renseigner les tableaux 4.4 (facial) et
+4.5 (multi-caméras). Tout est écrit en JSON Lines dans UN fichier
 (`MEASURE_FILE`, par défaut /app/measurements/metrics.jsonl) que l'on dépouille
 ensuite avec tools/analyze_metrics.py.
 
@@ -13,7 +13,6 @@ Principe : un singleton thread-safe expose
   - mark(label)                    → borne de scénario (toutes les lignes suivantes
                                      portent ce libellé dans le champ "scenario")
   - set_expected(cam_id, person)   → vérité terrain visage de la caméra
-  - set_expected_plate(plate)      → vérité terrain plaque courante
 
 La vérité terrain et les marques se pilotent à chaud via les endpoints
 /api/measure/* du Core (cf. core/web_streaming.py) — donc en local, sans internet.
@@ -42,7 +41,6 @@ class _Measurement:
 
         # État de campagne (piloté par les endpoints /api/measure/*).
         self.expected_by_cam: Dict[int, str] = {}   # {cam_id: nom attendu | "Inconnu"}
-        self.expected_plate: Optional[str] = None    # plaque attendue (vérité terrain)
         self.current_mark: Optional[str] = None       # libellé de scénario courant
 
         if self.enabled:
@@ -94,14 +92,6 @@ class _Measurement:
     def get_expected(self, camera_id: int) -> Optional[str]:
         return self.expected_by_cam.get(camera_id)
 
-    def set_expected_plate(self, plate: Optional[str]) -> None:
-        with self._lock:
-            self.expected_plate = plate or None
-        self.emit("groundtruth", kind="plate", expected=self.expected_plate)
-
-    def get_expected_plate(self) -> Optional[str]:
-        return self.expected_plate
-
     def mark(self, label: Optional[str]) -> None:
         """Borne de scénario : les événements suivants porteront ce libellé."""
         self.current_mark = label or None
@@ -113,7 +103,6 @@ class _Measurement:
             "file": self.path,
             "scenario": self.current_mark,
             "expected_by_cam": dict(self.expected_by_cam),
-            "expected_plate": self.expected_plate,
         }
 
 

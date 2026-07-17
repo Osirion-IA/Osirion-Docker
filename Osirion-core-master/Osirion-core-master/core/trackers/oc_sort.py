@@ -22,8 +22,8 @@ où (x, y) = centre, s = aire, r = ratio largeur/hauteur).
 ──────────────────────────────────────────────────────────────────────────────
 ADAPTATEUR — `OCSortTrackerAdapter`
 ──────────────────────────────────────────────────────────────────────────────
-Préserve À L'IDENTIQUE le contrat consommé par les pipelines Osirion (facial :
-core/tracking_processor.py ; LPR : core/plate_processor.py) :
+Préserve À L'IDENTIQUE le contrat consommé par le pipeline Osirion
+(core/tracking_processor.py) :
 
     update(output_results, img_info, img_size) -> list[objet]
 
@@ -483,8 +483,7 @@ class OCSortTrackerAdapter:
 
     Remplaçant direct de `BYTETracker(args, frame_rate=...)`. Préserve la signature
     update(output_results, img_info, img_size) et renvoie une LISTE d'objets
-    exposant `.track_id` et `.tlwh` (cf. core/tracking_processor.py:930 et
-    core/plate_processor.py:187).
+    exposant `.track_id` et `.tlwh` (cf. core/tracking_processor.py:930).
     """
 
     def __init__(self, args, frame_rate=None):

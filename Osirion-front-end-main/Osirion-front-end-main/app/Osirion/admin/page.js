@@ -125,8 +125,8 @@ export default function AdminDashboard() {
     },
     {
       label: "Sous surveillance",
-      value: loadingStats ? "—" : ((dash?.counts.people_blacklisted ?? 0) + (dash?.counts.vehicles_blacklisted ?? 0)),
-      delta: loadingStats ? "" : `${dash?.counts.people_blacklisted ?? 0} pers. · ${dash?.counts.vehicles_blacklisted ?? 0} plaques`,
+      value: loadingStats ? "—" : (dash?.counts.people_blacklisted ?? 0),
+      delta: loadingStats ? "" : `${dash?.counts.people_blacklisted ?? 0} personne(s) surveillée(s)`,
       trend: "blacklist",
       deltaGood: true,
     },

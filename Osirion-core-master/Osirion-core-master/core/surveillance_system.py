@@ -62,10 +62,9 @@ class SurveillanceSystem:
         )
 
         # Contrôle runtime (toggles depuis le frontend). Initialisé sur les valeurs
-        # de config, modifiable à chaud via les endpoints Flask (/api/lpr/toggle,
+        # de config, modifiable à chaud via les endpoints Flask (/api/face/toggle,
         # /api/unknown-face/toggle).
         self.runtime_control = RuntimeControl(
-            lpr_enabled=getattr(config, 'ENABLE_PLATE_RECOGNITION', False),
             unknown_face_event_enabled=getattr(config, 'ENABLE_UNKNOWN_FACE_EVENT', False),
             face_recognition_enabled=getattr(config, 'ENABLE_FACE_RECOGNITION', True),
         )
@@ -120,7 +119,7 @@ class SurveillanceSystem:
             stop_event=cam_stop,
             config=self.config,
             global_tracker=self.global_tracker,  # tracker global multi-caméra
-            runtime_control=self.runtime_control  # toggles partagés (LPR, etc.)
+            runtime_control=self.runtime_control  # toggles partagés (facial, unknown-face)
         )
         processing_thread = threading.Thread(
             target=processor.run, daemon=True, name=f"processor-{cam_id}"
@@ -301,7 +300,7 @@ class SurveillanceSystem:
                     )
 
             # 3) Caméras déjà actives : deux traitements À CHAUD, sans coupure.
-            #    (a) Propagation de la config EFFECTIVE des modules (facial/LPR)
+            #    (a) Propagation de la config EFFECTIVE des modules (facial)
             #        recalculée par le backend (bascule de groupe ou drapeau local)
             #        → le processeur saute l'étape désactivée dès la frame suivante,
             #        libérant immédiatement le GPU/CPU, SANS redémarrer les threads.
@@ -324,7 +323,6 @@ class SurveillanceSystem:
                     try:
                         processor.apply_effective_config(
                             cam.get("effective_facial_active", True),
-                            cam.get("effective_lpr_active", True),
                         )
                     except Exception:
                         logger.error(
@@ -378,7 +376,6 @@ class SurveillanceSystem:
                         # Débit réel d'inférence = frames traitées / durée d'intervalle.
                         "processed_fps": round(n_face / dt, 2) if dt > 0 else None,
                         "face_ms": snap.get("face_ms"),
-                        "lpr_ms": snap.get("lpr_ms"),
                         "frame_ms": snap.get("frame_ms"),
                         "n_processed": n_face,
                     })

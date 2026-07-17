@@ -2,8 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlmodel import Session, select
 from app.database import get_session
 from app.models.events import Event
-from app.models.alerts import Alert, ALERT_KIND_PERSON, ALERT_KIND_PLATE
-from app.models.vehicles import Vehicle
+from app.models.alerts import Alert, ALERT_KIND_PERSON
 from app.models.people import People
 from app.schemas.events_schema import EventRead
 from app.services.saveImage_service import save_image_from_bytes, is_valid_image_format
@@ -23,13 +22,9 @@ def _maybe_create_alert(session: Session, event: Event) -> None:
     l'alerte). N'envoie AUCUNE notification — ce n'est qu'un enregistrement.
     """
     kind = label = reason = None
-    person_id = vehicle_id = None
+    person_id = None
 
-    if event.vehicle_id:
-        vehicle = session.get(Vehicle, event.vehicle_id)
-        if vehicle and vehicle.is_blacklisted:
-            kind, label, vehicle_id = ALERT_KIND_PLATE, vehicle.plate_text, vehicle.id
-    if kind is None and event.person_id:
+    if event.person_id:
         person = session.get(People, event.person_id)
         if person and getattr(person, "is_blacklisted", False):
             kind = ALERT_KIND_PERSON
@@ -42,7 +37,7 @@ def _maybe_create_alert(session: Session, event: Event) -> None:
 
     session.add(Alert(
         event_id=event.id, kind=kind, label=label or "—", reason=reason,
-        camera_id=event.camera_id, person_id=person_id, vehicle_id=vehicle_id,
+        camera_id=event.camera_id, person_id=person_id,
         snapshot_url=event.snapshot_url,
     ))
     session.commit()
@@ -55,8 +50,6 @@ async def add_event(
     person_id: Optional[int] = Form(None),
     event_type: str = Form(...),
     confidence: Optional[float] = Form(None),
-    plate_text_detected: Optional[str] = Form(None),
-    vehicle_id: Optional[int] = Form(None),
     image: UploadFile = File(None),
     session: Session = Depends(get_session),
     _current_user=Depends(get_current_active_user)
@@ -80,8 +73,6 @@ async def add_event(
         event_type=event_type,
         confidence=confidence,
         snapshot_url=snapshot_url,
-        plate_text_detected=plate_text_detected,
-        vehicle_id=vehicle_id
     )
 
     session.add(new_event)

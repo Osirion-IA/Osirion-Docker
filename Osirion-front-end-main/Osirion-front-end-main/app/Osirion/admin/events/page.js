@@ -22,7 +22,6 @@ const IconX = ({ className }) => (<Svg className={className}><path d="M18 6 6 18
 const TYPE_META = {
   RECOGNITION:       { label: "Reconnaissance", badge: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" },
   UNKNOWN_FACE:      { label: "Visage inconnu",  badge: "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300" },
-  PLATE_RECOGNITION: { label: "Plaque",          badge: "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300" },
   ENTRY:             { label: "Entrée",          badge: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" },
   EXIT:              { label: "Sortie",          badge: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300" },
   DETECTION:         { label: "Détection",       badge: "bg-gray-200 text-gray-700 dark:bg-gray-700/50 dark:text-gray-300" },
@@ -59,7 +58,6 @@ function Lightbox({ event, onClose }) {
           <span className="font-semibold text-white">{TYPE_META[event.event_type]?.label || event.event_type}</span>
           <span className="text-white/30">·</span><span>{event.camera_nom}</span>
           {event.person_nom && (<><span className="text-white/30">·</span><span className="font-semibold text-white">{event.person_nom}</span></>)}
-          {event.plate_text_detected && (<><span className="text-white/30">·</span><span className="font-mono text-white">{event.plate_text_detected}</span></>)}
           <span className="text-white/30">·</span><span>{fmtTime(event.timestamp)}</span>
         </div>
       </div>
@@ -114,7 +112,7 @@ export default function EventsPage() {
       if (typeFilter !== "tous" && e.event_type !== typeFilter) return false;
       if (cameraFilter !== "tous" && String(e.camera_id) !== String(cameraFilter)) return false;
       if (q) {
-        const hay = [e.event_type, e.camera_nom, e.camera_location, e.person_nom, e.plate_text_detected].filter(Boolean).join(" ").toLowerCase();
+        const hay = [e.event_type, e.camera_nom, e.camera_location, e.person_nom].filter(Boolean).join(" ").toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
@@ -185,7 +183,7 @@ export default function EventsPage() {
                     type="text"
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Personne, plaque, lieu…"
+                    placeholder="Personne, lieu…"
                     className="w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 pl-9 pr-3 py-2 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
@@ -215,7 +213,7 @@ export default function EventsPage() {
                   {filtered.map((e) => {
                     const meta = TYPE_META[e.event_type] || { label: e.event_type, badge: "bg-gray-200 text-gray-700 dark:bg-gray-700/50 dark:text-gray-300" };
                     const src = snapSrc(e.snapshot_url);
-                    const detail = e.person_nom || e.plate_text_detected || (e.event_type === "UNKNOWN_FACE" ? "Visage non identifié" : "—");
+                    const detail = e.person_nom || (e.event_type === "UNKNOWN_FACE" ? "Visage non identifié" : "—");
                     return (
                       <li key={e.id} className="flex items-center gap-4 p-4 hover:bg-gray-50 dark:hover:bg-gray-800/40 transition-colors">
                         <button
