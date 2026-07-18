@@ -11,9 +11,7 @@ from app.schemas.group_schema import (
     CameraGroupCreate,
     CameraGroupUpdate,
     CameraGroupRead,
-    GroupModulesUpdate,
 )
-from app.services.camera_config_service import effective_modules, active_module_names
 
 from app.middleware.auth_middleware import require_viewer, can_manage_cameras
 from app.models.users import User
@@ -37,8 +35,6 @@ def _to_group_read(group: CameraGroup) -> CameraGroupRead:
         id=group.id,
         name=group.name,
         description=group.description,
-        is_facial_active=group.is_facial_active,
-        is_lpr_active=group.is_lpr_active,
         created_at=group.created_at,
         camera_ids=camera_ids,
         camera_count=len(camera_ids),
@@ -60,7 +56,7 @@ def list_groups(
     current_user: User = Depends(require_viewer),
     session: Session = Depends(get_session),
 ):
-    """Liste tous les groupes de caméras avec leurs membres et drapeaux de module."""
+    """Liste tous les groupes de caméras avec leurs membres."""
     groups = session.exec(
         select(CameraGroup).options(selectinload(CameraGroup.cameras))
     ).all()
@@ -83,10 +79,6 @@ def create_group(
     group = CameraGroup(
         name=payload.name.strip(),
         description=payload.description,
-        is_facial_active=payload.is_facial_active
-        if payload.is_facial_active is not None else True,
-        is_lpr_active=payload.is_lpr_active
-        if payload.is_lpr_active is not None else True,
     )
     session.add(group)
     try:
@@ -136,10 +128,6 @@ def update_group(
         group.name = name
     if "description" in data:
         group.description = data["description"]
-    if "is_facial_active" in data and data["is_facial_active"] is not None:
-        group.is_facial_active = data["is_facial_active"]
-    if "is_lpr_active" in data and data["is_lpr_active"] is not None:
-        group.is_lpr_active = data["is_lpr_active"]
 
     session.add(group)
     try:
@@ -225,65 +213,3 @@ def remove_camera_from_group(
         session.refresh(group)
 
     return _to_group_read(group)
-
-
-# ─────────────────────────────────────────────
-# BULK MODULE TOGGLE (USER/ADMIN)
-# ─────────────────────────────────────────────
-@router.patch("/{group_id}/modules")
-def toggle_group_modules(
-    group_id: int,
-    payload: GroupModulesUpdate,
-    current_user: User = Depends(can_manage_cameras),
-    session: Session = Depends(get_session),
-):
-    """Bascule en masse les modules (facial / LPR) d'un groupe.
-
-    Met à jour les drapeaux du groupe puis renvoie l'état effectif recalculé de
-    CHAQUE caméra membre. La propagation vers le Core est automatique : la boucle
-    de supervision relit la config effective (via GET /cameras/) et applique le
-    (dé)blocage du pipeline À CHAUD, sans redémarrer les threads caméra.
-    """
-    group = session.exec(
-        select(CameraGroup)
-        .where(CameraGroup.id == group_id)
-        .options(selectinload(CameraGroup.cameras).selectinload(Camera.groups))
-    ).first()
-    if not group:
-        raise HTTPException(status_code=404, detail="Groupe de caméras non trouvé")
-
-    data = payload.model_dump(exclude_unset=True)
-    if not data:
-        raise HTTPException(
-            status_code=400,
-            detail="Fournir au moins un drapeau (is_facial_active et/ou is_lpr_active).",
-        )
-    if "is_facial_active" in data and data["is_facial_active"] is not None:
-        group.is_facial_active = data["is_facial_active"]
-    if "is_lpr_active" in data and data["is_lpr_active"] is not None:
-        group.is_lpr_active = data["is_lpr_active"]
-
-    session.add(group)
-    session.commit()
-    session.refresh(group)
-
-    # État effectif recalculé, caméra par caméra (utile pour un retour UI immédiat).
-    affected = []
-    for cam in group.cameras:
-        facial, lpr = effective_modules(cam)
-        affected.append({
-            "id": cam.id,
-            "cam_name": cam.cam_name,
-            "effective_facial_active": facial,
-            "effective_lpr_active": lpr,
-            "active_modules": active_module_names(facial, lpr),
-        })
-
-    return {
-        "message": f"Modules du groupe {group_id} mis à jour.",
-        "group_id": group.id,
-        "is_facial_active": group.is_facial_active,
-        "is_lpr_active": group.is_lpr_active,
-        "updated_by": current_user.email,
-        "affected_cameras": affected,
-    }

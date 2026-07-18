@@ -6,7 +6,6 @@ from slowapi.errors import RateLimitExceeded
 import os
 
 from app.database import engine
-from app.routes.people_routes import router as people_router
 from app.routes.cameras_routes import router as camera_router
 from app.routes.monitoring_routes import router as monitoring_router
 from app.routes.events_routes import router as events_router
@@ -17,7 +16,6 @@ from app.routes.dashboard_routes import router as dashboard_router
 from app.routes.audit_routes import router as audit_router
 from app.routes.maintenance_routes import router as maintenance_router
 from app.routes.groups_routes import router as groups_router
-from app.services.Faiss_search_service import build_or_reload_faiss_index
 from app.middleware.rate_limit import limiter
 from app.config import settings
 
@@ -37,10 +35,8 @@ app.state.limiter = limiter
 # ─────────────────────────────────────────────
 @app.on_event("startup")
 def startup_event():
-    # Les migrations sont appliquées par scripts/entrypoint.py (alembic upgrade head)
-    # avant le démarrage d'uvicorn — create_all n'est pas appelé ici pour éviter
-    # les conflits avec Alembic sur les tables déjà créées.
-    build_or_reload_faiss_index()
+    # Migrations appliquées par scripts/entrypoint.py (alembic upgrade head) avant uvicorn.
+    pass
 
 
 @app.exception_handler(RateLimitExceeded)
@@ -83,7 +79,6 @@ app.mount("/snapshots", StaticFiles(directory="snapshots"), name="snapshots")
 app.include_router(auth_router, prefix="/auth", tags=["🔐 Authentication"])
 app.include_router(events_router, prefix="/events", tags=[" Events"])
 app.include_router(users_router, prefix="/users", tags=["👥 Users Management"])
-app.include_router(people_router, prefix="/people", tags=["👤 People"])
 app.include_router(alerts_router, prefix="/alerts", tags=["🚨 Alerts"])
 app.include_router(dashboard_router, prefix="/dashboard", tags=["📊 Dashboard"])
 app.include_router(audit_router, prefix="/audit", tags=["📝 Audit"])
@@ -117,12 +112,8 @@ def health_check():
     except Exception:
         db_status = "unreachable"
 
-    from app.services.Faiss_search_service import index
-    faiss_status = f"{index.ntotal} vecteurs" if index is not None else "vide (aucune personne enregistrée)"
-
     return {
         "status": "healthy" if db_status == "connected" else "degraded",
         "database": db_status,
-        "faiss_index": faiss_status,
         "authentication": "enabled"
     }

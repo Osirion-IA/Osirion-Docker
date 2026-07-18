@@ -2,9 +2,10 @@
 """
 Modèle Alert — centre d'alertes (hits blacklist).
 
-Une alerte est créée AUTOMATIQUEMENT côté backend lorsqu'un événement de
-détection concerne une personne sur liste de surveillance. C'est un simple
-enregistrement traçable, AVEC un workflow (new → acknowledged → resolved).
+Une alerte est un enregistrement traçable (workflow new → acknowledged →
+resolved) émis quand une règle de décision se déclenche (ex. seuil d'occupation,
+présence hors horaires). Alimentée par le moteur de règles (à venir) ;
+l'infrastructure (workflow + notifications) est ici.
 
 ⚠️ Important : la création d'une alerte n'envoie JAMAIS de notification (email/
 webhook). L'envoi est déclenché EXCLUSIVEMENT par un utilisateur via
@@ -19,8 +20,7 @@ ALERT_NEW = "new"
 ALERT_ACKNOWLEDGED = "acknowledged"
 ALERT_RESOLVED = "resolved"
 
-# Types d'alerte.
-ALERT_KIND_PERSON = "person"
+# Types d'alerte (libre : ex. "crowd", "intrusion", "occupancy"…).
 
 
 class Alert(SQLModel, table=True):
@@ -31,12 +31,11 @@ class Alert(SQLModel, table=True):
     # Lien vers l'événement source (snapshot, caméra, timestamp d'origine).
     event_id: Optional[int] = Field(default=None, foreign_key="event.id")
 
-    kind: str = Field(..., max_length=20)             # "person"
-    label: str = Field(..., max_length=255)           # nom de la personne
-    reason: Optional[str] = Field(default=None, max_length=255)  # motif blacklist
+    kind: str = Field(..., max_length=20)             # "crowd" | "intrusion" | …
+    label: str = Field(..., max_length=255)           # libellé de l'alerte
+    reason: Optional[str] = Field(default=None, max_length=255)  # motif / détail
 
     camera_id: Optional[int] = Field(default=None)
-    person_id: Optional[int] = Field(default=None, foreign_key="people.id")
     snapshot_url: Optional[str] = Field(default=None, max_length=255)
 
     # Workflow : new → acknowledged → resolved.

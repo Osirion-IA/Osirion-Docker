@@ -46,14 +46,6 @@ class Camera(SQLModel, table=True):
     location: Optional[str] = Field(default=None, max_length=100)
     is_active: bool = Field(default=True)
 
-    # ── Drapeaux de module LOCAUX (par caméra) ────────────────────────────────
-    # Activent/désactivent un module POUR CETTE caméra spécifiquement. La config
-    # EFFECTIVE d'un module = drapeau local ET tous les groupes de la caméra ont
-    # ce module actif (cf. app/services/camera_config_service.py). Défaut True →
-    # aucune régression : une caméra sans configuration reste pleinement active.
-    is_facial_active: bool = Field(default=True)
-    is_lpr_active: bool = Field(default=True)
-
     # ── Métadonnées géospatiales (cartographie OpenStreetMap / Leaflet) ───────
     # Nullable : une caméra non géolocalisée n'apparaît simplement pas sur la carte.
     latitude: Optional[float] = Field(default=None)

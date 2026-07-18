@@ -17,9 +17,6 @@ class Settings(BaseSettings):
     # CORS
     BACKEND_CORS_ORIGINS: list[str] = ["*"]  # à changer en prod pour ton frontend
 
-    # AI / Embeddings
-    EMBEDDING_DIM: int = 512
-
     # RATE LIMITING
     RATE_LIMIT_PER_MINUTE: str = "5/minute"  # pour les routes sensibles (login)
     RATE_LIMIT_GENERAL: str = "100/minute"   # pour les routes générales

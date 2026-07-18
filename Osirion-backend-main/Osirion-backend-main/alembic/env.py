@@ -13,7 +13,6 @@ load_dotenv()
 # importer ici tous tes modules de modèles SQLModel
 # adapte ces imports au nom et emplacement de tes fichiers
 from app.models.users import User
-from app.models.people import People, PersonEmbedding
 from app.models.cameras import Camera, CameraGroupLink
 from app.models.camera_groups import CameraGroup
 from app.models.events import Event

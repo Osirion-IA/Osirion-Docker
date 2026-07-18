@@ -15,7 +15,6 @@ from app.schemas.camera_schema import (
     CameraActiveUpdate,
     CameraMapData,
 )
-from app.services.camera_config_service import effective_modules, active_module_names
 from app.utils.security_utils import crypter, decrypter
 
 # AJOUT : Import des middlewares de sécurité
@@ -37,27 +36,21 @@ def get_session():
 
 
 def _to_camera_read(cam: Camera) -> CameraRead:
-    """Sérialise une caméra ORM en CameraRead : décryptage rtsp_url, appartenance
-    aux groupes et calcul de la config EFFECTIVE des modules (ce que lit le Core).
+    """Sérialise une caméra ORM en CameraRead : décryptage rtsp_url et
+    appartenance aux groupes.
 
     `cam.groups` doit être chargé (lazy en session, ou eager via selectinload).
     """
-    facial, lpr = effective_modules(cam)
     return CameraRead(
         id=cam.id,
         cam_name=cam.cam_name,
         rtsp_url=decrypter(cam.rtsp_url),
         location=cam.location,
         is_active=cam.is_active,
-        is_facial_active=cam.is_facial_active,
-        is_lpr_active=cam.is_lpr_active,
         latitude=cam.latitude,
         longitude=cam.longitude,
         bearing=cam.bearing,
         group_ids=[g.id for g in cam.groups],
-        effective_facial_active=facial,
-        effective_lpr_active=lpr,
-        active_modules=active_module_names(facial, lpr),
         created_at=cam.created_at,
     )
 
@@ -93,8 +86,6 @@ def add_camera(
         rtsp_url=crypter(rtsp_url),
         location=location,
         is_active=is_active,
-        is_facial_active=camera.is_facial_active if camera.is_facial_active is not None else True,
-        is_lpr_active=camera.is_lpr_active if camera.is_lpr_active is not None else True,
         latitude=camera.latitude,
         longitude=camera.longitude,
         bearing=camera.bearing if camera.bearing is not None else 0.0,
@@ -175,14 +166,12 @@ def get_cameras_map_data(
 
     out: List[CameraMapData] = []
     for cam in cameras:
-        facial, lpr = effective_modules(cam)
         out.append(CameraMapData(
             id=cam.id,
             name=cam.cam_name,
             latitude=cam.latitude,
             longitude=cam.longitude,
             bearing=cam.bearing if cam.bearing is not None else 0.0,
-            active_modules=active_module_names(facial, lpr),
         ))
     return out
 
@@ -232,10 +221,6 @@ def update_camera(
     camera.rtsp_url = crypter(camera_data.rtsp_url)
     camera.location = camera_data.location
     camera.is_active = camera_data.is_active
-    if camera_data.is_facial_active is not None:
-        camera.is_facial_active = camera_data.is_facial_active
-    if camera_data.is_lpr_active is not None:
-        camera.is_lpr_active = camera_data.is_lpr_active
     camera.latitude = camera_data.latitude
     camera.longitude = camera_data.longitude
     if camera_data.bearing is not None:
