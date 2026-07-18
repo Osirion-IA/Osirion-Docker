@@ -56,6 +56,14 @@ async def add_event(
     session.commit()
     session.refresh(new_event)
 
+    # Moteur de décision : évalue les règles actives (best-effort, ne bloque jamais
+    # l'enregistrement de l'événement).
+    try:
+        from app.services.rule_engine import evaluate_event
+        evaluate_event(session, new_event)
+    except Exception:
+        logger.warning("[events] évaluation des règles ignorée (erreur non bloquante)", exc_info=True)
+
     return new_event
 
 

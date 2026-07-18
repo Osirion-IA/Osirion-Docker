@@ -114,13 +114,20 @@ class EventEngine:
                         )
             self._zone_members[zid] = members
 
-            if self._occ_last.get(zid) != count and (now - self._occ_last_emit.get(zid, 0.0)) >= self._occ_interval:
+            prev_count = self._occ_last.get(zid)
+            entered = (prev_count in (None, 0)) and count > 0   # transition 0 → occupé
+            changed = prev_count != count
+            due = (now - self._occ_last_emit.get(zid, 0.0)) >= self._occ_interval
+            if changed and (entered or due):
                 self._occ_last[zid] = count
                 self._occ_last_emit[zid] = now
                 event_dispatch.dispatch(
                     self.camera_id, "ZONE_OCCUPANCY_CHANGED",
                     meta={"zone_id": zid, "zone_name": z.get("name"),
                           "kind": z.get("kind"), "count": count},
+                    # Snapshot uniquement à l'ENTRÉE (0→occupé) → l'intrusion a une
+                    # photo, sans coût d'encodage sur les frames normales.
+                    frame=(frame if entered else None),
                 )
 
             thr = z.get("threshold")

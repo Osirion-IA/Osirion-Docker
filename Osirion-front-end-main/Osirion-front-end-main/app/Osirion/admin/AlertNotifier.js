@@ -19,9 +19,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import io from "socket.io-client";
-import { SOCKET_URL } from "../../lib/publicUrls";
-const COOLDOWN_MS = 20000;   // anti-spam : même piste re-alertée au plus toutes les 20 s
+import { fetchWithRefresh } from "../../lib/fetchWithRefresh";
 const MAX_TOASTS = 4;
 const TOAST_TTL = 9000;
 const MUTE_KEY = "osirion-alert-muted";
@@ -62,9 +60,8 @@ export default function AlertNotifier() {
 
   const mutedRef = useRef(false);
   const audioCtxRef = useRef(null);
-  const cameraNamesRef = useRef(new Map());
-  const cooldownRef = useRef(new Map());
   const timersRef = useRef([]);
+  const seenRef = useRef(new Set());   // ids d'alertes déjà affichées (anti-doublon)
 
   // Charger la préférence « muet » (persistée localement).
   useEffect(() => {
@@ -123,63 +120,41 @@ export default function AlertNotifier() {
     timersRef.current.push(t);
   }, [playSound]);
 
-  const handleMeta = useCallback((data) => {
-    if (!data || !Array.isArray(data.detections)) return;
-    const now = Date.now();
-    // Purge opportuniste du cache anti-spam.
-    if (cooldownRef.current.size > 256) {
-      for (const [k, ts] of cooldownRef.current) {
-        if (now - ts > COOLDOWN_MS) cooldownRef.current.delete(k);
-      }
-    }
-    for (const det of data.detections) {
-      // On n'alerte QUE sur det.alert === true (personne sur liste de
-      // surveillance). Une personne simplement reconnue ne déclenche RIEN.
-      if (!det.alert) continue;
-
-      const key = `${data.camera_id}|${det.type}|${det.track_id}`;
-      const last = cooldownRef.current.get(key) || 0;
-      if (now - last < COOLDOWN_MS) continue;
-      cooldownRef.current.set(key, now);
-
-      addAlert({
-        kind: "person",
-        label: (det.label || "")
-          .replace(/^⚠\s*/, "")
-          .replace(/\s*\[BLACKLIST\]\s*$/i, "")
-          .trim()
-          || "Personne",
-        cameraName: cameraNamesRef.current.get(data.camera_id) || `Caméra ${data.camera_id}`,
-      });
-    }
-  }, [addAlert]);
-
-  // ── Connexions Socket.IO : 1 socket bootstrap (liste caméras) + 1 watcher
-  //    léger par caméra active. ──────────────────────────────────────────────
+  // Récupère périodiquement les nouvelles alertes du backend (créées par le moteur
+  // de règles) et les affiche en toast. Anti-doublon via seenRef ; le 1er passage
+  // marque l'existant comme « vu » (pas de rafale de toasts au chargement).
   useEffect(() => {
-    const watchers = new Map();           // camera_id -> socket
-    const boot = io(SOCKET_URL, { withCredentials: true });
-
-    boot.on("cameras_list", ({ cameras }) => {
-      for (const cam of cameras || []) {
-        cameraNamesRef.current.set(cam.id, cam.name);
-        if (watchers.has(cam.id)) continue;
-        const s = io(SOCKET_URL, { withCredentials: true });
-        s.on("connect", () => s.emit("start_stream", { camera_id: cam.id }));
-        s.on("metadata", handleMeta);
-        watchers.set(cam.id, s);
-      }
-    });
-
+    let active = true;
+    let first = true;
     const timers = timersRef.current;
+    const poll = async () => {
+      try {
+        const res = await fetchWithRefresh("/api/alerts?status=new");
+        if (!active || !res?.ok) return;
+        const data = await res.json();
+        const list = Array.isArray(data) ? data : (data.alerts || []);
+        for (const a of list) {
+          if (a.id == null || seenRef.current.has(a.id)) continue;
+          seenRef.current.add(a.id);
+          if (!first) {
+            addAlert({
+              kind: a.kind,
+              label: a.label || a.kind,
+              cameraName: a.camera_name || (a.camera_id ? `Caméra ${a.camera_id}` : ""),
+            });
+          }
+        }
+        first = false;
+      } catch { /* backend injoignable : réessai au prochain tick */ }
+    };
+    poll();
+    const id = setInterval(poll, 10000);
     return () => {
-      try { boot.disconnect(); } catch { /* */ }
-      for (const s of watchers.values()) {
-        try { s.emit("stop_stream"); s.disconnect(); } catch { /* */ }
-      }
+      active = false;
+      clearInterval(id);
       timers.forEach((t) => clearTimeout(t));
     };
-  }, [handleMeta]);
+  }, [addAlert]);
 
   const toggleMute = () => {
     setMuted((m) => {
@@ -208,7 +183,10 @@ export default function AlertNotifier() {
                 <div className="flex items-center gap-2">
                   <span className="inline-flex h-2 w-2 rounded-full bg-rose-500 animate-pulse" />
                   <p className="text-sm font-bold text-rose-700 dark:text-rose-300 truncate">
-                    Personne blacklistée détectée
+                    {a.kind === "intrusion" ? "Intrusion détectée"
+                      : a.kind === "crowd" ? "Attroupement détecté"
+                      : a.kind === "queue" ? "File saturée"
+                      : "Alerte déclenchée"}
                   </p>
                 </div>
                 <p className="mt-1 text-sm font-semibold text-gray-900 dark:text-white truncate">{a.label}</p>
