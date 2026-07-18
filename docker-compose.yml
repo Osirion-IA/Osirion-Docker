@@ -180,25 +180,11 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_DIR: logs
       CUDA_VISIBLE_DEVICES: "0"
-      # ── Événement « visage non reconnu » (UNKNOWN_FACE) ─────────────────────
-      # OPT-IN : false par défaut. Activable à chaud via le frontend (toggle) ou
-      # en mettant true ici. Enregistre un événement distinct pour tout visage
-      # détecté mais non identifié (person_id NULL). N'affecte pas le facial.
-      ENABLE_UNKNOWN_FACE_EVENT: ${ENABLE_UNKNOWN_FACE_EVENT:-false}
-      # ── Précision faciale (garde-fou taille + vote temporel) — défauts sûrs ──
-      FACE_MIN_RECOG_SIZE: ${FACE_MIN_RECOG_SIZE:-40}          # visage <40px → pas de reco (0=off)
-      FACE_TEMPORAL_VOTING: ${FACE_TEMPORAL_VOTING:-true}      # vote identité multi-frames
-      FACE_VOTE_MIN_AGREE: ${FACE_VOTE_MIN_AGREE:-2}           # accords requis avant confirmation
-      FACE_VOTE_MAX_ATTEMPTS: ${FACE_VOTE_MAX_ATTEMPTS:-5}     # tentatives max avant « Inconnu »
-      # ── Recherche d'embeddings LOCALE (réplique FAISS dans le Core) ──────────
-      # Défaut : true → recherche FAISS en RAM dans le Core (latence ~0.1 ms vs
-      # ~5-15 ms en HTTP) + décharge le backend de N requêtes de reconnaissance/s.
-      # Mettre false pour revenir à la recherche via HTTP backend. PostgreSQL reste
-      # géré uniquement par le backend ; le Core ne garde qu'une copie lecture seule,
-      # rechargée au démarrage + poll de version. Repli HTTP automatique si l'index
-      # local n'est pas prêt (aucune régression possible).
-      FAISS_LOCAL: ${FAISS_LOCAL:-true}
-      FAISS_LOCAL_RECONCILE_SECONDS: ${FAISS_LOCAL_RECONCILE_SECONDS:-15}
+      # ── Détection de personnes (YOLO26, COCO classe 0) — Vision Engine anonyme
+      PERSON_MODEL_PATH: ${PERSON_MODEL_PATH:-yolo26n.pt}
+      PERSON_DETECTION_CONFIDENCE: ${PERSON_DETECTION_CONFIDENCE:-0.4}   # confiance YOLO mini
+      PERSON_YOLO_HALF: ${PERSON_YOLO_HALF:-true}                        # FP16 GPU (repli FP32 auto)
+      BLUR_THRESHOLD: ${BLUR_THRESHOLD:-80.0}                            # gate anti-flou (0=off)
       # ── MESURE (évaluation chapitre 4 du mémoire) ───────────────────────────
       # Journalise latence/débit/cache/GPU + décisions reco
       # dans /app/measurements/metrics.jsonl (bind mount → ./measurements sur l'hôte),
@@ -207,15 +193,13 @@ services:
       MEASURE_FILE: /app/measurements/metrics.jsonl
       MEASURE_SAMPLE_SECONDS: ${MEASURE_SAMPLE_SECONDS:-5}
     volumes:
-      # ── Bind mounts — packages Python modifiés ──────────────────────────────
-      # Le tracker OC-SORT vit dans core/ (bind-monté → hot-reload du code).
-      # yolov11n-face.pt reste dans l'image.
+      # ── Bind mounts — packages Python modifiés (hot-reload du code) ──────────
+      # Le modèle yolo26n.pt reste dans l'image (pré-téléchargé au build).
       - ./Osirion-core-master/Osirion-core-master/config:/app/config
       - ./Osirion-core-master/Osirion-core-master/core:/app/core
       - ./Osirion-core-master/Osirion-core-master/services:/app/services
       - ./Osirion-core-master/Osirion-core-master/utils:/app/utils
-      - ./Osirion-core-master/Osirion-core-master/face_detection.py:/app/face_detection.py
-      - ./Osirion-core-master/Osirion-core-master/face_detection_new.py:/app/face_detection_new.py
+      - ./Osirion-core-master/Osirion-core-master/person_detection.py:/app/person_detection.py
       - ./Osirion-core-master/Osirion-core-master/main_refactored.py:/app/main_refactored.py
       # ── Named volume — logs persistants ────────────────────────────────────
       - core_logs:/app/logs

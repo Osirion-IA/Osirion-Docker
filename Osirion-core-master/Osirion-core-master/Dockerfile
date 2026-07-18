@@ -132,43 +132,18 @@ COPY core/              ./core/
 COPY services/          ./services/
 COPY utils/             ./utils/
 COPY templates/         ./templates/
-COPY face_detection.py  .
+COPY person_detection.py .
 COPY main_refactored.py .
-COPY yolov11n-face.pt   .
 
-# Pré-télécharger le pack InsightFace (antelopev2 ≈ 360 MB : SCRFD-10G + glintr100
-# ResNet-100) pour éviter un téléchargement au premier démarrage du conteneur.
-# Note : CPUExecutionProvider utilisé ici car le builder n'a pas de GPU ;
-#        en production GPU, face_detection.py sélectionne CUDAExecutionProvider.
-#
-# BUG antelopev2 : son .zip contient un dossier `antelopev2/`, donc l'auto-download
-# d'insightface l'extrait en DOUBLE (models/antelopev2/antelopev2/*.onnx) →
-# FaceAnalysis ne trouve aucun modèle (AssertionError: 'detection' in self.models).
-# On télécharge donc le zip et on l'extrait NOUS-MÊMES au bon niveau (models/), avec
-# repli de mise à plat si un dossier imbriqué subsiste. Les autres packs (buffalo_l)
-# passent par l'auto-download normal (verify ci-dessous).
-RUN if [ "$INSIGHTFACE_MODEL_PACK" = "antelopev2" ]; then \
-        python -c "import os,glob,zipfile,shutil,urllib.request; \
-root=os.path.expanduser('~/.insightface/models'); os.makedirs(root,exist_ok=True); \
-z='/tmp/antelopev2.zip'; \
-urllib.request.urlretrieve('https://github.com/deepinsight/insightface/releases/download/v0.7/antelopev2.zip', z); \
-zipfile.ZipFile(z).extractall(root); \
-n=os.path.join(root,'antelopev2','antelopev2'); \
-([shutil.move(f, os.path.join(root,'antelopev2')) for f in glob.glob(n+'/*')] if os.path.isdir(n) else None); \
-(os.rmdir(n) if os.path.isdir(n) else None); \
-os.remove(z); print('antelopev2 extrait dans', root)"; \
-    fi && \
-    python -c "import os; from insightface.app import FaceAnalysis; \
-pack=os.getenv('INSIGHTFACE_MODEL_PACK','antelopev2'); \
-app=FaceAnalysis(name=pack, providers=['CPUExecutionProvider'], allowed_modules=['detection','recognition']); \
-app.prepare(ctx_id=-1, det_size=(320,320)); \
-print('InsightFace', pack, 'OK —', list(app.models.keys()))"
+# Pré-télécharger le modèle YOLO de détection de personnes (yolo26n ≈ 5 MB) pour
+# éviter un téléchargement au premier démarrage (et fonctionner hors-ligne).
+RUN python -c "from ultralytics import YOLO; YOLO('yolo26n.pt'); print('yolo26n prêt')"
 
 RUN mkdir -p logs
 
 EXPOSE 5000
 
-# start_period=90s laisse le temps à InsightFace de s'initialiser au démarrage
+# start_period=90s laisse le temps au modèle YOLO de s'initialiser au démarrage
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
     CMD curl -sf http://localhost:5000/api/cameras || exit 1
 

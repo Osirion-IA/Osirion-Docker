@@ -12,9 +12,6 @@ from services.camera_fetching_service import fetch_camera_list
 from services.mediamtx_path_service import sync_paths
 from core.camera_manager import CameraCapture
 from core.tracking_processor import TrackingProcessor
-from core.global_person_tracker import GlobalPersonTracker
-from core.runtime_control import RuntimeControl
-from face_detection import get_inference_engine
 from utils.logger import get_logger
 from utils.measurement import get_measurement
 from utils.gpu_monitor import get_gpu_stats
@@ -53,22 +50,7 @@ class SurveillanceSystem:
         # Sérialise les ajouts/retraits/réconciliations de caméras (démarrage + supervision).
         self.camera_lock = threading.Lock()
         self._supervisor_thread = None
-        
-        # Tracker global multi-caméra
-        # Fallback aligné sur l'échelle cosine IndexFlatIP (0.50 au lieu de l'ancien 0.75 sur (cosine+1)/2)
-        self.global_tracker = GlobalPersonTracker(
-            cache_ttl_seconds=getattr(config, 'GLOBAL_CACHE_TTL_SECONDS', 300),
-            similarity_threshold=getattr(config, 'GLOBAL_SIMILARITY_THRESHOLD', 0.50)
-        )
 
-        # Contrôle runtime (toggles depuis le frontend). Initialisé sur les valeurs
-        # de config, modifiable à chaud via les endpoints Flask (/api/face/toggle,
-        # /api/unknown-face/toggle).
-        self.runtime_control = RuntimeControl(
-            unknown_face_event_enabled=getattr(config, 'ENABLE_UNKNOWN_FACE_EVENT', False),
-            face_recognition_enabled=getattr(config, 'ENABLE_FACE_RECOGNITION', True),
-        )
-        
         self.threads = []
         self.web_server = None
     
@@ -114,12 +96,9 @@ class SurveillanceSystem:
             result_metadata=self.result_metadata,
             result_lock=self.result_locks[cam_id],
             tracker=self.trackers[cam_id],
-            person_db=self.track_id_to_person[cam_id],
             frame_idx_container=self.current_frame_idx,
             stop_event=cam_stop,
             config=self.config,
-            global_tracker=self.global_tracker,  # tracker global multi-caméra
-            runtime_control=self.runtime_control  # toggles partagés (facial, unknown-face)
         )
         processing_thread = threading.Thread(
             target=processor.run, daemon=True, name=f"processor-{cam_id}"
@@ -299,13 +278,8 @@ class SurveillanceSystem:
                         exc_info=True, extra={'camera_id': cam_id}
                     )
 
-            # 3) Caméras déjà actives : deux traitements À CHAUD, sans coupure.
-            #    (a) Propagation de la config EFFECTIVE des modules (facial)
-            #        recalculée par le backend (bascule de groupe ou drapeau local)
-            #        → le processeur saute l'étape désactivée dès la frame suivante,
-            #        libérant immédiatement le GPU/CPU, SANS redémarrer les threads.
-            #    (b) Résurrection : si (au moins) un thread est mort (exception non
-            #        gérée), la caméra est redémarrée proprement.
+            # 3) Caméras déjà actives : résurrection si un thread est mort
+            #    (exception non gérée) → redémarrage propre de la caméra.
             for cam_id in desired_ids & current_ids:
                 threads = self.camera_threads.get(cam_id, [])
                 if threads and any(not t.is_alive() for t in threads):
@@ -315,20 +289,6 @@ class SurveillanceSystem:
                     )
                     self._remove_camera(cam_id)
                     self._add_camera(desired[cam_id])
-                    continue
-
-                processor = self.camera_processors.get(cam_id)
-                if processor is not None:
-                    cam = desired[cam_id]
-                    try:
-                        processor.apply_effective_config(
-                            cam.get("effective_facial_active", True),
-                        )
-                    except Exception:
-                        logger.error(
-                            f"Échec application config effective à chaud caméra {cam_id}",
-                            exc_info=True, extra={'camera_id': cam_id}
-                        )
 
     def _supervise_loop(self) -> None:
         """Boucle de supervision : réconcilie périodiquement avec le backend."""
@@ -367,22 +327,19 @@ class SurveillanceSystem:
                     proc = self.camera_processors.get(cid)
                     snap = proc.latency_snapshot(reset=True) if proc is not None else {}
                     h = health.get(cid, {})
-                    n_face = snap.get("n_face", 0)
+                    n_det = snap.get("n_detections", 0)
                     cams_payload.append({
                         "id": cid,
                         "name": cam.get("cam_name"),
                         "capture_fps": h.get("fps"),
                         "state": h.get("state"),
                         # Débit réel d'inférence = frames traitées / durée d'intervalle.
-                        "processed_fps": round(n_face / dt, 2) if dt > 0 else None,
-                        "face_ms": snap.get("face_ms"),
+                        "processed_fps": round(n_det / dt, 2) if dt > 0 else None,
+                        "detect_ms": snap.get("detect_ms"),
                         "frame_ms": snap.get("frame_ms"),
-                        "n_processed": n_face,
+                        "n_processed": n_det,
                     })
-                try:
-                    cache = self.global_tracker.get_statistics()
-                except Exception:
-                    cache = {}
+                cache = {}
                 measure.emit(
                     "system_sample",
                     interval_s=round(dt, 2),
@@ -397,14 +354,6 @@ class SurveillanceSystem:
 
     def run(self):
         """Démarre le système de surveillance (avec supervision à chaud des caméras)."""
-        # Moteur d'inférence faciale partagé : créé à l'import de face_detection
-        # (modèles chargés une fois). On le référence ici pour journaliser sa
-        # configuration AVANT de lancer les caméras et garantir qu'il est prêt.
-        try:
-            logger.info(f"Moteur d'inférence faciale — {get_inference_engine().summary()}")
-        except Exception:
-            logger.error("Impossible de journaliser le moteur d'inférence", exc_info=True)
-
         cameras = fetch_camera_list()
         logger.info(f"Caméras trouvées au total : {len(cameras)}")
         active = [cam for cam in cameras if cam.get("is_active", False)]
@@ -486,24 +435,9 @@ class SurveillanceSystem:
             for ev in self.camera_stop_events.values():
                 ev.set()
 
-        # Afficher les statistiques du tracker global
-        stats = self.global_tracker.get_statistics()
-        logger.info(
-            f"Statistiques tracking global : {stats['active_persons']} personnes actives, "
-            f"{stats['total_persons_tracked']} total suivies, "
-            f"taux de cache hit : {stats['cache_hit_rate']}"
-        )
-        
         # Arrêter le serveur web si actif
         if self.web_server:
             self.web_server.stop()
-
-        # Arrêt propre du moteur d'inférence (threads worker + sessions ORT).
-        try:
-            get_inference_engine().shutdown()
-            logger.info("Moteur d'inférence faciale arrêté.")
-        except Exception:
-            logger.error("Échec arrêt du moteur d'inférence", exc_info=True)
 
         time.sleep(0.5)
         logger.info("Application multi-caméras fermée proprement")

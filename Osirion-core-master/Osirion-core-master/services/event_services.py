@@ -16,14 +16,11 @@ async def send_event_async(
     session: aiohttp.ClientSession,
     frame: np.ndarray,
     camera_id: int,
-    person_id: Optional[int],
     event_type: str,
-    confidence: float
+    confidence: float = 0.0
 ):
-    # person_id est OPTIONNEL : None pour un visage non reconnu (event_type=
-    # UNKNOWN_FACE). Le champ n'est alors pas posté → le backend enregistre
-    # person_id=NULL (la colonne est nullable). Comportement INCHANGÉ pour les
-    # appels existants qui passent un entier (reconnaissance faciale standard).
+    """Envoie un événement générique au backend (POST /events/add) avec snapshot.
+    Destiné aux futurs événements CPU (zone/comptage/intrusion) du moteur de règles."""
     URL = f"{API_URL}/events/add"
 
     success, buffer = cv2.imencode('.jpg', frame)
@@ -44,8 +41,6 @@ async def send_event_async(
             content_type="image/jpeg"
         )
         form.add_field("camera_id", str(camera_id))
-        if person_id is not None:
-            form.add_field("person_id", str(person_id))
         form.add_field("event_type", event_type)
         form.add_field("confidence", str(confidence))
 
