@@ -34,6 +34,7 @@ class EventEngine:
         self._refresh_interval = max(5, int(getattr(config, "ZONES_REFRESH_SECONDS", 30)))
         self._crowd_min_s = float(getattr(config, "CROWD_MIN_SECONDS", 3.0))
         self._occ_interval = float(getattr(config, "OCCUPANCY_EMIT_INTERVAL", 2.0))
+        self._dwell_min_s = float(getattr(config, "DWELL_MIN_SECONDS", 1.0))
 
         # État (muté UNIQUEMENT par le thread caméra dans process()).
         self._occ_last: Dict[int, int] = {}
@@ -41,6 +42,9 @@ class EventEngine:
         self._crowd_since: Dict[int, float] = {}
         self._crowd_active: Dict[int, bool] = {}
         self._line_side: Dict[int, Dict[int, float]] = {}
+        # Appartenance + horodatage d'entrée par zone → temps de présence (ZONE_DWELL).
+        self._zone_members: Dict[int, set] = {}
+        self._zone_entry: Dict[int, Dict[int, float]] = {}
 
         # Rafraîchisseur zones/lignes (thread dédié → pas de réseau côté caméra).
         self._stop = threading.Event()
@@ -90,7 +94,25 @@ class EventEngine:
             poly = z.get("polygon") or []
             if not poly:
                 continue
-            count = sum(1 for t in tracks_norm if point_in_polygon(t["x"], t["y"], poly))
+            members = {t["track_id"] for t in tracks_norm if point_in_polygon(t["x"], t["y"], poly)}
+            count = len(members)
+
+            # ── Temps de présence (ZONE_DWELL) : entrées/sorties de la zone ──
+            old_members = self._zone_members.get(zid, set())
+            entry = self._zone_entry.setdefault(zid, {})
+            for tid in (members - old_members):
+                entry[tid] = now
+            for tid in (old_members - members):
+                t0 = entry.pop(tid, None)
+                if t0 is not None:
+                    dwell = round(now - t0, 1)
+                    if dwell >= self._dwell_min_s:
+                        event_dispatch.dispatch(
+                            self.camera_id, "ZONE_DWELL",
+                            meta={"zone_id": zid, "zone_name": z.get("name"),
+                                  "kind": z.get("kind"), "dwell_s": dwell},
+                        )
+            self._zone_members[zid] = members
 
             if self._occ_last.get(zid) != count and (now - self._occ_last_emit.get(zid, 0.0)) >= self._occ_interval:
                 self._occ_last[zid] = count

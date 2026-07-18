@@ -67,6 +67,19 @@ export default function AdminSidebar({
       ),
     },
     {
+      label: "Analytics",
+      href: "/Osirion/admin/analytics",
+      roles: ["admin", "user", "viewer"],
+      icon: (
+        <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+          <path d="M3 3v18h18" />
+          <rect x="7" y="11" width="3" height="7" />
+          <rect x="12" y="7" width="3" height="11" />
+          <rect x="17" y="4" width="3" height="14" />
+        </svg>
+      ),
+    },
+    {
       label: "Carte",
       href: "/Osirion/admin/map",
       roles: ["admin", "user", "viewer"],

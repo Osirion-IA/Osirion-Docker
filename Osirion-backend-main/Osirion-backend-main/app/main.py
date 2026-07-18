@@ -17,6 +17,7 @@ from app.routes.audit_routes import router as audit_router
 from app.routes.maintenance_routes import router as maintenance_router
 from app.routes.groups_routes import router as groups_router
 from app.routes.zones_routes import router as zones_router
+from app.routes.analytics_routes import router as analytics_router
 from app.middleware.rate_limit import limiter
 from app.config import settings
 
@@ -87,6 +88,7 @@ app.include_router(maintenance_router, prefix="/maintenance", tags=["🧹 Mainte
 app.include_router(camera_router, prefix="/cameras", tags=["📹 Cameras"])
 app.include_router(groups_router, prefix="/groups", tags=["🗂️ Camera Groups"])
 app.include_router(zones_router, prefix="/zones", tags=["📐 Zones & Comptage"])
+app.include_router(analytics_router, prefix="/analytics", tags=["📈 Analytics"])
 app.include_router(monitoring_router,prefix="/sysInfo", tags=["Syetem Informations"])
 
 # ─────────────────────────────────────────────

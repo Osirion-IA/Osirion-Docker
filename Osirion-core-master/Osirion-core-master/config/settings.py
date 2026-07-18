@@ -67,6 +67,8 @@ CROWD_MIN_SECONDS = float(os.getenv('CROWD_MIN_SECONDS', '3.0'))
 # Throttle des ZONE_OCCUPANCY_CHANGED : au plus un par zone toutes les N secondes
 # (borne les écritures DB).
 OCCUPANCY_EMIT_INTERVAL = float(os.getenv('OCCUPANCY_EMIT_INTERVAL', '2.0'))
+# Temps de présence minimal (s) pour émettre un ZONE_DWELL (filtre les passages éclairs).
+DWELL_MIN_SECONDS = float(os.getenv('DWELL_MIN_SECONDS', '1.0'))
 
 # ----------------------
 # Configuration de la reconnexion RTSP
