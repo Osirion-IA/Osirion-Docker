@@ -15,6 +15,7 @@ load_dotenv()
 from app.models.users import User
 from app.models.cameras import Camera, CameraGroupLink
 from app.models.camera_groups import CameraGroup
+from app.models.zones import Zone, CountLine
 from app.models.events import Event
 from app.models.alerts import Alert
 from app.models.audit import AuditLog

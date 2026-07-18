@@ -117,7 +117,6 @@ services:
       - uploads_data:/app/uploads
       - cropped_data:/app/cropped
       - snapshots_data:/app/snapshots
-      - insightface_cache:/root/.insightface
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
       interval: 30s
@@ -296,5 +295,4 @@ volumes:
   uploads_data:
   cropped_data:
   snapshots_data:
-  insightface_cache:
   core_logs:

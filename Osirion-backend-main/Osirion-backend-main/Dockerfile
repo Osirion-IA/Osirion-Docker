@@ -2,8 +2,8 @@
 # Osirion-Backend — Dockerfile multi-stage
 # =============================================================================
 # Build args :
-#   GPU=0  (défaut) — torch CPU  + onnxruntime      (~3 GB image finale)
-#   GPU=1           — torch CUDA + onnxruntime-gpu  (~7 GB image finale)
+#   GPU=0  (défaut) — torch CPU   (détection de visage YOLO via ultralytics)
+#   GPU=1           — torch CUDA
 #
 # Usage :
 #   CPU : docker build .
@@ -102,36 +102,10 @@ COPY alembic.ini      .
 COPY app/             ./app/
 COPY scripts/         ./scripts/
 
+# Modèle de détection de visage (YOLO via ultralytics) utilisé par
+# app/services/detection_service.py. La reconnaissance faciale InsightFace
+# (onnxruntime + pack antelopev2 ~1 GB) a été retirée — plus rien à pré-télécharger.
 COPY yolov11n-face.pt .
-
-# Pré-télécharger le pack InsightFace d'enrôlement (PARITÉ avec le Core :
-# antelopev2 = SCRFD-10G + glintr100 ResNet-100). Évite un téléchargement au
-# premier enrôlement. Doit rester ALIGNÉ sur le Core (même INSIGHTFACE_MODEL_PACK).
-#
-# BUG antelopev2 : son .zip contient un dossier `antelopev2/`, donc l'auto-download
-# d'insightface l'extrait en DOUBLE (models/antelopev2/antelopev2/*.onnx) →
-# FaceAnalysis ne trouve aucun modèle (AssertionError: 'detection' in self.models).
-# On télécharge donc le zip et on l'extrait NOUS-MÊMES au bon niveau (models/), avec
-# repli de mise à plat si un dossier imbriqué subsiste. Les autres packs (buffalo_l)
-# passent par l'auto-download normal (verify ci-dessous).
-ARG INSIGHTFACE_MODEL_PACK=antelopev2
-ENV INSIGHTFACE_MODEL_PACK=${INSIGHTFACE_MODEL_PACK}
-RUN if [ "$INSIGHTFACE_MODEL_PACK" = "antelopev2" ]; then \
-        python -c "import os,glob,zipfile,shutil,urllib.request; \
-root=os.path.expanduser('~/.insightface/models'); os.makedirs(root,exist_ok=True); \
-z='/tmp/antelopev2.zip'; \
-urllib.request.urlretrieve('https://github.com/deepinsight/insightface/releases/download/v0.7/antelopev2.zip', z); \
-zipfile.ZipFile(z).extractall(root); \
-n=os.path.join(root,'antelopev2','antelopev2'); \
-([shutil.move(f, os.path.join(root,'antelopev2')) for f in glob.glob(n+'/*')] if os.path.isdir(n) else None); \
-(os.rmdir(n) if os.path.isdir(n) else None); \
-os.remove(z); print('antelopev2 extrait dans', root)"; \
-    fi && \
-    python -c "import os; from insightface.app import FaceAnalysis; \
-pack=os.getenv('INSIGHTFACE_MODEL_PACK','antelopev2'); \
-app=FaceAnalysis(name=pack, providers=['CPUExecutionProvider'], allowed_modules=['detection','recognition']); \
-app.prepare(ctx_id=-1, det_size=(320,320)); \
-print('InsightFace', pack, 'OK (backend) —', list(app.models.keys()))"
 
 EXPOSE 8000
 

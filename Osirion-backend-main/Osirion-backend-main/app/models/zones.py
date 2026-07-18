@@ -1,0 +1,62 @@
+# app/models/zones.py
+"""
+Primitives spatiales configurables PAR CAMÉRA (Vision Engine anonyme).
+
+- Zone      : polygone (occupation, file d'attente, attroupement).
+- CountLine : ligne de comptage (entrées/sorties) = segment A→B + sens « entrée ».
+
+Coordonnées NORMALISÉES dans [0,1] (repère de la frame) → indépendantes de la
+résolution : le même tracé s'applique que la vidéo soit en 640×480 ou 1080p.
+
+`organization_id` : ancrage multi-tenant (non peuplé pour l'instant).
+FK camera_id ON DELETE CASCADE : supprimer une caméra purge ses zones/lignes.
+"""
+from sqlmodel import SQLModel, Field
+from sqlalchemy import Column, Integer, ForeignKey, JSON
+from typing import Optional, List
+from datetime import datetime
+
+# Types de zone (documentent l'usage ; VARCHAR libre côté DB).
+ZONE_OCCUPANCY = "occupancy"   # comptage des présents / occupation
+ZONE_QUEUE = "queue"           # file d'attente (longueur, temps d'attente)
+ZONE_CROWD = "crowd"           # détection d'attroupement (seuil de densité)
+ZONE_GENERIC = "generic"
+
+
+class Zone(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    camera_id: int = Field(
+        sa_column=Column(Integer, ForeignKey("camera.id", ondelete="CASCADE"),
+                         nullable=False, index=True)
+    )
+    name: str = Field(..., max_length=100)
+    kind: str = Field(default=ZONE_GENERIC, max_length=20)
+    # Polygone : liste ordonnée de points [x, y] normalisés dans [0,1] (≥ 3 points).
+    polygon: List[List[float]] = Field(sa_column=Column(JSON, nullable=False))
+    color: Optional[str] = Field(default=None, max_length=20)
+    organization_id: Optional[int] = Field(default=None, index=True)
+    is_active: bool = Field(default=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: Optional[datetime] = Field(default=None)
+
+
+class CountLine(SQLModel, table=True):
+    __tablename__ = "count_line"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    camera_id: int = Field(
+        sa_column=Column(Integer, ForeignKey("camera.id", ondelete="CASCADE"),
+                         nullable=False, index=True)
+    )
+    name: str = Field(..., max_length=100)
+    # Segment A→B : 2 points [x, y] normalisés dans [0,1].
+    point_a: List[float] = Field(sa_column=Column(JSON, nullable=False))
+    point_b: List[float] = Field(sa_column=Column(JSON, nullable=False))
+    # Sens « entrée » : côté du segment (signe du produit vectoriel AB × AP) compté
+    # comme une entrée. "positive" | "negative" — l'UI pose la flèche ; le comptage
+    # effectif (franchissement) sera implémenté par l'Event Engine (Phase C).
+    in_direction: str = Field(default="positive", max_length=10)
+    organization_id: Optional[int] = Field(default=None, index=True)
+    is_active: bool = Field(default=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: Optional[datetime] = Field(default=None)
