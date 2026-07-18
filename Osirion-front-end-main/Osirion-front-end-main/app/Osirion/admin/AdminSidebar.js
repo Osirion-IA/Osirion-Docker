@@ -56,6 +56,17 @@ export default function AdminSidebar({
       ),
     },
     {
+      label: "Zones & comptage",
+      href: "/Osirion/admin/zones",
+      roles: ["admin", "user", "viewer"],
+      icon: (
+        <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
+          <path d="M3 7l6-3 6 3 6-3v13l-6 3-6-3-6 3z" />
+          <path d="M9 4v13M15 7v13" />
+        </svg>
+      ),
+    },
+    {
       label: "Carte",
       href: "/Osirion/admin/map",
       roles: ["admin", "user", "viewer"],
