@@ -9,7 +9,7 @@ import { useAuth } from "../AuthContext";
 // (facial / LPR) et gestion des membres. Consomme les proxys /api/groups/* et
 // /api/cameras. La bascule d'un module est appliquée à chaud par le Core.
 
-const EMPTY_FORM = { name: "", description: "", is_facial_active: true, is_lpr_active: true };
+const EMPTY_FORM = { name: "", description: "" };
 
 export default function GroupsPage() {
   const [isCollapsed, setIsCollapsed] = useState(false);
@@ -74,8 +74,6 @@ export default function GroupsPage() {
     setForm({
       name: g.name,
       description: g.description || "",
-      is_facial_active: g.is_facial_active,
-      is_lpr_active: g.is_lpr_active,
     });
     setModalError("");
     setShowModal(true);
@@ -215,18 +213,6 @@ export default function GroupsPage() {
                   className="w-full px-4 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:text-white"
                 />
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <ModuleSwitch
-                  label="Facial"
-                  active={form.is_facial_active}
-                  onClick={() => setForm((f) => ({ ...f, is_facial_active: !f.is_facial_active }))}
-                />
-                <ModuleSwitch
-                  label="LPR / Plaques"
-                  active={form.is_lpr_active}
-                  onClick={() => setForm((f) => ({ ...f, is_lpr_active: !f.is_lpr_active }))}
-                />
-              </div>
               <div className="flex gap-3 pt-2">
                 <button type="button" onClick={() => setShowModal(false)} className="flex-1 px-4 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
                   Annuler
@@ -335,22 +321,6 @@ export default function GroupsPage() {
                       <span className="shrink-0 text-xs font-medium px-2.5 py-1 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300">
                         {g.camera_count ?? (g.camera_ids || []).length} 📹
                       </span>
-                    </div>
-
-                    {/* Bascules de module */}
-                    <div className="mt-4 grid grid-cols-2 gap-3">
-                      <ModuleToggleCard
-                        label="Facial"
-                        active={g.is_facial_active}
-                        disabled={!canWrite || busyId === g.id}
-                        onClick={() => toggleModule(g, "is_facial_active")}
-                      />
-                      <ModuleToggleCard
-                        label="LPR"
-                        active={g.is_lpr_active}
-                        disabled={!canWrite || busyId === g.id}
-                        onClick={() => toggleModule(g, "is_lpr_active")}
-                      />
                     </div>
 
                     {/* Aperçu des caméras membres */}

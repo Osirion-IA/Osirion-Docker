@@ -67,7 +67,6 @@ export default function AdminDashboard() {
 
   const [cameras, setCameras] = useState([]);
   const [users, setUsers] = useState([]);
-  const [people, setPeople] = useState([]);
   const [events, setEvents] = useState([]);
   const [dash, setDash] = useState(null);
   const [loadingStats, setLoadingStats] = useState(true);
@@ -76,17 +75,15 @@ export default function AdminDashboard() {
   const fetchDashboardData = useCallback(async () => {
     setLoadingStats(true);
     try {
-      const [camRes, userRes, peopleRes, eventsRes, dashRes] = await Promise.all([
+      const [camRes, userRes, eventsRes, dashRes] = await Promise.all([
         fetchWithRefresh("/api/cameras"),
         fetchWithRefresh("/api/users"),
-        fetchWithRefresh("/api/people"),
         fetchWithRefresh("/api/events?limit=20"),
         fetchWithRefresh("/api/dashboard"),
       ]);
 
       if (camRes?.ok) setCameras(await camRes.json());
       if (userRes?.ok) setUsers(await userRes.json());
-      if (peopleRes?.ok) setPeople(await peopleRes.json());
       if (eventsRes?.ok) setEvents(await eventsRes.json());
       if (dashRes?.ok) setDash(await dashRes.json());
 
@@ -119,15 +116,15 @@ export default function AdminDashboard() {
     {
       label: "Alertes aujourd'hui",
       value: loadingStats ? "—" : todayEvents.length,
-      delta: loadingStats ? "" : `${dash?.counts.alerts_new ?? 0} alertes blacklist`,
+      delta: loadingStats ? "" : `${dash?.counts.alerts_new ?? 0} nouvelle(s) alerte(s)`,
       trend: "24h",
       deltaGood: (dash?.counts.alerts_new ?? 0) === 0,
     },
     {
-      label: "Sous surveillance",
-      value: loadingStats ? "—" : (dash?.counts.people_blacklisted ?? 0),
-      delta: loadingStats ? "" : `${dash?.counts.people_blacklisted ?? 0} personne(s) surveillée(s)`,
-      trend: "blacklist",
+      label: "Événements (total)",
+      value: loadingStats ? "—" : (dash?.counts.events_total ?? 0),
+      delta: loadingStats ? "" : `${dash?.counts.alerts_total ?? 0} alerte(s)`,
+      trend: "total",
       deltaGood: true,
     },
     {
@@ -447,17 +444,15 @@ export default function AdminDashboard() {
                   )}
                 </div>
 
-                {/* Résumé blacklist */}
+                {/* Résumé opérationnel */}
                 <div className="mt-4 grid grid-cols-2 gap-3">
                   <div className="rounded-xl border border-black/10 dark:border-white/10 bg-white/70 dark:bg-black/30 p-3 text-center">
-                    <p className="text-xs text-black/60 dark:text-white/60">Blacklist</p>
-                    <p className="text-xl font-semibold mt-1">{loadingStats ? "—" : people.length}</p>
+                    <p className="text-xs text-black/60 dark:text-white/60">Alertes</p>
+                    <p className="text-xl font-semibold mt-1">{loadingStats ? "—" : (dash?.counts.alerts_total ?? 0)}</p>
                   </div>
                   <div className="rounded-xl border border-black/10 dark:border-white/10 bg-white/70 dark:bg-black/30 p-3 text-center">
-                    <p className="text-xs text-black/60 dark:text-white/60">Détections</p>
-                    <p className="text-xl font-semibold mt-1">
-                      {loadingStats ? "—" : events.filter((e) => e.event_type === "blacklist_detected").length}
-                    </p>
+                    <p className="text-xs text-black/60 dark:text-white/60">Événements</p>
+                    <p className="text-xl font-semibold mt-1">{loadingStats ? "—" : (dash?.counts.events_total ?? 0)}</p>
                   </div>
                 </div>
               </div>

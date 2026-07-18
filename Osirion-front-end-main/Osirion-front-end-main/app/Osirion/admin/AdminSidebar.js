@@ -78,17 +78,6 @@ export default function AdminSidebar({
       ),
     },
     {
-      label: "Blacklist",
-      href: "/Osirion/admin/blacklist",
-      roles: ["admin", "user"],
-      icon: (
-        <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
-          <circle cx="12" cy="12" r="9" />
-          <path d="m7.5 7.5 9 9" />
-        </svg>
-      ),
-    },
-    {
       label: "Utilisateurs & rôles",
       href: "/Osirion/admin/users",
       roles: ["admin"],

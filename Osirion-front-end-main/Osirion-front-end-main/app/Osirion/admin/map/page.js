@@ -28,14 +28,10 @@ function loadLeaflet() {
   return _leafletPromise;
 }
 
-// Couleur selon les modules effectivement actifs sur la caméra.
-function moduleColor(modules = []) {
-  const f = modules.includes("facial");
-  const l = modules.includes("lpr");
-  if (f && l) return "#7c3aed"; // violet — les deux
-  if (f) return "#2563eb"; // bleu — facial
-  if (l) return "#d97706"; // ambre — LPR
-  return "#6b7280"; // gris — aucun
+// Couleur du marqueur caméra sur la carte (détection de personnes anonyme).
+// L'argument (héritage) est ignoré — couleur unique pour toutes les caméras actives.
+function moduleColor() {
+  return "#2563eb"; // bleu
 }
 
 // Point destination (approx. équirectangulaire, valable à quelques dizaines de m).
@@ -138,9 +134,7 @@ export default function MapPage() {
       }).addTo(layerRef.current);
 
       // Marqueur.
-      const modulesTxt = (c.active_modules || []).length
-        ? (c.active_modules || []).join(", ")
-        : "aucun module actif";
+      const modulesTxt = `Cap ${Math.round(c.bearing || 0)}°`;
       L.circleMarker(center, {
         radius: 7,
         color: "#ffffff",
@@ -209,10 +203,7 @@ export default function MapPage() {
                 <div className="rounded-2xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 shadow-sm p-4">
                   <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">Légende</h3>
                   <ul className="space-y-2 text-sm">
-                    <LegendRow color="#2563eb" label="Facial" />
-                    <LegendRow color="#d97706" label="LPR / Plaques" />
-                    <LegendRow color="#7c3aed" label="Facial + LPR" />
-                    <LegendRow color="#6b7280" label="Aucun module actif" />
+                    <LegendRow color="#2563eb" label="Caméra active" />
                   </ul>
                   <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">
                     Le cône indique le champ de vision (cap de l'objectif).
@@ -233,7 +224,7 @@ export default function MapPage() {
                           <div className="min-w-0">
                             <p className="text-sm text-gray-900 dark:text-white truncate">{c.name}</p>
                             <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                              {(c.active_modules || []).join(", ") || "aucun module"} • {Math.round(c.bearing || 0)}°
+                              Cap {Math.round(c.bearing || 0)}°
                             </p>
                           </div>
                         </li>

@@ -4,11 +4,10 @@ import io from 'socket.io-client';
 // (cf. lib/publicUrls) → la vidéo + l'overlay marchent depuis tout poste du LAN.
 import { SOCKET_URL, MEDIAMTX_URL } from "../../../lib/publicUrls";
 
-// Couleur d'overlay (CSS). Visages : vert=reconnu / rouge=inconnu.
+// Couleur d'overlay (CSS) — détection de personne anonyme (couleur neutre).
+// eslint-disable-next-line no-unused-vars
 function detectionColor(det) {
-    // Alerte (blacklist) prioritaire : rouge soutenu.
-    if (det.alert) return '#dc2626';
-    return det.recognized ? '#22c55e' : '#ef4444';
+    return '#06b6d4';
 }
 
 // WHEP « non-trickle » : on attend la fin du gathering ICE avant d'envoyer

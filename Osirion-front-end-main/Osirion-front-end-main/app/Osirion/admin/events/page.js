@@ -20,8 +20,6 @@ const IconX = ({ className }) => (<Svg className={className}><path d="M18 6 6 18
 
 // Type d'événement → libellé FR + badge (aligné backend).
 const TYPE_META = {
-  RECOGNITION:       { label: "Reconnaissance", badge: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" },
-  UNKNOWN_FACE:      { label: "Visage inconnu",  badge: "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300" },
   ENTRY:             { label: "Entrée",          badge: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" },
   EXIT:              { label: "Sortie",          badge: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300" },
   DETECTION:         { label: "Détection",       badge: "bg-gray-200 text-gray-700 dark:bg-gray-700/50 dark:text-gray-300" },

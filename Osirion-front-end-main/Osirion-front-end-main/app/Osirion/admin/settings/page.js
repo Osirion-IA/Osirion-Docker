@@ -6,7 +6,6 @@ import AdminTopBar from "../AdminTopBar";
 import { useAuth } from "../AuthContext";
 import { AccessDenied } from "../RoleGuard";
 import { Settings, Shield, Target, AlertTriangle, CheckCircle2, Save, RotateCcw, User } from "lucide-react";
-import { CORE_URL } from "../../../lib/publicUrls";
 
 // Paramètres persistés localement (Général + Sécurité). On NE persiste PAS ici
 // les toggles de Détection : le Core en est la source de vérité (lus/poussés via
@@ -28,83 +27,11 @@ export default function SettingsPage() {
     siteName: "Osirion Surveillance",   // → titre de l'onglet navigateur
     sessionTimeout: 30,                 // → déconnexion auto après inactivité
     passwordMinLength: 8,               // → création d'utilisateur (longueur min)
-    faceRecognition: true,              // → Core (pipeline facial), à chaud — DÉFAUT activé
-    unknownFaceEvent: false,            // → Core (événement visage non reconnu), à chaud
   });
 
   const handleSettingChange = (key, value) => {
     setSettings((prev) => ({ ...prev, [key]: value }));
     setHasUnsavedChanges(true);
-  };
-
-  // CORE_URL (API facial / visage inconnu) dérivé de l'hôte d'accès — cf. lib/publicUrls.
-
-  // Au montage : récupérer l'état RÉEL de la reconnaissance faciale côté Core.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(`${CORE_URL}/api/face/status`);
-        if (!res.ok) return;
-        const data = await res.json();
-        if (cancelled) return;
-        setSettings((prev) => ({ ...prev, faceRecognition: data.face_recognition_enabled !== false }));
-      } catch {
-        // Core injoignable : on garde l'état local par défaut (activé), sans bloquer.
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [CORE_URL]);
-
-  // Active/désactive le pipeline de reconnaissance faciale côté Core (à chaud).
-  const toggleFace = async (enabled) => {
-    try {
-      const res = await fetch(`${CORE_URL}/api/face/toggle`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setSettings((prev) => ({ ...prev, faceRecognition: !!data.face_recognition_enabled }));
-      }
-    } catch {
-      console.warn("Face toggle: Core injoignable à", CORE_URL);
-    }
-  };
-
-  // Au montage : récupérer l'état RÉEL de l'événement « visage non reconnu ».
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(`${CORE_URL}/api/unknown-face/status`);
-        if (!res.ok) return;
-        const data = await res.json();
-        if (cancelled) return;
-        setSettings((prev) => ({ ...prev, unknownFaceEvent: !!data.unknown_face_event_enabled }));
-      } catch {
-        // Core injoignable : on garde l'état local par défaut, sans bloquer la page.
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [CORE_URL]);
-
-  // Active/désactive l'enregistrement d'un événement pour les visages non reconnus.
-  const toggleUnknownFace = async (enabled) => {
-    try {
-      const res = await fetch(`${CORE_URL}/api/unknown-face/toggle`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setSettings((prev) => ({ ...prev, unknownFaceEvent: !!data.unknown_face_event_enabled }));
-      }
-    } catch {
-      console.warn("Unknown-face toggle: Core injoignable à", CORE_URL);
-    }
   };
 
   // Au montage : restaurer les paramètres persistés (Général + Sécurité).
@@ -346,60 +273,10 @@ export default function SettingsPage() {
                   </div>
 
                   <div className="space-y-4">
-                    {/* Reconnaissance faciale (pipeline principal, à chaud) */}
-                    <div className="flex items-center justify-between p-5 rounded-xl bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700">
-                      <div className="flex items-center gap-3">
-                        <div className="h-10 w-10 rounded-lg bg-gray-700 dark:bg-gray-600 flex items-center justify-center text-white">
-                          <User className="h-5 w-5" />
-                        </div>
-                        <div>
-                          <div className="text-sm font-bold text-gray-900 dark:text-white">Reconnaissance faciale</div>
-                          <div className="text-xs text-gray-600 dark:text-gray-400">Détecter et identifier les visages (pipeline principal)</div>
-                          {settings.faceRecognition === false && (
-                            <div className="text-[11px] mt-1 text-amber-600 dark:text-amber-400">
-                              ⚠ Module suspendu — aucun visage détecté ni reconnu
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={settings.faceRecognition}
-                          onChange={(e) => {
-                            setSettings((p) => ({ ...p, faceRecognition: e.target.checked }));
-                            toggleFace(e.target.checked);
-                          }}
-                          className="sr-only peer"
-                        />
-                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
-                      </label>
-                    </div>
-
-
-                    {/* Visages non reconnus */}
-                    <div className="flex items-center justify-between p-5 rounded-xl bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700">
-                      <div className="flex items-center gap-3">
-                        <div className="h-10 w-10 rounded-lg bg-gray-700 dark:bg-gray-600 flex items-center justify-center text-white">
-                          <AlertTriangle className="h-5 w-5" />
-                        </div>
-                        <div>
-                          <div className="text-sm font-bold text-gray-900 dark:text-white">Visages non reconnus</div>
-                          <div className="text-xs text-gray-600 dark:text-gray-400">Enregistrer un événement distinct (UNKNOWN_FACE) quand un visage est détecté mais non identifié</div>
-                        </div>
-                      </div>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={settings.unknownFaceEvent}
-                          onChange={(e) => {
-                            setSettings((p) => ({ ...p, unknownFaceEvent: e.target.checked }));
-                            toggleUnknownFace(e.target.checked);
-                          }}
-                          className="sr-only peer"
-                        />
-                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-rose-300 dark:peer-focus:ring-rose-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-rose-600"></div>
-                      </label>
+                    <div className="p-5 rounded-xl bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 text-sm text-gray-600 dark:text-gray-400">
+                      La détection de personnes (anonyme) est toujours active sur les caméras.
+                      Les règles opérationnelles (attroupement, intrusion horaire…) seront
+                      configurables ici.
                     </div>
                   </div>
                 </div>
