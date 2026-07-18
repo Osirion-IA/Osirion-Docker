@@ -12,6 +12,7 @@ from services.camera_fetching_service import fetch_camera_list
 from services.mediamtx_path_service import sync_paths
 from core.camera_manager import CameraCapture
 from core.tracking_processor import TrackingProcessor
+from core import event_dispatch
 from utils.logger import get_logger
 from utils.measurement import get_measurement
 from utils.gpu_monitor import get_gpu_stats
@@ -354,6 +355,7 @@ class SurveillanceSystem:
 
     def run(self):
         """Démarre le système de surveillance (avec supervision à chaud des caméras)."""
+        event_dispatch.start()   # dispatcher d'événements découplé (Event Engine)
         cameras = fetch_camera_list()
         logger.info(f"Caméras trouvées au total : {len(cameras)}")
         active = [cam for cam in cameras if cam.get("is_active", False)]
@@ -438,6 +440,8 @@ class SurveillanceSystem:
         # Arrêter le serveur web si actif
         if self.web_server:
             self.web_server.stop()
+
+        event_dispatch.stop()   # arrêt du dispatcher d'événements
 
         time.sleep(0.5)
         logger.info("Application multi-caméras fermée proprement")

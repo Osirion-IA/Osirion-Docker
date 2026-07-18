@@ -33,6 +33,9 @@ const EVENT_TYPES = [
   { value: "ENTRY",             label: "Entrée",         badge: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" },
   { value: "EXIT",              label: "Sortie",         badge: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300" },
   { value: "DETECTION",         label: "Détection",      badge: "bg-gray-200 text-gray-700 dark:bg-gray-700/50 dark:text-gray-300" },
+  { value: "ZONE_OCCUPANCY_CHANGED", label: "Occupation", badge: "bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300" },
+  { value: "CROWD_DETECTED",    label: "Attroupement",   badge: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300" },
+  { value: "LINE_CROSSED",      label: "Franchissement", badge: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300" },
 ];
 const TYPE_LABEL = Object.fromEntries(EVENT_TYPES.map((t) => [t.value, t.label]));
 const TYPE_BADGE = Object.fromEntries(EVENT_TYPES.map((t) => [t.value, t.badge]));

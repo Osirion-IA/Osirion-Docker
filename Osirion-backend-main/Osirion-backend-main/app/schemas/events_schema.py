@@ -8,6 +8,7 @@ class EventCreate(BaseModel):
     event_type: str
     confidence: Optional[float] = None
     snapshot_url: Optional[str] = None
+    meta: Optional[dict] = None
 
 class EventRead(BaseModel):
     id: int
@@ -15,4 +16,5 @@ class EventRead(BaseModel):
     event_type: str
     confidence: Optional[float]
     snapshot_url: Optional[str]
+    meta: Optional[dict] = None
     timestamp: datetime

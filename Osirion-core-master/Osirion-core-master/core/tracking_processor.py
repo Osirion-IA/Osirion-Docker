@@ -20,6 +20,7 @@ import queue
 import threading
 
 from person_detection import detect_persons
+from core.event_engine import EventEngine
 from utils.logger import get_logger
 from utils.monitoring import emit_blur_metric
 from utils.measurement import get_measurement
@@ -51,6 +52,9 @@ class TrackingProcessor:
         self._blur_skip_count = 0
         # Dernier point au sol par track → dérive vitesse/direction (Scene Model).
         self._last_foot: Dict[int, tuple] = {}
+
+        # Event Engine : occupation / attroupement / franchissement de ligne (Phase C).
+        self.event_engine = EventEngine(self.cam_id, config)
 
         # ── Mesure (chapitre 4) : latence par frame TRAITÉE ──────────────────
         # detect_ms = coût de la passe YOLO (GPU) ; frame_ms = coût total (détection
@@ -124,6 +128,7 @@ class TrackingProcessor:
         logger.info(f"[cam={self.cam_name}] traitement démarré (détection de personnes).")
         blur_threshold = getattr(self.config, "BLUR_THRESHOLD", 0.0) or 0.0
         conf = getattr(self.config, "PERSON_DETECTION_CONFIDENCE", 0.4)
+        self.event_engine.start()
         try:
             while not self.stop_event.is_set():
                 try:
@@ -161,11 +166,13 @@ class TrackingProcessor:
                     detect_ms = (time.perf_counter() - _t) * 1000.0
 
                     # ── Tracking (OC-SORT) → identifiants anonymes persistants ───
-                    img_info = [frame.shape[0], frame.shape[1]]
+                    fh, fw = frame.shape[:2]
+                    img_info = [fh, fw]
                     tracks = self.tracker.update(
                         self._to_output_results(boxes), img_info, img_info
                     )
 
+                    tracks_norm = []   # points au sol NORMALISÉS [0,1] pour l'Event Engine
                     for track in tracks:
                         tlwh = track.tlwh
                         x, y, w, h = int(tlwh[0]), int(tlwh[1]), int(tlwh[2]), int(tlwh[3])
@@ -175,13 +182,23 @@ class TrackingProcessor:
                         prev = self._last_foot.get(tid)
                         vx, vy = (foot[0] - prev[0], foot[1] - prev[1]) if prev else (0.0, 0.0)
                         self._last_foot[tid] = foot
+                        # Coordonnées normalisées (repère indépendant de la résolution).
+                        nx = foot[0] / fw if fw else 0.0
+                        ny = foot[1] / fh if fh else 0.0
+                        tracks_norm.append({"track_id": tid, "x": nx, "y": ny})
                         detections.append({
                             "type": "person",
                             "track_id": tid,
                             "bbox": [x, y, x + w, y + h],
                             "foot": [round(foot[0], 1), round(foot[1], 1)],
                             "velocity": [round(vx, 1), round(vy, 1)],
+                            # Zones (ids) contenant le point au sol → Scene Model enrichi.
+                            "zones": self.event_engine.zones_for_point(nx, ny),
                         })
+
+                    # ── Event Engine : occupation / attroupement / franchissement ─
+                    # Géométrie CPU légère + émission fire-and-forget (aucun réseau ici).
+                    self.event_engine.process(tracks_norm, frame)
 
                     # Purge périodique de l'historique des tracks disparus (mémoire).
                     if self.frame_counter % 300 == 0 and self._last_foot:
@@ -207,4 +224,8 @@ class TrackingProcessor:
         except Exception:
             logger.error(f"[cam={self.cam_name}] erreur fatale du traitement", exc_info=True)
         finally:
+            try:
+                self.event_engine.stop()
+            except Exception:
+                pass
             logger.info(f"[cam={self.cam_name}] traitement arrêté.")

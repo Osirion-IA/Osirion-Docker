@@ -23,6 +23,9 @@ const TYPE_META = {
   ENTRY:             { label: "Entrée",          badge: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" },
   EXIT:              { label: "Sortie",          badge: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300" },
   DETECTION:         { label: "Détection",       badge: "bg-gray-200 text-gray-700 dark:bg-gray-700/50 dark:text-gray-300" },
+  ZONE_OCCUPANCY_CHANGED: { label: "Occupation", badge: "bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300" },
+  CROWD_DETECTED:    { label: "Attroupement",    badge: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300" },
+  LINE_CROSSED:      { label: "Franchissement",  badge: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300" },
 };
 
 function snapSrc(url) {
@@ -211,7 +214,12 @@ export default function EventsPage() {
                   {filtered.map((e) => {
                     const meta = TYPE_META[e.event_type] || { label: e.event_type, badge: "bg-gray-200 text-gray-700 dark:bg-gray-700/50 dark:text-gray-300" };
                     const src = snapSrc(e.snapshot_url);
-                    const detail = e.person_nom || (e.event_type === "UNKNOWN_FACE" ? "Visage non identifié" : "—");
+                    const detail = e.meta
+                      ? ([e.meta.zone_name || e.meta.line_name,
+                          e.meta.count != null ? `${e.meta.count} pers.` : null,
+                          e.meta.direction ? (e.meta.direction === "in" ? "entrée" : "sortie") : null]
+                          .filter(Boolean).join(" · ") || "—")
+                      : "—";
                     return (
                       <li key={e.id} className="flex items-center gap-4 p-4 hover:bg-gray-50 dark:hover:bg-gray-800/40 transition-colors">
                         <button

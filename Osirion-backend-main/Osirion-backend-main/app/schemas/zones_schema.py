@@ -21,6 +21,7 @@ class ZoneCreate(BaseModel):
     kind: str = "generic"
     polygon: List[Point]
     color: Optional[str] = None
+    threshold: Optional[int] = None
 
     @field_validator("polygon")
     @classmethod
@@ -37,6 +38,7 @@ class ZoneUpdate(BaseModel):
     kind: Optional[str] = None
     polygon: Optional[List[Point]] = None
     color: Optional[str] = None
+    threshold: Optional[int] = None
     is_active: Optional[bool] = None
 
     @field_validator("polygon")
@@ -56,6 +58,7 @@ class ZoneRead(BaseModel):
     kind: str
     polygon: List[Point]
     color: Optional[str] = None
+    threshold: Optional[int] = None
     is_active: bool
     created_at: datetime
 

@@ -34,6 +34,9 @@ class Zone(SQLModel, table=True):
     # Polygone : liste ordonnée de points [x, y] normalisés dans [0,1] (≥ 3 points).
     polygon: List[List[float]] = Field(sa_column=Column(JSON, nullable=False))
     color: Optional[str] = Field(default=None, max_length=20)
+    # Seuil d'occupation (nb de personnes) déclenchant CROWD_DETECTED. None = pas
+    # de détection d'attroupement sur cette zone (occupation suivie quand même).
+    threshold: Optional[int] = Field(default=None)
     organization_id: Optional[int] = Field(default=None, index=True)
     is_active: bool = Field(default=True)
     created_at: datetime = Field(default_factory=datetime.utcnow)

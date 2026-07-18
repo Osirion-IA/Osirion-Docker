@@ -6,6 +6,7 @@ from app.schemas.events_schema import EventRead
 from app.services.saveImage_service import save_image_from_bytes, is_valid_image_format
 from app.middleware.auth_middleware import get_current_active_user, require_viewer
 from typing import List, Optional
+import json
 import logging
 
 router = APIRouter()
@@ -17,6 +18,7 @@ async def add_event(
     camera_id: int = Form(...),
     event_type: str = Form(...),
     confidence: Optional[float] = Form(None),
+    meta: Optional[str] = Form(None),
     image: UploadFile = File(None),
     session: Session = Depends(get_session),
     _current_user=Depends(get_current_active_user)
@@ -34,11 +36,20 @@ async def add_event(
             save_path="snapshots/"
         )
 
+    # meta arrive en chaîne JSON (multipart) → dict, best-effort (jamais bloquant).
+    meta_obj = None
+    if meta:
+        try:
+            meta_obj = json.loads(meta)
+        except (ValueError, TypeError):
+            meta_obj = None
+
     new_event = Event(
         camera_id=camera_id,
         event_type=event_type,
         confidence=confidence,
         snapshot_url=snapshot_url,
+        meta=meta_obj,
     )
 
     session.add(new_event)

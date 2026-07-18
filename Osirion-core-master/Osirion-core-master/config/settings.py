@@ -56,6 +56,19 @@ PERSON_YOLO_HALF = os.getenv('PERSON_YOLO_HALF', 'true').lower() == 'true'
 BLUR_THRESHOLD = float(os.getenv('BLUR_THRESHOLD', '80.0'))
 
 # ----------------------
+# Event Engine (occupation / attroupement / comptage) — Phase C
+# ----------------------
+# Rafraîchissement (s) des zones/lignes depuis le backend, dans un thread dédié
+# (jamais sur le thread caméra).
+ZONES_REFRESH_SECONDS = int(os.getenv('ZONES_REFRESH_SECONDS', '30'))
+# Attroupement : l'occupation doit rester ≥ seuil pendant N secondes avant
+# d'émettre CROWD_DETECTED (anti-faux-positif sur pic bref).
+CROWD_MIN_SECONDS = float(os.getenv('CROWD_MIN_SECONDS', '3.0'))
+# Throttle des ZONE_OCCUPANCY_CHANGED : au plus un par zone toutes les N secondes
+# (borne les écritures DB).
+OCCUPANCY_EMIT_INTERVAL = float(os.getenv('OCCUPANCY_EMIT_INTERVAL', '2.0'))
+
+# ----------------------
 # Configuration de la reconnexion RTSP
 # ----------------------
 RECONNECTION_SLEEP = 0.1          # Délai avant tentative de reconnexion RTSP (s)

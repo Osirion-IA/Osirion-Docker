@@ -44,6 +44,7 @@ export default function ZonesPage() {
   const [draft, setDraft] = useState([]);      // points en cours : [[x,y], ...]
   const [name, setName] = useState("");
   const [kind, setKind] = useState("occupancy");
+  const [threshold, setThreshold] = useState("");
   const [msg, setMsg] = useState("");
 
   // ── Chargement des caméras ────────────────────────────────────────────────
@@ -87,7 +88,7 @@ export default function ZonesPage() {
     setDraft((d) => (tool === "line" ? [...d, pt].slice(-2) : [...d, pt]));
   };
 
-  const cancelDraft = () => { setDraft([]); setName(""); setMsg(""); setTool("select"); };
+  const cancelDraft = () => { setDraft([]); setName(""); setThreshold(""); setMsg(""); setTool("select"); };
   const undoPoint = () => setDraft((d) => d.slice(0, -1));
 
   const save = async () => {
@@ -99,7 +100,7 @@ export default function ZonesPage() {
         const r = await fetchWithRefresh("/api/zones", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ camera_id: camId, name: name.trim(), kind, polygon: draft, color: kindColor(kind) }),
+          body: JSON.stringify({ camera_id: camId, name: name.trim(), kind, polygon: draft, color: kindColor(kind), threshold: threshold ? Number(threshold) : null }),
         });
         if (!r?.ok) { setMsg("Échec de l'enregistrement de la zone."); return; }
       } else if (tool === "line") {
@@ -213,6 +214,11 @@ export default function ZonesPage() {
                             {ZONE_KINDS.map((k) => <option key={k.value} value={k.value}>{k.label}</option>)}
                           </select>
                         )}
+                        {tool === "zone" && (
+                          <input type="number" min="1" value={threshold} onChange={(e) => setThreshold(e.target.value)}
+                            placeholder="Seuil attroupement (optionnel)" title="Nombre de personnes déclenchant une alerte d'attroupement"
+                            className="w-52 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-white" />
+                        )}
                         <span className="text-xs text-gray-500 dark:text-gray-400">{draft.length} point(s)</span>
                         <button onClick={undoPoint} disabled={!draft.length}
                           className="px-3 py-2 rounded-lg text-sm bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 disabled:opacity-50">↶ Annuler point</button>
@@ -246,7 +252,7 @@ export default function ZonesPage() {
                           <span className="flex items-center gap-2 min-w-0">
                             <span className="h-3 w-3 rounded-sm shrink-0" style={{ backgroundColor: z.color || kindColor(z.kind) }} />
                             <span className="text-sm text-gray-900 dark:text-white truncate">{z.name}</span>
-                            <span className="text-xs text-gray-400">· {kindLabel(z.kind)}</span>
+                            <span className="text-xs text-gray-400">· {kindLabel(z.kind)}{z.threshold ? ` · seuil ${z.threshold}` : ""}</span>
                           </span>
                           {canWrite && <button onClick={() => delZone(z.id)} className="text-xs text-rose-600 hover:underline shrink-0">Supprimer</button>}
                         </li>
