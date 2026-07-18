@@ -225,7 +225,7 @@ export default function ZonesPage() {
                     {msg && <span className="text-sm text-rose-600 dark:text-rose-400">{msg}</span>}
                   </div>
                 ) : (
-                  <p className="text-sm text-gray-500 dark:text-gray-400">Lecture seule — votre rôle ne permet pas d'éditer les zones.</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Lecture seule — votre rôle ne permet pas d&apos;éditer les zones.</p>
                 )}
                 <p className="text-xs text-gray-500 dark:text-gray-400">
                   Astuce : sélectionnez un outil, cliquez sur la vidéo pour poser les points
