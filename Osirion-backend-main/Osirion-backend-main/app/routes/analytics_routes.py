@@ -193,3 +193,115 @@ def summary(_user: User = Depends(require_viewer), session: Session = Depends(ge
         "crowd_alerts_today": crowd,
         "avg_wait_s": round(sum(qwaits) / len(qwaits), 1) if qwaits else 0,
     }
+
+
+@router.get("/insights")
+def insights(
+    days: int = Query(30, ge=7, le=180),
+    _user: User = Depends(require_viewer),
+    session: Session = Depends(get_session),
+):
+    """Analyse d'affluence EXPLOITABLE pour la décision — à partir des passages
+    (LINE_CROSSED, direction=in) sur `days` jours :
+      - profil horaire (heures de pointe / creux),
+      - heatmap jour de semaine × heure (moyenne par occurrence du jour),
+      - jour le plus chargé,
+      - projection de fin de journée + prévision des prochaines heures, à partir
+        de la BASELINE historique par (jour de semaine, heure) — statistique, pas
+        de ML. Un indice de `confidence` évite de sur-interpréter peu de données.
+    """
+    now = datetime.utcnow()
+    since_date = now.date() - timedelta(days=days - 1)
+    since_dt = datetime.combine(since_date, datetime.min.time())
+    lines = _events(session, EVENT_LINE_CROSSED, since_dt)
+
+    HOURS = list(range(24))
+    # Nombre d'occurrences de chaque jour de semaine dans la fenêtre (pour moyenner).
+    weekday_occ = defaultdict(int)
+    d = since_date
+    while d <= now.date():
+        weekday_occ[d.weekday()] += 1
+        d += timedelta(days=1)
+
+    per_hour_in = defaultdict(int)
+    per_hour_out = defaultdict(int)
+    per_wh_in = defaultdict(int)        # (weekday, hour) -> entrées
+    weekday_totals = defaultdict(int)   # weekday -> entrées
+    active_days = set()
+    today = now.date()
+    today_hour_in = defaultdict(int)
+
+    for e in lines:
+        direction = (e.meta or {}).get("direction")
+        ts = e.timestamp
+        h, wd, dd = ts.hour, ts.weekday(), ts.date()
+        if direction == "in":
+            per_hour_in[h] += 1
+            per_wh_in[(wd, h)] += 1
+            weekday_totals[wd] += 1
+            active_days.add(dd)
+            if dd == today:
+                today_hour_in[h] += 1
+        elif direction == "out":
+            per_hour_out[h] += 1
+
+    total_in = sum(per_hour_in.values())
+    n_active_days = max(1, len(active_days))
+
+    hourly = [{
+        "hour": h,
+        "entries": per_hour_in.get(h, 0),
+        "exits": per_hour_out.get(h, 0),
+        "avg_entries": round(per_hour_in.get(h, 0) / n_active_days, 1),
+    } for h in HOURS]
+
+    peak_hour = max(HOURS, key=lambda h: per_hour_in.get(h, 0)) if total_in else None
+    biz = [h for h in HOURS if 6 <= h <= 22]
+    quietest_hour = min(biz, key=lambda h: per_hour_in.get(h, 0)) if total_in else None
+
+    weekday_avg = {wd: round(weekday_totals.get(wd, 0) / max(1, weekday_occ.get(wd, 1)), 1) for wd in range(7)}
+    busiest_weekday = max(range(7), key=lambda wd: weekday_avg[wd]) if total_in else None
+
+    # Heatmap : moyenne d'entrées par occurrence du jour.
+    heatmap = [[round(per_wh_in.get((wd, h), 0) / max(1, weekday_occ.get(wd, 1)), 1) for h in HOURS] for wd in range(7)]
+    heatmap_max = max((max(row) for row in heatmap), default=0)
+
+    # Baseline pour AUJOURD'HUI (même jour de semaine, en excluant aujourd'hui).
+    twd = today.weekday()
+    base_occ = max(1, weekday_occ.get(twd, 1) - 1)
+    baseline_hour = {h: (per_wh_in.get((twd, h), 0) - today_hour_in.get(h, 0)) / base_occ for h in HOURS}
+    cur_hour = now.hour
+    today_so_far = sum(today_hour_in.values())
+    expected_so_far = sum(v for h, v in baseline_hour.items() if h <= cur_hour)
+    projected_eod = round(today_so_far + sum(v for h, v in baseline_hour.items() if h > cur_hour))
+    vs_avg_pct = round(100 * (today_so_far - expected_so_far) / expected_so_far) if expected_so_far > 0.5 else None
+
+    forecast = [{"hour": h, "expected": round(baseline_hour[h])} for h in HOURS if cur_hour < h <= cur_hour + 3]
+
+    confidence = (
+        "high" if (n_active_days >= 14 and total_in >= 200)
+        else "medium" if (n_active_days >= 4 and total_in >= 40)
+        else "low"
+    )
+
+    return {
+        "days": days,
+        "total_entries": total_in,
+        "active_days": len(active_days),
+        "hourly": hourly,
+        "peak_hour": peak_hour,
+        "peak_hour_count": per_hour_in.get(peak_hour, 0) if peak_hour is not None else 0,
+        "quietest_hour": quietest_hour,
+        "weekday_avg": weekday_avg,
+        "busiest_weekday": busiest_weekday,
+        "heatmap": heatmap,
+        "heatmap_max": heatmap_max,
+        "today": {
+            "so_far": today_so_far,
+            "expected_so_far": round(expected_so_far, 1),
+            "projected_eod": projected_eod,
+            "vs_avg_pct": vs_avg_pct,
+        },
+        "forecast": forecast,
+        "confidence": confidence,
+    }
