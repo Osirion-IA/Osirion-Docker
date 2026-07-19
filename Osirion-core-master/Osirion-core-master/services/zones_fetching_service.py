@@ -4,10 +4,9 @@ Récupération des zones (polygones) et lignes de comptage d'une caméra depuis 
 backend (GET /zones, /zones/lines). Utilisé par l'Event Engine, rafraîchi
 périodiquement DANS UN THREAD DÉDIÉ (jamais sur le thread caméra).
 """
-import requests
 from typing import List, Dict, Any
 
-from utils.auth_utils import get_auth_headers, API_URL
+from utils.api_client import request_with_auth
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -15,12 +14,8 @@ logger = get_logger(__name__)
 
 def _fetch(path: str, camera_id: int) -> List[Dict[str, Any]]:
     try:
-        r = requests.get(
-            f"{API_URL}{path}",
-            params={"camera_id": camera_id},
-            headers=get_auth_headers(),
-            timeout=10,
-        )
+        # Ré-authentification + retry automatiques sur 401/coupure réseau.
+        r = request_with_auth("GET", path, params={"camera_id": camera_id}, timeout=10)
         r.raise_for_status()
         data = r.json()
         return data if isinstance(data, list) else []

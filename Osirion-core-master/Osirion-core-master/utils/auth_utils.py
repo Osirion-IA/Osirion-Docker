@@ -14,9 +14,14 @@ load_dotenv()
 API_URL = os.getenv("API_URL").rstrip("/")
 EMAIL = os.getenv("AUTH_EMAIL")
 PASSWORD = os.getenv("AUTH_PASSWORD")
+# Clé de service (auth machine-à-machine). Si présente, le Core s'authentifie par
+# X-API-Key : PLUS de login/refresh/expiration → il ne se déconnecte jamais.
+CORE_API_KEY = os.getenv("CORE_API_KEY") or None
 
-if not all([API_URL, EMAIL, PASSWORD]):
-    raise ValueError("Variables manquantes dans .env : API_URL, AUTH_EMAIL, AUTH_PASSWORD")
+if not API_URL:
+    raise ValueError("Variable manquante dans .env : API_URL")
+if not CORE_API_KEY and not all([EMAIL, PASSWORD]):
+    raise ValueError("Sans CORE_API_KEY, AUTH_EMAIL et AUTH_PASSWORD sont requis dans .env")
 
 # ── État partagé protégé par _lock ──────────────────────────────────────────
 # Le Core est massivement multi-thread (threads caméra, workers reconnaissance,
@@ -126,11 +131,21 @@ def get_bearer_token(force: bool = False) -> str:
 
 
 def get_auth_headers(force: bool = False) -> dict:
-    """En-têtes d'auth. Passer force=True après un 401 pour garantir un token neuf."""
+    """En-têtes d'auth.
+
+    - Mode clé de service (CORE_API_KEY défini) : renvoie X-API-Key — statique, sans
+      expiration ; `force` est sans effet (rien à rafraîchir).
+    - Mode JWT : renvoie le Bearer. Passer force=True après un 401 pour un token neuf.
+    """
+    if CORE_API_KEY:
+        return {"X-API-Key": CORE_API_KEY}
     return {"Authorization": f"Bearer {get_bearer_token(force=force)}"}
 
 
-logger.info("Initialisation du module d'authentification...")
-with _lock:
-    _perform_login()
-logger.info("Module d'authentification prêt")
+if CORE_API_KEY:
+    logger.info("Auth Core = clé de service (X-API-Key) — pas de JWT/login/refresh/expiration.")
+else:
+    logger.info("Initialisation du module d'authentification (JWT email/password)...")
+    with _lock:
+        _perform_login()
+    logger.info("Module d'authentification prêt")

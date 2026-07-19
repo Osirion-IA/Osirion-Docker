@@ -10,6 +10,13 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     FERNET_KEY: str  # Doit être une clé Fernet valide
+
+    # AUTH MACHINE-À-MACHINE (Core) — clé de service statique, SANS expiration.
+    # Le Core (service interne) s'authentifie via l'en-tête X-API-Key au lieu d'un
+    # JWT : plus de login/refresh/expiration → il ne se déconnecte jamais. Vide =
+    # désactivé (le Core retombe alors sur l'auth JWT email/password classique).
+    # À définir dans .env (secret long, généré aléatoirement). Réseau interne Docker.
+    CORE_API_KEY: str = ""
     
     # SECURITY
     BCRYPT_ROUNDS: int = 12

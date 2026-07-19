@@ -84,6 +84,8 @@ services:
       DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-Osirion-AI}
       SECRET_KEY: ${SECRET_KEY}
       FERNET_KEY: ${FERNET_KEY}
+      # Clé de service partagée avec le Core (auth M2M sans expiration). Vide = off.
+      CORE_API_KEY: ${CORE_API_KEY:-}
       BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS:-["http://localhost:3000"]}
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
       REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
@@ -171,6 +173,9 @@ services:
       MEDIAMTX_API_BASE: http://host.docker.internal:9997
       AUTH_EMAIL: ${AUTH_EMAIL}
       AUTH_PASSWORD: ${AUTH_PASSWORD}
+      # Clé de service (auth M2M) : si définie, le Core l'utilise (X-API-Key) au lieu
+      # du login JWT email/password → plus jamais d'expiration/déconnexion. Vide = JWT.
+      CORE_API_KEY: ${CORE_API_KEY:-}
       FLASK_SECRET_KEY: ${FLASK_SECRET_KEY}
       # Mode de sécurité : development (CORS ouvert) | production (CORS strict).
       OSIRION_ENV: ${OSIRION_ENV:-development}

@@ -24,6 +24,26 @@ const MAX_TOASTS = 4;
 const TOAST_TTL = 9000;
 const MUTE_KEY = "osirion-alert-muted";
 
+// Thème couleur du toast par sévérité (classes littérales → détectées par Tailwind).
+const SEV_THEME = {
+  info: {
+    border: "border-sky-300/60 dark:border-sky-700/50", shadow: "shadow-sky-900/20",
+    bar: "from-sky-600 to-cyan-500", iconWrap: "bg-sky-100 dark:bg-sky-900/40 text-sky-600 dark:text-sky-300",
+    title: "text-sky-700 dark:text-sky-300", dot: "bg-sky-500",
+  },
+  warning: {
+    border: "border-amber-300/60 dark:border-amber-700/50", shadow: "shadow-amber-900/20",
+    bar: "from-amber-500 to-orange-500", iconWrap: "bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-300",
+    title: "text-amber-700 dark:text-amber-300", dot: "bg-amber-500",
+  },
+  critical: {
+    border: "border-rose-300/60 dark:border-rose-700/50", shadow: "shadow-rose-900/20",
+    bar: "from-rose-600 to-red-500", iconWrap: "bg-rose-100 dark:bg-rose-900/40 text-rose-600 dark:text-rose-300",
+    title: "text-rose-700 dark:text-rose-300", dot: "bg-rose-500",
+  },
+};
+const sevTheme = (s) => SEV_THEME[s] || SEV_THEME.critical;
+
 // ── Icônes SVG inline (auto-contenues, pas de lucide) ───────────────────────
 const Svg = ({ className, children }) => (
   <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -139,6 +159,7 @@ export default function AlertNotifier() {
           if (!first) {
             addAlert({
               kind: a.kind,
+              severity: a.severity,
               label: a.label || a.kind,
               cameraName: a.camera_name || (a.camera_id ? `Caméra ${a.camera_id}` : ""),
             });
@@ -168,21 +189,23 @@ export default function AlertNotifier() {
     <>
       {/* Pile de toasts (au-dessus du contenu, sous d'éventuelles modales) */}
       <div className="fixed top-4 right-4 z-[60] flex flex-col gap-3 w-[330px] max-w-[calc(100vw-2rem)] pointer-events-none">
-        {alerts.map((a) => (
+        {alerts.map((a) => {
+          const th = sevTheme(a.severity);
+          return (
           <div
             key={a.id}
-            className="pointer-events-auto overflow-hidden rounded-2xl border border-rose-300/60 dark:border-rose-700/50 bg-white dark:bg-gray-900 shadow-2xl shadow-rose-900/20 animate-fade-in"
+            className={`pointer-events-auto overflow-hidden rounded-2xl border ${th.border} bg-white dark:bg-gray-900 shadow-2xl ${th.shadow} animate-fade-in`}
             role="alert"
           >
-            <div className="h-1 w-full bg-gradient-to-r from-rose-600 to-red-500" />
+            <div className={`h-1 w-full bg-gradient-to-r ${th.bar}`} />
             <div className="flex items-start gap-3 p-4">
-              <div className="shrink-0 h-10 w-10 rounded-xl bg-rose-100 dark:bg-rose-900/40 text-rose-600 dark:text-rose-300 flex items-center justify-center">
+              <div className={`shrink-0 h-10 w-10 rounded-xl ${th.iconWrap} flex items-center justify-center`}>
                 <IconUser className="h-5 w-5" />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className="inline-flex h-2 w-2 rounded-full bg-rose-500 animate-pulse" />
-                  <p className="text-sm font-bold text-rose-700 dark:text-rose-300 truncate">
+                  <span className={`inline-flex h-2 w-2 rounded-full ${th.dot} animate-pulse`} />
+                  <p className={`text-sm font-bold ${th.title} truncate`}>
                     {a.kind === "intrusion" ? "Intrusion détectée"
                       : a.kind === "crowd" ? "Attroupement détecté"
                       : a.kind === "queue" ? "File saturée"
@@ -203,7 +226,8 @@ export default function AlertNotifier() {
               </button>
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Bouton son on/off (discret, en bas à droite) */}

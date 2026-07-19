@@ -20,6 +20,11 @@ ALERT_NEW = "new"
 ALERT_ACKNOWLEDGED = "acknowledged"
 ALERT_RESOLVED = "resolved"
 
+# Sévérités (reprises de la règle qui a déclenché l'alerte).
+SEV_INFO = "info"
+SEV_WARNING = "warning"
+SEV_CRITICAL = "critical"
+
 # Types d'alerte (libre : ex. "crowd", "intrusion", "occupancy"…).
 
 
@@ -32,6 +37,7 @@ class Alert(SQLModel, table=True):
     event_id: Optional[int] = Field(default=None, foreign_key="event.id")
 
     kind: str = Field(..., max_length=20)             # "crowd" | "intrusion" | …
+    severity: str = Field(default="warning", max_length=20)  # info | warning | critical
     label: str = Field(..., max_length=255)           # libellé de l'alerte
     reason: Optional[str] = Field(default=None, max_length=255)  # motif / détail
 

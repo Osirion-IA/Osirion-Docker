@@ -31,7 +31,9 @@ async def send_event_async(
     image_bytes = buffer.tobytes()
 
     for attempt in range(1, MAX_RETRIES + 1):
-        headers = get_auth_headers()
+        # 1re tentative : token courant ; après un 401, refresh FORCÉ (sinon on
+        # renverrait le même token périmé). Sans effet en mode clé de service.
+        headers = get_auth_headers(force=(attempt > 1))
 
         form = aiohttp.FormData()
         form.add_field(

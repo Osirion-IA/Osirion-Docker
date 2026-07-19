@@ -33,7 +33,7 @@ class NotifyRequest(BaseModel):
 
 def _serialize(a: Alert, cam_name: Optional[str]) -> dict:
     return {
-        "id": a.id, "kind": a.kind, "label": a.label, "reason": a.reason,
+        "id": a.id, "kind": a.kind, "severity": a.severity, "label": a.label, "reason": a.reason,
         "camera_id": a.camera_id, "camera_name": cam_name,
         "snapshot_url": a.snapshot_url, "status": a.status,
         "acknowledged_at": a.acknowledged_at, "acknowledged_by": a.acknowledged_by,

@@ -2,8 +2,11 @@
 
 /**
  * Moteur de règles — SI un événement satisfait des conditions PENDANT une plage
- * horaire ALORS créer une alerte (+ notifier). Ex. intrusion horaire :
- * trigger « Occupation de zone », zone armée, min 1 personne, plage 22h–6h, email.
+ * horaire ALORS créer une alerte <sévérité> (+ notifier), avec anti-spam (cooldown).
+ *
+ * Définition « métier » : plutôt que d'assembler des primitives, l'opérateur part
+ * d'un SCÉNARIO (Intrusion nocturne, Saturation de file, …) qui pré-remplit
+ * déclencheur + condition + sévérité + plage + temporisation, puis ajuste.
  */
 import { useState, useEffect, useCallback } from "react";
 import AdminSidebar from "../AdminSidebar";
@@ -20,14 +23,46 @@ const TRIGGERS = [
 ];
 const KINDS = ["intrusion", "crowd", "queue", "custom"];
 const DAYS = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"]; // index = weekday() (0=lundi)
+const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
 const triggerLabel = (v) => TRIGGERS.find((t) => t.value === v)?.label || v;
 const triggerCond = (v) => TRIGGERS.find((t) => t.value === v)?.cond;
 
-const EMPTY = {
-  name: "", trigger: "ZONE_OCCUPANCY_CHANGED", zone_id: "", kind: "intrusion",
-  min_count: "", min_wait_s: "", direction: "any",
-  days: [], from: "", to: "", notify_email: false, notify_webhook: false,
+// Sévérités métier — pilotent le routage des notifications et la couleur UI.
+const SEV = {
+  info:     { label: "Info",     badge: "bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300" },
+  warning:  { label: "Warning",  badge: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300" },
+  critical: { label: "Critique", badge: "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300" },
 };
+const SEV_ORDER = ["info", "warning", "critical"];
+
+const FIELD_FR = { count: "occupation", dwell_s: "attente(s)", direction: "sens" };
+const predTxt = (p) => `${FIELD_FR[p.field] || p.field} ${p.op} ${p.value}`;
+
+const EMPTY = {
+  name: "", trigger: "ZONE_OCCUPANCY_CHANGED", zone_id: "", kind: "intrusion", severity: "warning",
+  min_count: "", max_count: "", min_wait_s: "", direction: "any",
+  days: [], from: "", to: "", cooldown_min: "", notify_email: false, notify_webhook: false,
+};
+
+// Scénarios métier prêts à l'emploi — pré-remplissent le formulaire (l'opérateur ajuste).
+const TEMPLATES = [
+  { key: "intrusion_nuit", emoji: "🌙", label: "Intrusion nocturne",
+    form: { name: "Intrusion nocturne", trigger: "ZONE_OCCUPANCY_CHANGED", kind: "intrusion",
+            severity: "critical", min_count: "1", days: ALL_DAYS, from: "22:00", to: "06:00",
+            cooldown_min: "5", notify_email: true } },
+  { key: "saturation_file", emoji: "⏳", label: "Saturation de file",
+    form: { name: "Saturation de file d'attente", trigger: "CROWD_DETECTED", kind: "queue",
+            severity: "warning", min_count: "5", cooldown_min: "2", notify_email: true } },
+  { key: "attroupement", emoji: "👥", label: "Attroupement",
+    form: { name: "Attroupement anormal", trigger: "CROWD_DETECTED", kind: "crowd",
+            severity: "warning", min_count: "8", cooldown_min: "2" } },
+  { key: "stationnement", emoji: "🕒", label: "Stationnement prolongé",
+    form: { name: "Stationnement prolongé", trigger: "ZONE_DWELL", kind: "custom",
+            severity: "info", min_wait_s: "300", cooldown_min: "5" } },
+  { key: "zone_interdite", emoji: "⛔", label: "Zone interdite",
+    form: { name: "Accès zone interdite", trigger: "ZONE_OCCUPANCY_CHANGED", kind: "intrusion",
+            severity: "critical", min_count: "1", cooldown_min: "5", notify_email: true } },
+];
 
 export default function RulesPage() {
   const user = useAuth();
@@ -54,15 +89,25 @@ export default function RulesPage() {
   const toggleDay = (i) => setForm((f) => ({
     ...f, days: f.days.includes(i) ? f.days.filter((d) => d !== i) : [...f.days, i].sort(),
   }));
+  const applyTemplate = (t) => { setMsg(""); setForm({ ...EMPTY, ...t.form }); };
 
   const save = async () => {
     setMsg("");
     if (!form.name.trim()) { setMsg("Nom requis."); return; }
     const cond = triggerCond(form.trigger);
-    const conditions = {};
-    if (cond === "count" && form.min_count !== "") conditions.min_count = Number(form.min_count);
-    if (cond === "wait" && form.min_wait_s !== "") conditions.min_wait_s = Number(form.min_wait_s);
-    if (cond === "direction" && form.direction && form.direction !== "any") conditions.direction = form.direction;
+
+    // Conditions → prédicats typés {field, op, value} (le moteur accepte aussi l'ancien format).
+    let conditions = null;
+    if (cond === "count") {
+      const preds = [];
+      if (form.min_count !== "") preds.push({ field: "count", op: ">=", value: Number(form.min_count) });
+      if (form.max_count !== "") preds.push({ field: "count", op: "<=", value: Number(form.max_count) });
+      if (preds.length) conditions = { all: preds };
+    } else if (cond === "wait" && form.min_wait_s !== "") {
+      conditions = { all: [{ field: "dwell_s", op: ">=", value: Number(form.min_wait_s) }] };
+    } else if (cond === "direction" && form.direction && form.direction !== "any") {
+      conditions = { all: [{ field: "direction", op: "==", value: form.direction }] };
+    }
 
     let schedule = null;
     if (form.days.length || form.from || form.to) {
@@ -80,7 +125,9 @@ export default function RulesPage() {
       trigger: form.trigger,
       zone_id: (cond === "direction" || form.zone_id === "") ? null : Number(form.zone_id),
       kind: form.kind,
-      conditions: Object.keys(conditions).length ? conditions : null,
+      severity: form.severity,
+      cooldown_s: form.cooldown_min !== "" ? Math.round(Number(form.cooldown_min) * 60) : 0,
+      conditions,
       schedule,
       notify_channels,
     };
@@ -109,7 +156,18 @@ export default function RulesPage() {
   };
   const condTxt = (c) => {
     if (!c) return "—";
-    return Object.entries(c).map(([k, v]) => `${k}=${v}`).join(", ");
+    if (Array.isArray(c.all)) return c.all.map(predTxt).join(" et ");
+    if (Array.isArray(c.any)) return c.any.map(predTxt).join(" ou ");
+    return Object.entries(c).map(([k, v]) => `${k}=${v}`).join(", ");  // ancien format
+  };
+  const cooldownTxt = (s) => {
+    if (!s) return null;
+    return s % 60 === 0 ? `${s / 60} min` : `${s}s`;
+  };
+  const lastTxt = (iso) => {
+    if (!iso) return "jamais";
+    const d = new Date(iso.endsWith("Z") ? iso : `${iso}Z`);
+    return isNaN(d) ? "—" : d.toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
   };
 
   if (user && !["admin", "user", "viewer"].includes(role)) {
@@ -138,6 +196,19 @@ export default function RulesPage() {
               <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-5 space-y-3">
                 <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Nouvelle règle</h3>
 
+                {/* Scénarios métier (pré-remplissage) */}
+                <div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-1.5">Partir d&apos;un scénario</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {TEMPLATES.map((t) => (
+                      <button key={t.key} type="button" onClick={() => applyTemplate(t)}
+                        className="px-2.5 py-1.5 rounded-lg text-xs border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-700 dark:text-gray-200 hover:border-indigo-400 hover:text-indigo-600 dark:hover:text-indigo-300 transition-colors">
+                        <span className="mr-1">{t.emoji}</span>{t.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
                 <input value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="Nom (ex. Intrusion nuit — entrée)"
                   className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-white" />
 
@@ -156,6 +227,19 @@ export default function RulesPage() {
                   </label>
                 </div>
 
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="text-xs text-gray-500 dark:text-gray-400">Sévérité
+                    <select value={form.severity} onChange={(e) => set("severity", e.target.value)}
+                      className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-white">
+                      {SEV_ORDER.map((s) => <option key={s} value={s}>{SEV[s].label}</option>)}
+                    </select>
+                  </label>
+                  <label className="text-xs text-gray-500 dark:text-gray-400">Anti-spam / temporisation (min)
+                    <input type="number" min="0" value={form.cooldown_min} onChange={(e) => set("cooldown_min", e.target.value)} placeholder="0 = à chaque événement"
+                      className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-white" />
+                  </label>
+                </div>
+
                 {cond !== "direction" && (
                   <label className="text-xs text-gray-500 dark:text-gray-400 block">Zone (optionnel)
                     <select value={form.zone_id} onChange={(e) => set("zone_id", e.target.value)}
@@ -168,10 +252,16 @@ export default function RulesPage() {
 
                 {/* Condition selon le déclencheur */}
                 {cond === "count" && (
-                  <label className="text-xs text-gray-500 dark:text-gray-400 block">Occupation minimale (personnes)
-                    <input type="number" min="1" value={form.min_count} onChange={(e) => set("min_count", e.target.value)} placeholder="ex. 1 (intrusion) / 5 (attroupement)"
-                      className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-white" />
-                  </label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <label className="text-xs text-gray-500 dark:text-gray-400 block">Occupation min. (pers.)
+                      <input type="number" min="1" value={form.min_count} onChange={(e) => set("min_count", e.target.value)} placeholder="ex. 1 / 5"
+                        className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-white" />
+                    </label>
+                    <label className="text-xs text-gray-500 dark:text-gray-400 block">Occupation max. (optionnel)
+                      <input type="number" min="1" value={form.max_count} onChange={(e) => set("max_count", e.target.value)} placeholder="borne haute"
+                        className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-white" />
+                    </label>
+                  </div>
                 )}
                 {cond === "wait" && (
                   <label className="text-xs text-gray-500 dark:text-gray-400 block">Temps de présence minimal (secondes)
@@ -227,38 +317,49 @@ export default function RulesPage() {
             <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-5">
               <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">Règles ({rules.length})</h3>
               {rules.length === 0 ? (
-                <p className="text-sm text-gray-500 dark:text-gray-400">Aucune règle. Créez-en une (ex. intrusion nuit).</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Aucune règle. Partez d&apos;un scénario (ex. Intrusion nocturne).</p>
               ) : (
                 <ul className="space-y-3">
-                  {rules.map((r) => (
-                    <li key={r.id} className="rounded-xl border border-gray-100 dark:border-gray-800 p-3">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">
-                            {r.name} <span className="text-xs font-normal text-gray-400">· {r.kind}</span>
-                          </p>
-                          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                            {triggerLabel(r.trigger)} · cond {condTxt(r.conditions)} · {scheduleTxt(r.schedule)}
-                            {r.notify_channels?.length ? ` · notif ${r.notify_channels.join("/")}` : ""}
-                          </p>
-                        </div>
-                        {canWrite && (
-                          <div className="flex items-center gap-2 shrink-0">
-                            <button onClick={() => toggleActive(r)}
-                              className={`text-xs px-2 py-1 rounded-md ${r.is_active ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" : "bg-gray-100 text-gray-500 dark:bg-gray-800"}`}>
-                              {r.is_active ? "Active" : "Inactive"}
-                            </button>
-                            <button onClick={() => del(r.id)} className="text-xs text-rose-600 hover:underline">Suppr.</button>
+                  {rules.map((r) => {
+                    const sev = SEV[r.severity] || SEV.warning;
+                    const cd = cooldownTxt(r.cooldown_s);
+                    return (
+                      <li key={r.id} className="rounded-xl border border-gray-100 dark:border-gray-800 p-3">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${sev.badge}`}>{sev.label}</span>
+                              <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">
+                                {r.name} <span className="text-xs font-normal text-gray-400">· {r.kind}</span>
+                              </p>
+                            </div>
+                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                              {triggerLabel(r.trigger)} · cond {condTxt(r.conditions)} · {scheduleTxt(r.schedule)}
+                              {cd ? ` · ⏲ ${cd}` : ""}
+                              {r.notify_channels?.length ? ` · notif ${r.notify_channels.join("/")}` : ""}
+                            </p>
+                            <p className="text-[11px] text-gray-400 mt-0.5">
+                              {(r.trigger_count || 0)} déclenchement{(r.trigger_count || 0) > 1 ? "s" : ""} · dernier : {lastTxt(r.last_triggered_at)}
+                            </p>
                           </div>
-                        )}
-                      </div>
-                    </li>
-                  ))}
+                          {canWrite && (
+                            <div className="flex items-center gap-2 shrink-0">
+                              <button onClick={() => toggleActive(r)}
+                                className={`text-xs px-2 py-1 rounded-md ${r.is_active ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" : "bg-gray-100 text-gray-500 dark:bg-gray-800"}`}>
+                                {r.is_active ? "Active" : "Inactive"}
+                              </button>
+                              <button onClick={() => del(r.id)} className="text-xs text-rose-600 hover:underline">Suppr.</button>
+                            </div>
+                          )}
+                        </div>
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
               <p className="text-[11px] text-gray-400 mt-4">
-                Astuce intrusion : déclencheur « Occupation de zone », zone armée, occupation min 1,
-                plage 22:00 → 06:00, notifier Email. Les alertes apparaissent dans « Alertes ».
+                Astuce : le bouton « Intrusion nocturne » pré-remplit tout (zone armée 22:00 → 06:00,
+                sévérité critique, temporisation 5 min, email). Les alertes apparaissent dans « Alertes ».
               </p>
             </div>
           </div>

@@ -14,9 +14,8 @@ import threading
 from typing import Optional, Dict, Any
 
 import cv2
-import requests
 
-from utils.auth_utils import get_auth_headers, API_URL
+from utils.api_client import request_with_auth
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -83,7 +82,6 @@ def _run() -> None:
 
 
 def _send(item: Dict[str, Any]) -> None:
-    url = f"{API_URL}/events/add"
     data = {
         "camera_id": str(item["camera_id"]),
         "event_type": item["event_type"],
@@ -99,6 +97,7 @@ def _send(item: Dict[str, Any]) -> None:
         if ok:
             files = {"image": ("event.jpg", buf.tobytes(), "image/jpeg")}
 
-    # get_auth_headers() ne renvoie QUE l'Authorization → requests pose lui-même
-    # le Content-Type multipart (avec boundary) quand files est fourni.
-    requests.post(url, data=data, files=files, headers=get_auth_headers(), timeout=5)
+    # request_with_auth ne pose QUE l'en-tête d'auth → requests ajoute lui-même le
+    # Content-Type multipart (avec boundary) quand files est fourni. Ré-auth + retry
+    # automatiques sur 401/coupure réseau.
+    request_with_auth("POST", "/events/add", data=data, files=files, timeout=5)
