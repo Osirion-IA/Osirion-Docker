@@ -8,10 +8,9 @@ export async function GET(req) {
   if (!token) return NextResponse.json({ message: "Non authentifié." }, { status: 401 });
 
   try {
-    const { searchParams } = new URL(req.url);
-    const status = searchParams.get("status");
-    const qs = status ? `?status=${encodeURIComponent(status)}` : "";
-    const res = await fetch(`${BACKEND}/alerts/${qs}`, {
+    // Transmet TOUTE la query (status + skip + limit → pagination serveur).
+    const { search } = new URL(req.url);
+    const res = await fetch(`${BACKEND}/alerts/${search || ""}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     const data = await res.json();

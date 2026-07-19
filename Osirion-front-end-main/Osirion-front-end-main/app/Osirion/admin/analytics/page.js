@@ -1,66 +1,104 @@
 "use client";
 
 /**
- * Dashboard Analytics — fréquentation, occupation, files d'attente.
- * Agrégats calculés côté backend (/analytics/*) à partir des événements de
- * l'Event Engine. Graphiques custom SVG/CSS (aucune dépendance ajoutée).
+ * Analytique — tendances de flux ANONYMES exploitables pour la décision
+ * (section Analyser, thème clair). Profil horaire + heatmap jour×heure + heure de
+ * pointe + projection de fin de journée + prévision des prochaines heures +
+ * recommandations. Prévisions = base statistique historique (pas de ML).
+ * Données /analytics/insights, /queues, /occupancy.
  */
 import { useState, useEffect, useCallback } from "react";
-import AdminSidebar from "../AdminSidebar";
-import AdminTopBar from "../AdminTopBar";
-import { useAuth } from "../AuthContext";
-import { AccessDenied } from "../RoleGuard";
+import { TrendingUp, Clock, CalendarDays, Sparkles, ArrowUp, ArrowDown } from "lucide-react";
+import OsShell from "../_osirion/OsShell";
+import { PageHeader, Card, Segmented } from "../_osirion/ui";
 import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
 
-function fmtWait(s) {
-  if (!s) return "—";
-  if (s < 60) return `${Math.round(s)} s`;
-  return `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`;
+const WD = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
+const WD_LONG = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"];
+const BIZ = Array.from({ length: 17 }, (_, i) => i + 6); // 6h..22h
+const hLabel = (h) => `${h}h`;
+const fmtWait = (s) => (!s ? "0 s" : s < 60 ? `${Math.round(s)} s` : `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`);
+const PERIODS = [{ value: 7, label: "7j" }, { value: 30, label: "30j" }, { value: 90, label: "90j" }];
+const TABS = [{ value: "affluence", label: "Affluence" }, { value: "queues", label: "Files & attente" }, { value: "occupancy", label: "Occupation" }];
+
+function Insight({ label, value, hint, icon: Icon, trend }) {
+  const tColor = trend == null ? "text-os-t3" : trend >= 0 ? "text-os-green" : "text-os-red";
+  return (
+    <Card className="p-5">
+      <div className="flex items-center justify-between">
+        <span className="text-[13px] text-os-t3">{label}</span>
+        {Icon && <Icon className="h-4 w-4 text-os-t4" strokeWidth={1.8} />}
+      </div>
+      <p className="os-num mt-2 text-[26px] leading-none font-bold text-os-t1">{value}</p>
+      {hint && (
+        <p className={`text-[12px] mt-2 inline-flex items-center gap-1 ${tColor}`}>
+          {trend != null && (trend >= 0 ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />)}
+          {hint}
+        </p>
+      )}
+    </Card>
+  );
 }
 
-// Graphe à barres groupées entrées/sorties par jour (CSS, thème-aware).
-function FootfallChart({ series }) {
-  const max = Math.max(1, ...series.map((s) => Math.max(s.entries, s.exits)));
+// Graphe à barres horaires (total sur la fenêtre), pic mis en évidence.
+function HourlyBars({ hourly, peakHour }) {
+  const rows = BIZ.map((h) => hourly.find((x) => x.hour === h) || { hour: h, entries: 0 });
+  const max = Math.max(1, ...rows.map((r) => r.entries));
   return (
-    <div>
-      <div className="flex items-end gap-2 h-40">
-        {series.map((s) => (
-          <div key={s.date} className="flex-1 flex flex-col items-center gap-1 min-w-0">
-            <div className="flex items-end gap-1 h-32 w-full justify-center">
-              <div className="w-3 rounded-t bg-emerald-500/90" style={{ height: `${Math.max(2, (s.entries / max) * 100)}%` }}
-                title={`${s.entries} entrées`} />
-              <div className="w-3 rounded-t bg-amber-500/90" style={{ height: `${Math.max(2, (s.exits / max) * 100)}%` }}
-                title={`${s.exits} sorties`} />
+    <div className="flex items-end gap-2 h-56">
+      {rows.map((r) => {
+        const isPeak = r.hour === peakHour;
+        return (
+          <div key={r.hour} className="flex-1 flex flex-col items-center gap-1.5 min-w-0">
+            <span className="os-num text-[10px] text-os-t3">{r.entries || ""}</span>
+            <div className="w-full flex items-end justify-center flex-1">
+              <div className="w-full max-w-[26px] rounded-t-os" title={`${hLabel(r.hour)} · ${r.entries}`}
+                style={{ height: `${Math.max(2, (r.entries / max) * 100)}%`, background: isPeak ? "var(--os-cta)" : "var(--os-border-2)" }} />
             </div>
-            <span className="text-[10px] text-gray-500 dark:text-gray-400 truncate w-full text-center">{s.date.slice(5)}</span>
+            <span className="os-num text-[10px] text-os-t4">{hLabel(r.hour)}</span>
           </div>
-        ))}
-      </div>
-      <div className="flex items-center gap-4 mt-3 text-xs text-gray-600 dark:text-gray-400">
-        <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-emerald-500" /> Entrées</span>
-        <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-amber-500" /> Sorties</span>
-      </div>
+        );
+      })}
     </div>
   );
 }
 
-function Kpi({ label, value, hint }) {
+// Heatmap jour de semaine × heure (moyenne d'entrées), échelle bleue.
+function Heatmap({ matrix, max }) {
+  const cell = (v) => {
+    const a = max > 0 ? 0.06 + 0.94 * (v / max) : 0.04;
+    return `rgba(47,127,209,${a.toFixed(3)})`;
+  };
   return (
-    <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-4">
-      <p className="text-xs text-gray-500 dark:text-gray-400">{label}</p>
-      <p className="text-2xl font-semibold text-gray-900 dark:text-white mt-1">{value}</p>
-      {hint && <p className="text-[11px] text-gray-400 mt-0.5">{hint}</p>}
+    <div className="overflow-x-auto">
+      <div className="min-w-[560px]">
+        <div className="flex pl-9">
+          {BIZ.map((h) => <div key={h} className="flex-1 text-center os-num text-[9px] text-os-t4">{h}</div>)}
+        </div>
+        {matrix.map((row, wd) => (
+          <div key={wd} className="flex items-center mt-1">
+            <div className="w-9 text-[11px] text-os-t3">{WD[wd]}</div>
+            {BIZ.map((h) => (
+              <div key={h} className="flex-1 px-0.5">
+                <div className="h-5 rounded-[2px]" title={`${WD[wd]} ${h}h · ${row[h]}`} style={{ background: cell(row[h]) }} />
+              </div>
+            ))}
+          </div>
+        ))}
+        <div className="flex items-center gap-2 mt-3 pl-9">
+          <span className="text-[11px] text-os-t4">Faible</span>
+          <div className="h-2 flex-1 rounded-full" style={{ background: "linear-gradient(90deg, rgba(47,127,209,0.06), rgba(47,127,209,1))" }} />
+          <span className="text-[11px] text-os-t4">Fort</span>
+        </div>
+      </div>
     </div>
   );
 }
 
 export default function AnalyticsPage() {
-  const user = useAuth();
-  const role = user?.role || "viewer";
-  const [isCollapsed, setIsCollapsed] = useState(false);
-
-  const [summary, setSummary] = useState(null);
-  const [footfall, setFootfall] = useState(null);
+  const [period, setPeriod] = useState(30);
+  const [tab, setTab] = useState("affluence");
+  const [ins, setIns] = useState(null);
   const [queues, setQueues] = useState([]);
   const [occZones, setOccZones] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -68,120 +106,179 @@ export default function AnalyticsPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [s, f, q, o] = await Promise.all([
-        fetchWithRefresh("/api/analytics/summary"),
-        fetchWithRefresh("/api/analytics/footfall?days=7"),
+      const hours = period * 24;
+      const [i, q, o] = await Promise.all([
+        fetchWithRefresh(`/api/analytics/insights?days=${period}`),
         fetchWithRefresh("/api/analytics/queues"),
-        fetchWithRefresh("/api/analytics/occupancy?hours=24"),
+        fetchWithRefresh(`/api/analytics/occupancy?hours=${hours}`),
       ]);
-      setSummary(s?.ok ? await s.json() : null);
-      setFootfall(f?.ok ? await f.json() : null);
+      setIns(i?.ok ? await i.json() : null);
       setQueues(q?.ok ? (await q.json()).queues || [] : []);
       setOccZones(o?.ok ? (await o.json()).zones || [] : []);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
+    } finally { setLoading(false); }
+  }, [period]);
   useEffect(() => { load(); }, [load]);
 
-  if (user && !["admin", "user", "viewer"].includes(role)) {
-    return (
-      <div className="min-h-screen bg-[var(--app-bg)]">
-        <div className="flex min-h-screen">
-          <AdminSidebar currentRole={role} isCollapsed={isCollapsed} onToggle={() => setIsCollapsed((p) => !p)} currentPath="/Osirion/admin/analytics" />
-          <main className={`flex-1 transition-all duration-400 ${isCollapsed ? "lg:ml-20" : "lg:ml-80"}`}>
-            <AccessDenied role={role} />
-          </main>
-        </div>
-      </div>
-    );
+  const d = ins || {};
+  const today = d.today || {};
+  const hasData = (d.total_entries || 0) > 0;
+  const peak = d.peak_hour;
+  const maxOcc = Math.max(1, ...occZones.map((z) => z.count || 0));
+
+  // Recommandations dérivées (langage décision).
+  const recos = [];
+  if (hasData) {
+    if (peak != null) recos.push(`Affluence maximale vers ${peak}h–${peak + 1}h (${d.peak_hour_count} passages sur ${period} j). Renforcez l'accueil / les guichets sur ce créneau.`);
+    if (d.quietest_hour != null) recos.push(`Creux vers ${d.quietest_hour}h — fenêtre idéale pour les tâches de fond, la maintenance ou les pauses.`);
+    if (d.busiest_weekday != null) recos.push(`Jour le plus chargé : ${WD_LONG[d.busiest_weekday]} (${d.weekday_avg?.[d.busiest_weekday]} passages/jour en moyenne).`);
+    if (today.vs_avg_pct != null) recos.push(today.vs_avg_pct >= 0
+      ? `Aujourd'hui +${today.vs_avg_pct}% vs un ${WD_LONG[new Date().getDay() === 0 ? 6 : new Date().getDay() - 1]} habituel — anticipez une journée chargée.`
+      : `Aujourd'hui ${today.vs_avg_pct}% vs d'habitude — affluence plus calme que la normale.`);
   }
 
   return (
-    <div className="min-h-screen bg-[var(--app-bg)]">
-      <div className="flex min-h-screen">
-        <AdminSidebar currentRole={role} isCollapsed={isCollapsed} onToggle={() => setIsCollapsed((p) => !p)} currentPath="/Osirion/admin/analytics" />
-        <main className={`flex-1 transition-all duration-400 ${isCollapsed ? "lg:ml-20" : "lg:ml-80"}`}>
-          <AdminTopBar title="Analytics" subtitle="Fréquentation, occupation et files d'attente" showSearch={false} />
+    <OsShell>
+      <div className="p-6">
+        <PageHeader
+          title="Analytique"
+          subtitle="Tendances de flux anonymes · aide à la décision"
+          actions={<Segmented value={period} onChange={setPeriod} options={PERIODS} size="sm" />}
+        />
 
-          <div className="p-6 space-y-6">
-            {/* KPIs du jour */}
-            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
-              <Kpi label="Entrées (jour)" value={loading ? "—" : (summary?.entries_today ?? 0)} />
-              <Kpi label="Sorties (jour)" value={loading ? "—" : (summary?.exits_today ?? 0)} />
-              <Kpi label="Présents (est.)" value={loading ? "—" : (summary?.present_now_estimate ?? 0)} hint="entrées − sorties" />
-              <Kpi label="Occupation" value={loading ? "—" : (summary?.current_occupancy ?? 0)} hint="somme des zones" />
-              <Kpi label="Attroupements" value={loading ? "—" : (summary?.crowd_alerts_today ?? 0)} hint="aujourd'hui" />
-              <Kpi label="Attente moy." value={loading ? "—" : fmtWait(summary?.avg_wait_s)} hint="files" />
-            </div>
+        {d.confidence && d.confidence !== "high" && hasData && (
+          <div className="mb-4 rounded-os border border-os-border bg-os-card px-4 py-2.5 text-[12px] text-os-t3">
+            ⓘ Historique {d.confidence === "low" ? "limité" : "partiel"} ({d.active_days} jour(s) de données) — les projections et prévisions s&apos;affineront à mesure que l&apos;historique s&apos;accumule.
+          </div>
+        )}
 
-            {/* Fréquentation 7 jours */}
-            <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-5">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Fréquentation (7 jours)</h3>
-                {footfall && (
-                  <span className="text-xs text-gray-500 dark:text-gray-400">
-                    {footfall.total_entries} entrées · {footfall.total_exits} sorties
-                  </span>
-                )}
+        <div className="grid grid-cols-2 xl:grid-cols-4 gap-4 mb-5">
+          <Insight label="Aujourd'hui" icon={TrendingUp}
+            value={loading ? "—" : (today.so_far ?? 0)}
+            hint={hasData && today.projected_eod ? `projeté ~${today.projected_eod}${today.vs_avg_pct != null ? ` · ${today.vs_avg_pct >= 0 ? "+" : ""}${today.vs_avg_pct}% vs moy.` : ""}` : "passages entrants"}
+            trend={today.vs_avg_pct} />
+          <Insight label="Heure de pointe" icon={Clock}
+            value={loading ? "—" : peak != null ? `${peak}h–${peak + 1}h` : "—"}
+            hint={peak != null ? `${d.peak_hour_count} passages` : "pas encore de pic"} />
+          <Insight label="Jour le plus chargé" icon={CalendarDays}
+            value={loading ? "—" : d.busiest_weekday != null ? WD[d.busiest_weekday] : "—"}
+            hint={d.busiest_weekday != null ? `${d.weekday_avg?.[d.busiest_weekday]} passages/j` : "—"} />
+          <Insight label="Prévision prochaine heure" icon={Sparkles}
+            value={loading ? "—" : d.forecast?.length ? `~${d.forecast[0].expected}` : "—"}
+            hint={d.forecast?.length ? `attendus à ${d.forecast[0].hour}h` : "hors plage"} />
+        </div>
+
+        <div className="mb-4"><Segmented value={tab} onChange={setTab} options={TABS} /></div>
+
+        {tab === "affluence" && (
+          !hasData ? (
+            <Card className="p-5"><p className="text-[13px] text-os-t3 py-12 text-center">Aucune donnée de comptage. Dessinez une ligne de comptage dans « Zones » et activez une caméra — les passages alimenteront ces analyses.</p></Card>
+          ) : (
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 xl:grid-cols-[1.5fr_1fr] gap-4">
+                <Card className="p-5">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-[15px] font-semibold text-os-t1">Passages par heure</h3>
+                    <span className="os-num text-[12px] text-os-t3">total {d.total_entries} · {d.active_days} j</span>
+                  </div>
+                  <HourlyBars hourly={d.hourly || []} peakHour={peak} />
+                </Card>
+
+                <div className="space-y-4">
+                  <Card className="p-5">
+                    <h3 className="text-[15px] font-semibold text-os-t1 mb-1">Prévision — prochaines heures</h3>
+                    <p className="text-[12px] text-os-t3 mb-3">Attendu d&apos;après un {WD_LONG[new Date().getDay() === 0 ? 6 : new Date().getDay() - 1]} habituel.</p>
+                    {d.forecast?.length ? (
+                      <div className="flex items-end gap-3">
+                        {d.forecast.map((f) => {
+                          const fmax = Math.max(1, ...d.forecast.map((x) => x.expected));
+                          return (
+                            <div key={f.hour} className="flex-1 flex flex-col items-center gap-1.5">
+                              <span className="os-num text-[13px] font-bold text-os-t1">~{f.expected}</span>
+                              <div className="w-full flex items-end justify-center h-20">
+                                <div className="w-8 rounded-t-os" style={{ height: `${Math.max(6, (f.expected / fmax) * 100)}%`, background: "var(--os-blue)", opacity: 0.55 }} />
+                              </div>
+                              <span className="os-num text-[11px] text-os-t3">{f.hour}h</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : <p className="text-[13px] text-os-t3 py-6 text-center">Hors plage horaire de fréquentation.</p>}
+                  </Card>
+                </div>
               </div>
-              {loading ? (
-                <div className="h-40 rounded-xl bg-black/5 dark:bg-white/5 animate-pulse" />
-              ) : footfall?.series?.length ? (
-                <FootfallChart series={footfall.series} />
-              ) : (
-                <p className="text-sm text-gray-500 dark:text-gray-400 py-10 text-center">Aucune donnée de comptage (dessinez une ligne de comptage dans « Zones »).</p>
-              )}
-            </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Files d'attente */}
-              <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-5">
-                <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">Files d&apos;attente</h3>
-                {queues.length === 0 ? (
-                  <p className="text-sm text-gray-500 dark:text-gray-400">Aucune zone de type « file ». Créez-en une dans « Zones ».</p>
-                ) : (
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="text-left text-xs text-gray-500 dark:text-gray-400 uppercase">
-                        <th className="py-2">File</th><th className="py-2">Longueur</th><th className="py-2">Attente moy.</th><th className="py-2">Attente max</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-                      {queues.map((q) => (
-                        <tr key={q.zone_id}>
-                          <td className="py-2 text-gray-900 dark:text-white">{q.name}</td>
-                          <td className="py-2 font-semibold">{q.length}</td>
-                          <td className="py-2">{fmtWait(q.wait_avg_s)}</td>
-                          <td className="py-2">{fmtWait(q.wait_max_s)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-
-              {/* Occupation par zone */}
-              <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-5">
-                <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">Occupation par zone</h3>
-                {occZones.length === 0 ? (
-                  <p className="text-sm text-gray-500 dark:text-gray-400">Aucune occupation récente. Dessinez des zones et activez une caméra.</p>
-                ) : (
-                  <ul className="space-y-2">
-                    {occZones.map((z) => (
-                      <li key={z.zone_id} className="flex items-center justify-between">
-                        <span className="text-sm text-gray-900 dark:text-white truncate">{z.zone_name || `Zone ${z.zone_id}`}</span>
-                        <span className="text-sm font-semibold text-gray-900 dark:text-white">{z.count}</span>
+              {recos.length > 0 && (
+                <Card className="p-5">
+                  <h3 className="text-[15px] font-semibold text-os-t1 mb-3 inline-flex items-center gap-2"><Sparkles className="h-4 w-4 text-os-blue" /> Recommandations</h3>
+                  <ul className="space-y-2.5">
+                    {recos.map((r, i) => (
+                      <li key={i} className="flex gap-2.5 text-[13px] text-os-t2">
+                        <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-os-blue shrink-0" />{r}
                       </li>
                     ))}
                   </ul>
-                )}
-              </div>
+                </Card>
+              )}
+
+              <Card className="p-5">
+                <h3 className="text-[15px] font-semibold text-os-t1">Carte de chaleur</h3>
+                <p className="text-[12px] text-os-t3 mb-4">Affluence moyenne par jour de semaine et par heure</p>
+                <Heatmap matrix={d.heatmap || []} max={d.heatmap_max || 0} />
+              </Card>
             </div>
-          </div>
-        </main>
+          )
+        )}
+
+        {tab === "queues" && (
+          <Card className="p-5">
+            <h3 className="text-[15px] font-semibold text-os-t1 mb-3">Files & attente</h3>
+            {queues.length === 0 ? (
+              <p className="text-[13px] text-os-t3 py-8 text-center">Aucune zone de type « file ». Créez-en une dans « Zones ».</p>
+            ) : (
+              <table className="w-full text-[13px]">
+                <thead>
+                  <tr className="text-left text-[11px] uppercase tracking-wide text-os-t3 border-b border-os-border">
+                    <th className="py-2.5 font-semibold">File</th><th className="py-2.5 font-semibold text-right">Longueur</th><th className="py-2.5 font-semibold text-right">Attente moy.</th><th className="py-2.5 font-semibold text-right">Attente max</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {queues.map((q) => (
+                    <tr key={q.zone_id} className="border-b border-os-border last:border-0">
+                      <td className="py-2.5 text-os-t1">{q.name}</td>
+                      <td className="py-2.5 os-num text-os-t1 text-right font-semibold">{q.length}</td>
+                      <td className="py-2.5 os-num text-os-t2 text-right">{fmtWait(q.wait_avg_s)}</td>
+                      <td className="py-2.5 os-num text-os-t2 text-right">{fmtWait(q.wait_max_s)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </Card>
+        )}
+
+        {tab === "occupancy" && (
+          <Card className="p-5">
+            <h3 className="text-[15px] font-semibold text-os-t1 mb-4">Occupation par zone</h3>
+            {occZones.length === 0 ? (
+              <p className="text-[13px] text-os-t3 py-8 text-center">Aucune occupation récente. Dessinez des zones et activez une caméra.</p>
+            ) : (
+              <div className="space-y-3">
+                {occZones.map((z) => (
+                  <div key={z.zone_id}>
+                    <div className="flex items-center justify-between text-[13px] mb-1">
+                      <span className="text-os-t1">{z.zone_name || `Zone ${z.zone_id}`}</span>
+                      <span className="os-num text-os-t1 font-semibold">{z.count}</span>
+                    </div>
+                    <div className="h-2 rounded-full bg-os-border-2 overflow-hidden">
+                      <div className="h-full rounded-full" style={{ width: `${(z.count / maxOcc) * 100}%`, background: "var(--os-blue)" }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+        )}
       </div>
-    </div>
+    </OsShell>
   );
 }

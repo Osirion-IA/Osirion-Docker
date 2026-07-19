@@ -1,15 +1,14 @@
 "use client";
 
 import { useState, useMemo, useEffect } from "react";
-import AdminSidebar from "../AdminSidebar";
-import AdminTopBar from "../AdminTopBar";
 import { useAuth } from "../AuthContext";
+import OsShell from "../_osirion/OsShell";
+import { PageHeader } from "../_osirion/ui";
 
 // Liste dynamique des caméras
 const BASE_BACKEND_URL = process.env.NEXT_PUBLIC_BASE_BACKEND_URL;
 
 export default function CamerasPage() {
-  const [isCollapsed, setIsCollapsed] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("tous");
   const [selectedCameras, setSelectedCameras] = useState([]);
@@ -252,11 +251,11 @@ export default function CamerasPage() {
   const getStatusBadge = (status) => {
     const styles = {
       active:
-        "bg-emerald-500/10 text-emerald-600 dark:bg-emerald-500/20 dark:text-emerald-400 border-emerald-500/20",
+        "bg-os-green text-os-green border-os-border",
       inactive:
-        "bg-gray-500/10 text-gray-600 dark:bg-gray-500/20 dark:text-gray-400 border-gray-500/20",
+        "bg-os-t4 text-os-t3 border-os-border",
       maintenance:
-        "bg-amber-500/10 text-amber-600 dark:bg-amber-500/20 dark:text-amber-400 border-amber-500/20",
+        "bg-os-amber text-os-amber border-os-border",
     };
 
     const labels = {
@@ -267,17 +266,17 @@ export default function CamerasPage() {
 
     return (
       <span
-        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border ${
+        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-os text-xs font-medium border ${
           styles[status] || styles.inactive
         }`}
       >
         <span
           className={`h-1.5 w-1.5 rounded-full ${
             status === "active"
-              ? "bg-emerald-500 animate-pulse"
+              ? "bg-os-green animate-pulse"
               : status === "maintenance"
-              ? "bg-amber-500"
-              : "bg-gray-400"
+              ? "bg-os-amber"
+              : "bg-os-t4"
           }`}
         />
         {labels[status] || "Hors ligne"}
@@ -286,33 +285,33 @@ export default function CamerasPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[var(--app-bg)]">
+    <OsShell>
       {/* Modal ajout caméra */}
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 shadow-2xl">
-            <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-800">
-              <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+          <div className="w-full max-w-md rounded-os-lg bg-os-card border border-os-border shadow-2xl">
+            <div className="flex items-center justify-between p-6 border-b border-os-border">
+              <h2 className="text-lg font-semibold text-os-t1">
                 {editingId ? "Modifier la caméra" : "Ajouter une caméra"}
               </h2>
               <button
                 onClick={closeModal}
-                className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+                className="p-2 rounded-os hover:bg-black/5 transition-colors"
               >
-                <svg className="h-5 w-5 text-gray-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <svg className="h-5 w-5 text-os-t3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M18 6L6 18M6 6l12 12" />
                 </svg>
               </button>
             </div>
             <form onSubmit={handleSubmitCamera} className="p-6 space-y-4">
               {modalError && (
-                <div className="px-4 py-3 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-sm text-red-700 dark:text-red-400">
+                <div className="px-4 py-3 rounded-os border border-os-border text-sm text-os-red">
                   {modalError}
                 </div>
               )}
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">
-                  Nom <span className="text-red-500">*</span>
+                <label className="block text-sm font-medium text-os-t2 mb-1.5">
+                  Nom <span className="text-os-red">*</span>
                 </label>
                 <input
                   type="text"
@@ -320,12 +319,12 @@ export default function CamerasPage() {
                   value={modalForm.cam_name}
                   onChange={(e) => setModalForm((f) => ({ ...f, cam_name: e.target.value }))}
                   placeholder="Caméra Entrée"
-                  className="w-full px-4 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:text-white"
+                  className="w-full px-4 py-2.5 bg-os-card-2 border border-os-border rounded-os text-sm focus:outline-none focus:ring-os-t3"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">
-                  URL RTSP <span className="text-red-500">*</span>
+                <label className="block text-sm font-medium text-os-t2 mb-1.5">
+                  URL RTSP <span className="text-os-red">*</span>
                 </label>
                 <input
                   type="text"
@@ -333,11 +332,11 @@ export default function CamerasPage() {
                   value={modalForm.rtsp_url}
                   onChange={(e) => setModalForm((f) => ({ ...f, rtsp_url: e.target.value }))}
                   placeholder="rtsp://192.168.1.100:554/stream"
-                  className="w-full px-4 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 dark:text-white"
+                  className="w-full px-4 py-2.5 bg-os-card-2 border border-os-border rounded-os text-sm font-mono focus:outline-none focus:ring-os-t3"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">
+                <label className="block text-sm font-medium text-os-t2 mb-1.5">
                   Emplacement
                 </label>
                 <input
@@ -345,7 +344,7 @@ export default function CamerasPage() {
                   value={modalForm.location}
                   onChange={(e) => setModalForm((f) => ({ ...f, location: e.target.value }))}
                   placeholder="Hall d'entrée, Parking..."
-                  className="w-full px-4 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:text-white"
+                  className="w-full px-4 py-2.5 bg-os-card-2 border border-os-border rounded-os text-sm focus:outline-none focus:ring-os-t3"
                 />
               </div>
 
@@ -353,29 +352,29 @@ export default function CamerasPage() {
                   n'apparaît pas sur la carte. bearing = cap 0–360° de l'objectif. */}
               <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Latitude</label>
+                  <label className="block text-sm font-medium text-os-t2 mb-1.5">Latitude</label>
                   <input
                     type="number"
                     step="any"
                     value={modalForm.latitude}
                     onChange={(e) => setModalForm((f) => ({ ...f, latitude: e.target.value }))}
                     placeholder="14.6928"
-                    className="w-full px-3 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:text-white"
+                    className="w-full px-3 py-2.5 bg-os-card-2 border border-os-border rounded-os text-sm focus:outline-none focus:ring-os-t3"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Longitude</label>
+                  <label className="block text-sm font-medium text-os-t2 mb-1.5">Longitude</label>
                   <input
                     type="number"
                     step="any"
                     value={modalForm.longitude}
                     onChange={(e) => setModalForm((f) => ({ ...f, longitude: e.target.value }))}
                     placeholder="-17.4467"
-                    className="w-full px-3 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:text-white"
+                    className="w-full px-3 py-2.5 bg-os-card-2 border border-os-border rounded-os text-sm focus:outline-none focus:ring-os-t3"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Cap (°)</label>
+                  <label className="block text-sm font-medium text-os-t2 mb-1.5">Cap (°)</label>
                   <input
                     type="number"
                     min="0"
@@ -384,7 +383,7 @@ export default function CamerasPage() {
                     value={modalForm.bearing}
                     onChange={(e) => setModalForm((f) => ({ ...f, bearing: e.target.value }))}
                     placeholder="0"
-                    className="w-full px-3 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:text-white"
+                    className="w-full px-3 py-2.5 bg-os-card-2 border border-os-border rounded-os text-sm focus:outline-none focus:ring-os-t3"
                   />
                 </div>
               </div>
@@ -394,7 +393,7 @@ export default function CamerasPage() {
                   type="button"
                   onClick={() => setModalForm((f) => ({ ...f, is_active: !f.is_active }))}
                   className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                    modalForm.is_active ? "bg-blue-600" : "bg-gray-300 dark:bg-gray-600"
+                    modalForm.is_active ? "bg-os-cta" : "bg-os-border-2"
                   }`}
                 >
                   <span
@@ -403,7 +402,7 @@ export default function CamerasPage() {
                     }`}
                   />
                 </button>
-                <span className="text-sm text-gray-700 dark:text-gray-300">
+                <span className="text-sm text-os-t2">
                   {modalForm.is_active ? "Active" : "Inactive"}
                 </span>
               </div>
@@ -411,14 +410,14 @@ export default function CamerasPage() {
                 <button
                   type="button"
                   onClick={closeModal}
-                  className="flex-1 px-4 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+                  className="flex-1 px-4 py-2.5 rounded-os border border-os-border text-sm font-medium text-os-t2 hover:bg-black/5 transition-colors"
                 >
                   Annuler
                 </button>
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="flex-1 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-sm font-medium transition-colors shadow-lg shadow-blue-500/30"
+                  className="flex-1 px-4 py-2.5 rounded-os bg-os-cta hover:bg-os-cta-hover disabled:opacity-60 text-white text-sm font-medium transition-colors shadow-lg"
                 >
                   {submitting ? "Enregistrement..." : editingId ? "Enregistrer" : "Ajouter"}
                 </button>
@@ -427,78 +426,40 @@ export default function CamerasPage() {
           </div>
         </div>
       )}
-      <div className="flex min-h-screen">
-        <AdminSidebar
-          currentRole={currentRole}
-          isCollapsed={isCollapsed}
-          onToggle={() => setIsCollapsed((prev) => !prev)}
-          currentPath="/Osirion/admin/cameras"
+      <div className="p-6">
+        <PageHeader
+          title="Gestion des caméras"
+          subtitle={`${cameras.length} caméra(s) · ${statusCounts.active} active(s)`}
+          actions={
+            canWrite ? (
+              <button
+                onClick={openAddModal}
+                className="px-3.5 py-2 rounded-os bg-os-cta text-white text-[13px] font-semibold hover:bg-os-cta-hover inline-flex items-center gap-2"
+              >
+                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 5v14M5 12h14" /></svg>
+                Ajouter une caméra
+              </button>
+            ) : null
+          }
         />
 
-        <main
-          className={`flex-1 transition-all duration-400 ${
-            isCollapsed ? "lg:ml-20" : "lg:ml-80"
-          }`}
-        >
-          {/* Header */}
-          <AdminTopBar
-            title="Gestion des caméras"
-            subtitle={`${cameras.length} caméras • ${statusCounts.active} actives • Dernière sync : il y a 30 sec`}
-            searchPlaceholder="Rechercher une caméra..."
-            showSearch={false}
-            actions={
-              <>
-                <button className="rounded-xl border border-gray-200 dark:border-gray-800 px-4 py-2.5 text-sm font-medium hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors flex items-center gap-2">
-                  <svg
-                    className="h-4 w-4"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                  >
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
-                  </svg>
-                  Exporter
-                </button>
-
-                {canWrite && (
-                <button
-                  onClick={openAddModal}
-                  className="rounded-xl bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 text-sm font-medium transition-colors flex items-center gap-2 shadow-lg shadow-blue-500/30"
-                >
-                  <svg
-                    className="h-4 w-4"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                  >
-                    <path d="M12 5v14M5 12h14" />
-                  </svg>
-                  Ajouter une caméra
-                </button>
-                )}
-              </>
-            }
-          />
-
           {/* Stats Cards */}
-          <div className="px-6 lg:px-10 py-6">
+          <div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               {/* Total Caméras */}
-              <div className="group relative overflow-hidden rounded-2xl bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-800 dark:to-gray-900 p-5 border border-gray-200/50 dark:border-gray-700/50 hover:shadow-lg hover:scale-[1.02] transition-all duration-300">
+              <div className="group relative overflow-hidden rounded-os-lg bg-os-card p-5 border border-os-border transition-all duration-300">
                 <div className="flex items-start justify-between">
                   <div>
-                    <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
+                    <div className="text-xs font-semibold text-os-t3 uppercase tracking-wider mb-2">
                       Total Caméras
                     </div>
-                    <div className="text-3xl font-bold text-gray-900 dark:text-white">
+                    <div className="text-3xl font-bold text-os-t1">
                       {statusCounts.tous}
                     </div>
                   </div>
-                  <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-gray-400 to-gray-600 flex items-center justify-center">
+                  <div className="h-12 w-12 rounded-os bg-os-card-2 border border-os-border-2 flex items-center justify-center">
                     <svg
-                      className="h-6 w-6 text-white"
+                      className="h-6 w-6 text-os-t3"
                       viewBox="0 0 24 24"
                       fill="none"
                       stroke="currentColor"
@@ -509,25 +470,25 @@ export default function CamerasPage() {
                     </svg>
                   </div>
                 </div>
-                <div className="mt-3 text-xs text-gray-600 dark:text-gray-400">
+                <div className="mt-3 text-xs text-os-t3">
                   Toutes les caméras du système
                 </div>
               </div>
 
               {/* En ligne */}
-              <div className="group relative overflow-hidden rounded-2xl bg-gradient-to-br from-emerald-50 to-emerald-100 dark:from-emerald-900/20 dark:to-emerald-800/20 p-5 border border-emerald-200/50 dark:border-emerald-700/50 hover:shadow-lg hover:shadow-emerald-500/20 hover:scale-[1.02] transition-all duration-300">
+              <div className="group relative overflow-hidden rounded-os-lg bg-os-card p-5 border border-os-border transition-all duration-300">
                 <div className="flex items-start justify-between">
                   <div>
-                    <div className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider mb-2">
+                    <div className="text-xs font-semibold text-os-green uppercase tracking-wider mb-2">
                       En ligne
                     </div>
-                    <div className="text-3xl font-bold text-emerald-700 dark:text-emerald-400">
+                    <div className="text-3xl font-bold text-os-green">
                       {statusCounts.active}
                     </div>
                   </div>
-                  <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center animate-pulse">
+                  <div className="h-12 w-12 rounded-os bg-os-card-2 border border-os-border-2 flex items-center justify-center animate-pulse">
                     <svg
-                      className="h-6 w-6 text-white"
+                      className="h-6 w-6 text-os-t3"
                       viewBox="0 0 24 24"
                       fill="none"
                       stroke="currentColor"
@@ -538,7 +499,7 @@ export default function CamerasPage() {
                     </svg>
                   </div>
                 </div>
-                <div className="mt-3 text-xs text-emerald-700 dark:text-emerald-400 font-medium">
+                <div className="mt-3 text-xs text-os-green font-medium">
                   {statusCounts.tous > 0
                     ? Math.round((statusCounts.active / statusCounts.tous) * 100) + "% du total"
                     : "0%"}
@@ -546,19 +507,19 @@ export default function CamerasPage() {
               </div>
 
               {/* Hors ligne */}
-              <div className="group relative overflow-hidden rounded-2xl bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-800 dark:to-gray-900 p-5 border border-gray-200/50 dark:border-gray-700/50 hover:shadow-lg hover:scale-[1.02] transition-all duration-300">
+              <div className="group relative overflow-hidden rounded-os-lg bg-os-card p-5 border border-os-border transition-all duration-300">
                 <div className="flex items-start justify-between">
                   <div>
-                    <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
+                    <div className="text-xs font-semibold text-os-t3 uppercase tracking-wider mb-2">
                       Hors ligne
                     </div>
-                    <div className="text-3xl font-bold text-gray-700 dark:text-gray-300">
+                    <div className="text-3xl font-bold text-os-t2">
                       {statusCounts.inactive}
                     </div>
                   </div>
-                  <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-gray-400 to-gray-600 flex items-center justify-center">
+                  <div className="h-12 w-12 rounded-os bg-os-card-2 border border-os-border-2 flex items-center justify-center">
                     <svg
-                      className="h-6 w-6 text-white"
+                      className="h-6 w-6 text-os-t3"
                       viewBox="0 0 24 24"
                       fill="none"
                       stroke="currentColor"
@@ -569,25 +530,25 @@ export default function CamerasPage() {
                     </svg>
                   </div>
                 </div>
-                <div className="mt-3 text-xs text-gray-600 dark:text-gray-400">
+                <div className="mt-3 text-xs text-os-t3">
                   Nécessite attention
                 </div>
               </div>
 
               {/* Maintenance */}
-              <div className="group relative overflow-hidden rounded-2xl bg-gradient-to-br from-amber-50 to-amber-100 dark:from-amber-900/20 dark:to-amber-800/20 p-5 border border-amber-200/50 dark:border-amber-700/50 hover:shadow-lg hover:shadow-amber-500/20 hover:scale-[1.02] transition-all duration-300">
+              <div className="group relative overflow-hidden rounded-os-lg bg-os-card p-5 border border-os-border transition-all duration-300">
                 <div className="flex items-start justify-between">
                   <div>
-                    <div className="text-xs font-semibold text-amber-600 dark:text-amber-400 uppercase tracking-wider mb-2">
+                    <div className="text-xs font-semibold text-os-amber uppercase tracking-wider mb-2">
                       Maintenance
                     </div>
-                    <div className="text-3xl font-bold text-amber-700 dark:text-amber-400">
+                    <div className="text-3xl font-bold text-os-amber">
                       {statusCounts.maintenance}
                     </div>
                   </div>
-                  <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-amber-400 to-amber-600 flex items-center justify-center">
+                  <div className="h-12 w-12 rounded-os bg-os-card-2 border border-os-border-2 flex items-center justify-center">
                     <svg
-                      className="h-6 w-6 text-white"
+                      className="h-6 w-6 text-os-t3"
                       viewBox="0 0 24 24"
                       fill="none"
                       stroke="currentColor"
@@ -597,7 +558,7 @@ export default function CamerasPage() {
                     </svg>
                   </div>
                 </div>
-                <div className="mt-3 text-xs text-amber-700 dark:text-amber-400 font-medium">
+                <div className="mt-3 text-xs text-os-amber font-medium">
                   En cours de réparation
                 </div>
               </div>
@@ -605,12 +566,12 @@ export default function CamerasPage() {
           </div>
 
           {/* Filters & Search */}
-          <div className="px-6 lg:px-10 py-5 border-t border-gray-200/70 dark:border-gray-800/60">
+          <div className="px-6 lg:px-10 py-5 border-t border-os-border">
             <div className="flex flex-col lg:flex-row gap-4">
               {/* Search Bar */}
               <div className="flex-1 relative group">
                 <svg
-                  className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400 group-focus-within:text-blue-500 transition-colors"
+                  className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-os-t4 group-focus-within:text-os-t2 transition-colors"
                   viewBox="0 0 24 24"
                   fill="none"
                   stroke="currentColor"
@@ -624,12 +585,12 @@ export default function CamerasPage() {
                   placeholder="Rechercher par ID, nom ou emplacement..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-12 pr-4 py-3 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:text-white transition-all"
+                  className="w-full pl-12 pr-4 py-3 bg-os-card border border-os-border rounded-os text-sm focus:outline-none focus:ring-os-t3 transition-all"
                 />
                 {searchQuery && (
                   <button
                     onClick={() => setSearchQuery("")}
-                    className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                    className="absolute right-4 top-1/2 -translate-y-1/2 text-os-t4 hover:text-os-t3"
                   >
                     <svg
                       className="h-5 w-5"
@@ -645,13 +606,13 @@ export default function CamerasPage() {
               </div>
 
               {/* View Mode Toggle */}
-              <div className="flex items-center gap-2 bg-gray-100 dark:bg-gray-800 rounded-xl p-1">
+              <div className="flex items-center gap-2 bg-os-card-2 rounded-os p-1">
                 <button
                   onClick={() => setViewMode("grid")}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                  className={`px-4 py-2 rounded-os text-sm font-medium transition-all ${
                     viewMode === "grid"
-                      ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm"
-                      : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
+                      ? "bg-os-card text-os-t1 shadow-sm"
+                      : "text-os-t3 hover:text-os-t1"
                   }`}
                 >
                   <svg
@@ -669,10 +630,10 @@ export default function CamerasPage() {
                 </button>
                 <button
                   onClick={() => setViewMode("table")}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                  className={`px-4 py-2 rounded-os text-sm font-medium transition-all ${
                     viewMode === "table"
-                      ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm"
-                      : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
+                      ? "bg-os-card text-os-t1 shadow-sm"
+                      : "text-os-t3 hover:text-os-t1"
                   }`}
                 >
                   <svg
@@ -698,18 +659,18 @@ export default function CamerasPage() {
                   <button
                     key={filter.value}
                     onClick={() => setStatusFilter(filter.value)}
-                    className={`whitespace-nowrap px-4 py-2.5 rounded-xl text-sm font-medium transition-all flex items-center gap-2 ${
+                    className={`whitespace-nowrap px-4 py-2.5 rounded-os text-sm font-medium transition-all flex items-center gap-2 ${
                       statusFilter === filter.value
-                        ? "bg-blue-600 text-white shadow-lg shadow-blue-500/30"
-                        : "bg-white dark:bg-gray-900 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 border border-gray-200 dark:border-gray-800"
+                        ? "bg-os-cta text-white shadow-lg"
+                        : "bg-os-card text-os-t2 hover:bg-black/5 border border-os-border"
                     }`}
                   >
                     {filter.label}
                     <span
-                      className={`px-2 py-0.5 rounded-lg text-xs font-semibold ${
+                      className={`px-2 py-0.5 rounded-os text-xs font-semibold ${
                         statusFilter === filter.value
-                          ? "bg-white/20 text-white"
-                          : "bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400"
+                          ? "bg-os-card text-white"
+                          : "bg-os-card-2 text-os-t3"
                       }`}
                     >
                       {filter.count}
@@ -721,8 +682,8 @@ export default function CamerasPage() {
 
             {/* Selected Actions */}
             {selectedCameras.length > 0 && (
-              <div className="mt-4 flex items-center gap-3 p-4 rounded-xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800">
-                <div className="flex items-center gap-2 text-sm font-medium text-blue-900 dark:text-blue-300">
+              <div className="mt-4 flex items-center gap-3 p-4 rounded-os bg-os-card-2 border border-os-border">
+                <div className="flex items-center gap-2 text-sm font-medium text-os-t1">
                   <svg
                     className="h-5 w-5"
                     viewBox="0 0 24 24"
@@ -740,13 +701,13 @@ export default function CamerasPage() {
                   <>
                     <button
                       onClick={() => handleBulkActive(true)}
-                      className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium transition-colors"
+                      className="px-4 py-2 rounded-os bg-os-cta hover:bg-os-cta-hover text-white text-sm font-medium transition-colors"
                     >
                       Activer
                     </button>
                     <button
                       onClick={() => handleBulkActive(false)}
-                      className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium transition-colors"
+                      className="px-4 py-2 rounded-os bg-os-cta hover:bg-os-cta-hover text-white text-sm font-medium transition-colors"
                     >
                       Désactiver
                     </button>
@@ -761,7 +722,7 @@ export default function CamerasPage() {
             {viewMode === "grid" ? (
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-5">
                 {filteredCameras.length === 0 ? (
-                  <div className="col-span-full flex flex-col items-center justify-center py-20 text-gray-500 dark:text-gray-400">
+                  <div className="col-span-full flex flex-col items-center justify-center py-20 text-os-t3">
                     <svg
                       className="h-20 w-20 mb-4 opacity-50"
                       viewBox="0 0 24 24"
@@ -780,10 +741,10 @@ export default function CamerasPage() {
                   filteredCameras.map((camera) => (
                     <div
                       key={camera.id}
-                      className="group relative overflow-hidden rounded-2xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 hover:shadow-xl hover:scale-[1.02] transition-all duration-300"
+                      className="group relative overflow-hidden rounded-os-lg bg-os-card border border-os-border transition-all duration-300"
                     >
                       {/* Camera Preview */}
-                      <div className="relative h-44 bg-gradient-to-br from-gray-800 to-gray-900 overflow-hidden">
+                      <div className="relative h-44 bg-[#0d0f12] overflow-hidden">
                         <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,_rgba(255,255,255,0.1),transparent_50%)]" />
                         <div className="absolute inset-0 flex items-center justify-center">
                           <svg
@@ -810,15 +771,15 @@ export default function CamerasPage() {
                             type="checkbox"
                             checked={selectedCameras.includes(camera.id)}
                             onChange={() => handleSelectCamera(camera.id)}
-                            className="h-5 w-5 rounded border-2 border-white/50 checked:bg-blue-600 checked:border-blue-600 cursor-pointer"
+                            className="h-5 w-5 rounded border-2 border-white/50 checked:bg-os-cta checked:border-os-cta cursor-pointer"
                           />
                         </div>
 
                         {/* Quick Actions */}
                         <div className="absolute bottom-3 right-3 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button className="p-2 rounded-lg bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm hover:bg-white dark:hover:bg-gray-800 transition-colors">
+                          <button className="p-2 rounded-os bg-os-card backdrop-blur-sm hover:bg-os-card transition-colors">
                             <svg
-                              className="h-4 w-4 text-gray-700 dark:text-gray-300"
+                              className="h-4 w-4 text-os-t2"
                               viewBox="0 0 24 24"
                               fill="none"
                               stroke="currentColor"
@@ -832,10 +793,10 @@ export default function CamerasPage() {
                           <button
                             onClick={() => handleToggleActive(camera)}
                             title={camera.is_active ? "Désactiver" : "Activer"}
-                            className="p-2 rounded-lg bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm hover:bg-white dark:hover:bg-gray-800 transition-colors"
+                            className="p-2 rounded-os bg-os-card backdrop-blur-sm hover:bg-os-card transition-colors"
                           >
                             <svg
-                              className={`h-4 w-4 ${camera.is_active ? "text-emerald-500" : "text-gray-400"}`}
+                              className={`h-4 w-4 ${camera.is_active ? "text-os-green" : "text-os-t4"}`}
                               viewBox="0 0 24 24"
                               fill="none"
                               stroke="currentColor"
@@ -850,9 +811,9 @@ export default function CamerasPage() {
                           <button
                             onClick={() => openEditModal(camera)}
                             title="Modifier"
-                            className="p-2 rounded-lg bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm hover:bg-white dark:hover:bg-gray-800 transition-colors"
+                            className="p-2 rounded-os bg-os-card backdrop-blur-sm hover:bg-os-card transition-colors"
                           >
-                            <svg className="h-4 w-4 text-gray-700 dark:text-gray-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <svg className="h-4 w-4 text-os-t2" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                               <path d="M12 20h9" />
                               <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
                             </svg>
@@ -861,10 +822,10 @@ export default function CamerasPage() {
                           {canWrite && (
                           <button
                             onClick={() => handleDeleteCamera(camera.id)}
-                            className="p-2 rounded-lg bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm hover:bg-red-100 dark:hover:bg-red-900/50 transition-colors"
+                            className="p-2 rounded-os bg-os-card backdrop-blur-sm hover:opacity-90 transition-colors"
                           >
                             <svg
-                              className="h-4 w-4 text-red-500"
+                              className="h-4 w-4 text-os-red"
                               viewBox="0 0 24 24"
                               fill="none"
                               stroke="currentColor"
@@ -884,16 +845,16 @@ export default function CamerasPage() {
                       <div className="p-4">
                         <div className="flex items-start justify-between mb-2">
                           <div className="flex-1 min-w-0">
-                            <h3 className="font-semibold text-gray-900 dark:text-white truncate">
+                            <h3 className="font-semibold text-os-t1 truncate">
                               {camera.cam_name || "Sans nom"}
                             </h3>
-                            <p className="text-xs text-gray-500 dark:text-gray-400 font-mono mt-0.5">
+                            <p className="text-xs text-os-t3 font-mono mt-0.5">
                               {camera.id}
                             </p>
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400 mb-3">
+                        <div className="flex items-center gap-1.5 text-xs text-os-t3 mb-3">
                           <svg
                             className="h-3.5 w-3.5"
                             viewBox="0 0 24 24"
@@ -907,24 +868,24 @@ export default function CamerasPage() {
                           <span className="truncate">{camera.location || "—"}</span>
                         </div>
 
-                        <div className="grid grid-cols-3 gap-2 pt-3 border-t border-gray-200 dark:border-gray-800">
+                        <div className="grid grid-cols-3 gap-2 pt-3 border-t border-os-border">
                           <div className="text-center">
-                            <div className="text-xs text-gray-500 dark:text-gray-400">RTSP</div>
-                            <div className="text-xs font-mono text-gray-700 dark:text-gray-300 truncate">
+                            <div className="text-xs text-os-t3">RTSP</div>
+                            <div className="text-xs font-mono text-os-t2 truncate">
                               {camera.rtsp_url || "—"}
                             </div>
                           </div>
                           <div className="text-center">
-                            <div className="text-xs text-gray-500 dark:text-gray-400">Créée</div>
-                            <div className="text-xs font-mono text-gray-700 dark:text-gray-300 truncate">
+                            <div className="text-xs text-os-t3">Créée</div>
+                            <div className="text-xs font-mono text-os-t2 truncate">
                               {camera.created_at
                                 ? new Date(camera.created_at).toLocaleString()
                                 : "—"}
                             </div>
                           </div>
                           <div className="text-center">
-                            <div className="text-xs text-gray-500 dark:text-gray-400">Statut</div>
-                            <div className="text-xs font-mono text-gray-700 dark:text-gray-300 truncate">
+                            <div className="text-xs text-os-t3">Statut</div>
+                            <div className="text-xs font-mono text-os-t2 truncate">
                               {camera.is_active ? "Active" : "Inactive"}
                             </div>
                           </div>
@@ -935,10 +896,10 @@ export default function CamerasPage() {
                 )}
               </div>
             ) : (
-              <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 overflow-hidden shadow-sm">
+              <div className="bg-os-card rounded-os-lg border border-os-border overflow-hidden shadow-sm">
                 <div className="overflow-x-auto">
                   <table className="w-full">
-                    <thead className="bg-gray-50 dark:bg-gray-800/50 border-b border-gray-200 dark:border-gray-700">
+                    <thead className="bg-os-card-2 border-b border-os-border">
                       <tr>
                         <th className="w-12 px-6 py-4">
                           <input
@@ -948,28 +909,28 @@ export default function CamerasPage() {
                               selectedCameras.length === filteredCameras.length
                             }
                             onChange={handleSelectAll}
-                            className="rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-2 focus:ring-blue-500"
+                            className="rounded border-os-border text-os-blue focus:ring-os-t3"
                           />
                         </th>
-                        <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">
+                        <th className="px-6 py-4 text-left text-xs font-semibold text-os-t3 uppercase tracking-wider">
                           Caméra
                         </th>
-                        <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">
+                        <th className="px-6 py-4 text-left text-xs font-semibold text-os-t3 uppercase tracking-wider">
                           Emplacement
                         </th>
-                        <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">
+                        <th className="px-6 py-4 text-left text-xs font-semibold text-os-t3 uppercase tracking-wider">
                           Statut
                         </th>
-                        <th className="px-6 py-4 text-right text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">
+                        <th className="px-6 py-4 text-right text-xs font-semibold text-os-t3 uppercase tracking-wider">
                           Actions
                         </th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                    <tbody className="divide-y divide-os-border">
                       {filteredCameras.length === 0 ? (
                         <tr>
                           <td colSpan="5" className="px-6 py-16 text-center">
-                            <div className="flex flex-col items-center justify-center text-gray-500 dark:text-gray-400">
+                            <div className="flex flex-col items-center justify-center text-os-t3">
                               <svg
                                 className="h-16 w-16 mb-4 opacity-50"
                                 viewBox="0 0 24 24"
@@ -992,19 +953,19 @@ export default function CamerasPage() {
                         filteredCameras.map((camera) => (
                           <tr
                             key={camera.id}
-                            className="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors group"
+                            className="hover:bg-black/5 transition-colors group"
                           >
                             <td className="px-6 py-4">
                               <input
                                 type="checkbox"
                                 checked={selectedCameras.includes(camera.id)}
                                 onChange={() => handleSelectCamera(camera.id)}
-                                className="rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-2 focus:ring-blue-500"
+                                className="rounded border-os-border text-os-blue focus:ring-os-t3"
                               />
                             </td>
                             <td className="px-6 py-4">
                               <div className="flex items-center gap-3">
-                                <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-gray-800 to-gray-900 flex items-center justify-center flex-shrink-0">
+                                <div className="h-12 w-12 rounded-os bg-[#0d0f12] flex items-center justify-center flex-shrink-0">
                                   <svg
                                     className="h-5 w-5 text-white"
                                     viewBox="0 0 24 24"
@@ -1018,17 +979,17 @@ export default function CamerasPage() {
                                   </svg>
                                 </div>
                                 <div className="min-w-0">
-                                  <div className="text-sm font-semibold text-gray-900 dark:text-white truncate">
+                                  <div className="text-sm font-semibold text-os-t1 truncate">
                                     {camera.cam_name || "—"}
                                   </div>
-                                  <div className="text-xs text-gray-500 dark:text-gray-400 font-mono mt-0.5">
+                                  <div className="text-xs text-os-t3 font-mono mt-0.5">
                                     {camera.id}
                                   </div>
                                 </div>
                               </div>
                             </td>
                             <td className="px-6 py-4">
-                              <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
+                              <div className="flex items-center gap-2 text-sm text-os-t3">
                                 <svg
                                   className="h-4 w-4 flex-shrink-0"
                                   viewBox="0 0 24 24"
@@ -1047,9 +1008,9 @@ export default function CamerasPage() {
                             </td>
                             <td className="px-6 py-4 text-right">
                               <div className="flex items-center justify-end gap-2">
-                                <button className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors opacity-0 group-hover:opacity-100">
+                                <button className="p-2 hover:bg-black/5 rounded-os transition-colors opacity-0 group-hover:opacity-100">
                                   <svg
-                                    className="h-4 w-4 text-gray-600 dark:text-gray-400"
+                                    className="h-4 w-4 text-os-t3"
                                     viewBox="0 0 24 24"
                                     fill="none"
                                     stroke="currentColor"
@@ -1063,10 +1024,10 @@ export default function CamerasPage() {
                                 <button
                                   onClick={() => handleToggleActive(camera)}
                                   title={camera.is_active ? "Désactiver" : "Activer"}
-                                  className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
+                                  className="p-2 hover:bg-black/5 rounded-os transition-colors opacity-0 group-hover:opacity-100"
                                 >
                                   <svg
-                                    className={`h-4 w-4 ${camera.is_active ? "text-emerald-500" : "text-gray-400"}`}
+                                    className={`h-4 w-4 ${camera.is_active ? "text-os-green" : "text-os-t4"}`}
                                     viewBox="0 0 24 24"
                                     fill="none"
                                     stroke="currentColor"
@@ -1081,9 +1042,9 @@ export default function CamerasPage() {
                                 <button
                                   onClick={() => openEditModal(camera)}
                                   title="Modifier"
-                                  className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
+                                  className="p-2 hover:bg-black/5 rounded-os transition-colors opacity-0 group-hover:opacity-100"
                                 >
-                                  <svg className="h-4 w-4 text-gray-500 dark:text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                  <svg className="h-4 w-4 text-os-t3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                     <path d="M12 20h9" />
                                     <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
                                   </svg>
@@ -1092,10 +1053,10 @@ export default function CamerasPage() {
                                 {canWrite && (
                                 <button
                                   onClick={() => handleDeleteCamera(camera.id)}
-                                  className="p-2 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
+                                  className="p-2 hover:opacity-90 rounded-os transition-colors opacity-0 group-hover:opacity-100"
                                 >
                                   <svg
-                                    className="h-4 w-4 text-red-500"
+                                    className="h-4 w-4 text-os-red"
                                     viewBox="0 0 24 24"
                                     fill="none"
                                     stroke="currentColor"
@@ -1122,33 +1083,32 @@ export default function CamerasPage() {
             {/* Pagination */}
             {filteredCameras.length > 0 && (
               <div className="mt-6 flex flex-col sm:flex-row items-center justify-between gap-4 px-2">
-                <div className="text-sm text-gray-600 dark:text-gray-400">
+                <div className="text-sm text-os-t3">
                   Affichage de{" "}
-                  <span className="font-semibold text-gray-900 dark:text-white">
+                  <span className="font-semibold text-os-t1">
                     {filteredCameras.length}
                   </span>{" "}
                   sur{" "}
-                  <span className="font-semibold text-gray-900 dark:text-white">
+                  <span className="font-semibold text-os-t1">
                     {cameras.length}
                   </span>{" "}
                   caméras
                 </div>
                 <div className="flex gap-2">
-                  <button className="px-4 py-2 border border-gray-200 dark:border-gray-800 rounded-xl text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all">
+                  <button className="px-4 py-2 border border-os-border rounded-os text-sm font-medium text-os-t2 hover:bg-black/5 disabled:opacity-50 disabled:cursor-not-allowed transition-all">
                     Précédent
                   </button>
-                  <button className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium shadow-lg shadow-blue-500/30 transition-all">
+                  <button className="px-4 py-2 bg-os-cta hover:bg-os-cta-hover text-white rounded-os text-sm font-medium shadow-lg transition-all">
                     1
                   </button>
-                  <button className="px-4 py-2 border border-gray-200 dark:border-gray-800 rounded-xl text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-all">
+                  <button className="px-4 py-2 border border-os-border rounded-os text-sm font-medium text-os-t2 hover:bg-black/5 transition-all">
                     Suivant
                   </button>
                 </div>
               </div>
             )}
           </div>
-        </main>
       </div>
-    </div>
+    </OsShell>
   );
 }

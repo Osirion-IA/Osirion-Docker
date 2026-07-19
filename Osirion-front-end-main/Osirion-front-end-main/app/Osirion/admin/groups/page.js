@@ -1,9 +1,9 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback } from "react";
-import AdminSidebar from "../AdminSidebar";
-import AdminTopBar from "../AdminTopBar";
 import { useAuth } from "../AuthContext";
+import OsShell from "../_osirion/OsShell";
+import { PageHeader } from "../_osirion/ui";
 
 // Page « Groupes de caméras » (VMS) : CRUD, bascule de module en masse
 // (facial / LPR) et gestion des membres. Consomme les proxys /api/groups/* et
@@ -12,7 +12,6 @@ import { useAuth } from "../AuthContext";
 const EMPTY_FORM = { name: "", description: "" };
 
 export default function GroupsPage() {
-  const [isCollapsed, setIsCollapsed] = useState(false);
   const [groups, setGroups] = useState([]);
   const [cameras, setCameras] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -169,7 +168,7 @@ export default function GroupsPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[var(--app-bg)]">
+    <OsShell>
       {/* Modal création / édition */}
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
@@ -272,30 +271,21 @@ export default function GroupsPage() {
         </div>
       )}
 
-      <div className="flex min-h-screen">
-        <AdminSidebar
-          currentRole={currentRole}
-          isCollapsed={isCollapsed}
-          onToggle={() => setIsCollapsed((p) => !p)}
-          currentPath="/Osirion/admin/groups"
+      <div className="p-6">
+        <PageHeader
+          title="Groupes de caméras"
+          subtitle={`${groups.length} groupe(s) · bascule de module en masse (appliquée à chaud)`}
+          actions={
+            canWrite ? (
+              <button onClick={openCreate} className="px-3.5 py-2 rounded-os bg-os-cta text-white text-[13px] font-semibold hover:bg-os-cta-hover inline-flex items-center gap-2">
+                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="M12 5v14M5 12h14" /></svg>
+                Nouveau groupe
+              </button>
+            ) : null
+          }
         />
 
-        <main className={`flex-1 transition-all duration-400 ${isCollapsed ? "lg:ml-20" : "lg:ml-80"}`}>
-          <AdminTopBar
-            title="Groupes de caméras"
-            subtitle={`${groups.length} groupe(s) • bascule de module en masse (appliquée à chaud)`}
-            showSearch={false}
-            actions={
-              canWrite ? (
-                <button onClick={openCreate} className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium transition-colors shadow-lg shadow-blue-500/30 inline-flex items-center gap-2">
-                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="M12 5v14M5 12h14" /></svg>
-                  Nouveau groupe
-                </button>
-              ) : null
-            }
-          />
-
-          <div className="px-6 lg:px-10 py-8">
+          <div>
             {loading ? (
               <p className="text-sm text-gray-500 dark:text-gray-400">Chargement…</p>
             ) : error ? (
@@ -361,9 +351,8 @@ export default function GroupsPage() {
               </div>
             )}
           </div>
-        </main>
       </div>
-    </div>
+    </OsShell>
   );
 }
 
