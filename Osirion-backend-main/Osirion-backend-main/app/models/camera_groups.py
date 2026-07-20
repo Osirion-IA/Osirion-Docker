@@ -20,6 +20,10 @@ class CameraGroup(SQLModel, table=True):
     name: str = Field(..., max_length=100, unique=True, index=True)
     description: Optional[str] = Field(default=None, max_length=255)
 
+    # indexCode de l'Area HikCentral quand le groupe provient de la synchro
+    # (mapping area ↔ groupe). Vide = groupe créé manuellement.
+    hik_region_code: Optional[str] = Field(default=None, index=True, max_length=64)
+
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
     cameras: List[Camera] = Relationship(

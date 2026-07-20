@@ -30,45 +30,62 @@ def _mask(url: str) -> str:
     return re.sub(r'(rtsp://)([^@]+@)', r'\1***@', url or '')
 
 
-def _ffmpeg_cmd(rtsp_url: str, transport: str) -> str:
-    """Commande FFmpeg de RELAIS caméra → MediaMTX (sans ré-encodage).
+def _ffmpeg_cmd(rtsp_url: str, transport: str, transcode: bool = False,
+                encoder: str = "", encoder_flags: str = "") -> str:
+    """Commande FFmpeg de RELAIS caméra → MediaMTX.
 
     POURQUOI ce relais. Certaines caméras (typiquement Hikvision) émettent un
     flux H264 dont le SDP n'annonce pas `packetization-mode=1` (mode 0 /
     single-NAL, ou paramètre absent). gortsplib — le moteur RTSP de MediaMTX —
     REFUSE alors l'ingest direct ("unsupported packetization mode: 0" → 0 octet
     reçu), là où VLC/FFmpeg lisent le même flux sans broncher. On interpose donc
-    FFmpeg : il pompe le flux caméra (tolérant) et le RE-PUBLIE dans MediaMTX en
-    `-c:v copy` (AUCUN transcodage → coût CPU négligeable) avec une packetisation
-    standard (mode 1) que MediaMTX accepte. L'audio est volontairement écarté
-    (-an) : le pipeline est vidéo + métadonnées. `$MTX_PATH` et `$RTSP_PORT` sont
-    injectés par MediaMTX à l'exécution → le flux est republié sur son propre
-    chemin (cam<id>).
+    FFmpeg : il pompe le flux caméra (tolérant) et le RE-PUBLIE dans MediaMTX avec
+    une packetisation standard (mode 1) que MediaMTX accepte. L'audio est
+    volontairement écarté (-an) : le pipeline est vidéo + métadonnées. `$MTX_PATH`
+    et `$RTSP_PORT` sont injectés par MediaMTX à l'exécution → le flux est republié
+    sur son propre chemin (cam<id>).
+
+    DEUX MODES DE COPIE VIDÉO :
+      • transcode=False (défaut, caméras RTSP directes) → `-c:v copy` : AUCUN
+        ré-encodage, coût CPU négligeable.
+      • transcode=True (sources HikCentral) → ré-encodage vers `encoder` (ex.
+        h264_nvenc en dev GPU, libx264 au déploiement). Les flux HikCentral sont
+        en HEVC (H.265), que le WebRTC navigateur NE décode pas → on transcode en
+        H.264. Le sous-flux ingéré (360p@10fps) rend ce transcodage très léger.
 
     NB : nécessite l'image `bluenviron/mediamtx:latest-ffmpeg` (ffmpeg embarqué).
     Les identifiants de l'URL doivent être URL-encodés (ex. '@' → '%40') : la
     commande est découpée sur les espaces, l'URL doit donc rester un seul token.
     """
+    if transcode:
+        flags = f" {encoder_flags}" if encoder_flags else ""
+        video = f"-c:v {encoder}{flags}"
+    else:
+        video = "-c:v copy"
     return (
         f"ffmpeg -nostdin -loglevel warning "
         f"-rtsp_transport {transport} -i {rtsp_url} "
-        f"-an -c:v copy "
+        f"-an {video} "
         f"-f rtsp -rtsp_transport tcp rtsp://localhost:$RTSP_PORT/$MTX_PATH"
     )
 
 
-def _path_conf(rtsp_url: str, transport: str, close_after: str) -> Dict[str, Any]:
+def _path_conf(rtsp_url: str, transport: str, close_after: str,
+               transcode: bool = False, encoder: str = "", encoder_flags: str = "",
+               start_timeout: str = "10s") -> Dict[str, Any]:
     """Configuration MediaMTX d'un chemin caméra : relais FFmpeg à la demande.
 
     Le relais n'est lancé QUE lorsqu'un lecteur demande le flux (runOnDemand),
     relancé automatiquement s'il s'arrête (coupure caméra) tant qu'un lecteur est
     présent (runOnDemandRestart), et fermé après `close_after` sans lecteur.
+    `start_timeout` est allongé pour HikCentral (démarrage SMS lent à la 1re
+    connexion).
     """
     return {
-        "runOnDemand": _ffmpeg_cmd(rtsp_url, transport),
+        "runOnDemand": _ffmpeg_cmd(rtsp_url, transport, transcode, encoder, encoder_flags),
         "runOnDemandRestart": True,
         "runOnDemandCloseAfter": close_after,
-        "runOnDemandStartTimeout": "10s",
+        "runOnDemandStartTimeout": start_timeout,
     }
 
 
@@ -95,11 +112,14 @@ def _list_managed_paths(api_base: str, timeout: float) -> Dict[str, str]:
 
 def sync_paths(api_base: str, desired: Dict[int, Dict[str, Any]],
                transport: str = "tcp", close_after: str = "30s",
-               timeout: float = 5.0) -> None:
+               timeout: float = 5.0, transcode_encoder: str = "h264_nvenc",
+               transcode_flags: str = "", hik_start_timeout: str = "30s") -> None:
     """Réconcilie les chemins MediaMTX `cam<id>` avec l'ensemble de caméras voulu.
 
     `desired` : {cam_id: cam_dict}, où cam_dict["rtsp_url"] est l'URL RÉELLE de la
-    caméra physique (celle du backend, avec credentials).
+    caméra physique (pour les caméras HikCentral, elle a été résolue à la demande
+    et injectée par la supervision avant l'appel). cam_dict["source_type"]
+    ("rtsp"|"hikcentral") décide du transcodage HEVC→H.264 (sources HikCentral).
 
     Idempotent et best-effort : toute erreur réseau est logguée sans interrompre
     l'appelant — la caméra continue de tourner, et la prochaine réconciliation
@@ -125,7 +145,14 @@ def sync_paths(api_base: str, desired: Dict[int, Dict[str, Any]],
                 f"Caméra {cam.get('id')} sans rtsp_url — chemin MediaMTX {name} ignoré."
             )
             continue
-        conf = _path_conf(rtsp_url, transport, close_after)
+        # Les sources HikCentral émettent en HEVC (H.265) → transcodage H.264 requis
+        # (WebRTC navigateur). Les caméras RTSP directes restent en copie (-c:v copy).
+        is_hik = cam.get("source_type") == "hikcentral"
+        conf = _path_conf(
+            rtsp_url, transport, close_after,
+            transcode=is_hik, encoder=transcode_encoder, encoder_flags=transcode_flags,
+            start_timeout=(hik_start_timeout if is_hik else "10s"),
+        )
         if name not in existing:
             _add_path(api_base, name, conf, timeout)
         elif existing[name] != conf["runOnDemand"]:

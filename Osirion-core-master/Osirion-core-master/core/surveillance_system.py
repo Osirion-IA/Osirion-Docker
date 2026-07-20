@@ -10,6 +10,7 @@ from typing import List, Dict
 from core.trackers.oc_sort import OCSortTrackerAdapter
 from services.camera_fetching_service import fetch_camera_list
 from services.mediamtx_path_service import sync_paths
+from services.hik_stream_resolver import resolve_stream_url
 from core.camera_manager import CameraCapture
 from core.tracking_processor import TrackingProcessor
 from core import event_dispatch
@@ -227,9 +228,27 @@ class SurveillanceSystem:
                 desired=desired,
                 transport=getattr(self.config, 'MEDIAMTX_RTSP_TRANSPORT', 'tcp'),
                 close_after=getattr(self.config, 'MEDIAMTX_ON_DEMAND_CLOSE_AFTER', '30s'),
+                transcode_encoder=getattr(self.config, 'HIK_TRANSCODE_ENCODER', 'h264_nvenc'),
+                transcode_flags=getattr(self.config, 'HIK_TRANSCODE_FLAGS', ''),
+                hik_start_timeout=getattr(self.config, 'HIK_ONDEMAND_START_TIMEOUT', '30s'),
             )
         except Exception:
             logger.error("Échec synchro des chemins MediaMTX", exc_info=True)
+
+    def _resolve_hik_urls(self, desired: Dict[int, Dict]) -> None:
+        """Résout À LA DEMANDE l'URL RTSP des caméras HikCentral (source_type=
+        "hikcentral"), qui n'ont pas de rtsp_url stockée, et l'injecte dans le
+        cam_dict — consommée ensuite par le relais MediaMTX ET la capture.
+
+        Best-effort : une caméra dont l'URL ne se résout pas (liaison agence
+        coupée) reste sans rtsp_url → son chemin MediaMTX est simplement ignoré ce
+        cycle-ci (sync_paths log + réessai au suivant). N'impacte pas les autres.
+        """
+        for cam in desired.values():
+            if cam.get("source_type") == "hikcentral" and not cam.get("rtsp_url"):
+                url = resolve_stream_url(cam["id"])
+                if url:
+                    cam["rtsp_url"] = url
 
     def _reconcile_cameras(self) -> None:
         """Compare l'état backend à l'état courant et applique les différences À
@@ -249,6 +268,10 @@ class SurveillanceSystem:
             return
 
         desired = {c["id"]: c for c in cameras if c.get("is_active", False)}
+
+        # Résout l'URL des caméras HikCentral (pas de rtsp_url stockée) AVANT tout :
+        # le relais MediaMTX comme la capture en ont besoin.
+        self._resolve_hik_urls(desired)
 
         # Synchronise les chemins MediaMTX (création/maj/suppression) avec l'état
         # voulu AVANT d'ajuster les threads caméra, qui lisent rtsp://.../cam<id>.

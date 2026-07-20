@@ -22,9 +22,25 @@ from app.middleware.auth_middleware import require_viewer, can_manage_cameras
 router = APIRouter()
 
 
-def _camera_or_404(session: Session, camera_id: int) -> None:
-    if not session.get(Camera, camera_id):
+def _camera_or_404(session: Session, camera_id: int) -> Camera:
+    camera = session.get(Camera, camera_id)
+    if not camera:
         raise HTTPException(status_code=404, detail="Caméra non trouvée.")
+    return camera
+
+
+def _activate_on_first_config(session: Session, camera: Camera) -> None:
+    """Activation PARESSEUSE des caméras HikCentral : le catalogue est importé
+    inactif (is_active=False) ; une caméra ne devient « traitée » (ingérée + IA)
+    qu'à sa PREMIÈRE configuration spatiale (zone ou ligne). Le Core la prend alors
+    en charge à chaud (crée le relais MediaMTX + lance capture/traitement).
+
+    No-op pour les caméras RTSP manuelles (déjà actives) et pour les caméras
+    HikCentral déjà activées.
+    """
+    if camera.source_type == "hikcentral" and not camera.is_active:
+        camera.is_active = True
+        session.add(camera)
 
 
 # ─────────────────────────────────────────────
@@ -48,9 +64,10 @@ def add_zone(
     _user: User = Depends(can_manage_cameras),
     session: Session = Depends(get_session),
 ):
-    _camera_or_404(session, payload.camera_id)
+    camera = _camera_or_404(session, payload.camera_id)
     zone = Zone(**payload.model_dump())
     session.add(zone)
+    _activate_on_first_config(session, camera)  # HikCentral : 1re config → traitée
     session.commit()
     session.refresh(zone)
     return zone
@@ -112,9 +129,10 @@ def add_line(
     _user: User = Depends(can_manage_cameras),
     session: Session = Depends(get_session),
 ):
-    _camera_or_404(session, payload.camera_id)
+    camera = _camera_or_404(session, payload.camera_id)
     line = CountLine(**payload.model_dump())
     session.add(line)
+    _activate_on_first_config(session, camera)  # HikCentral : 1re config → traitée
     session.commit()
     session.refresh(line)
     return line

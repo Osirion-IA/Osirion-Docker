@@ -45,6 +45,19 @@ class Settings(BaseSettings):
     ALERT_EMAIL_TO: str = ""        # destinataire(s) par défaut, séparés par des virgules
     ALERT_WEBHOOK_URL: str = ""     # webhook POST JSON (Slack/Teams/endpoint custom)
 
+    # SOURCE DE FLUX HIKCENTRAL (OpenAPI Gateway Artemis, AK/SK) — optionnel.
+    # Si renseigné, on peut synchroniser le catalogue de caméras (par groupe/area)
+    # et résoudre des URLs RTSP standard (rtsp_s). Vide = connecteur désactivé.
+    HIK_HOST: str = ""              # ex. https://137.74.118.35:443 (OpenAPI Gateway)
+    HIK_APP_KEY: str = ""           # Integration Partner Key
+    HIK_APP_SECRET: str = ""        # Integration Partner Secret
+    HIK_USER_ID: str = ""           # Linked User du partner
+    HIK_VERIFY_SSL: bool = False    # certif auto-signé → False en dev
+    HIK_STREAM_TYPE: int = 1        # 0=main (HEVC 1440p), 1=sub (HEVC 360p, léger) → ingestion
+    # Synchronisation périodique du catalogue (thread de fond). 0 = désactivée
+    # (synchro manuelle seulement, via POST /hikcentral/sync).
+    HIK_SYNC_INTERVAL_MINUTES: int = 15
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

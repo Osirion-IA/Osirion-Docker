@@ -42,9 +42,19 @@ class CameraGroupLink(SQLModel, table=True):
 class Camera(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     cam_name: str = Field(..., max_length=50)
-    rtsp_url: str
+    # Nullable : une caméra HikCentral n'a pas d'URL statique (résolue à la volée
+    # via previewURLs/rtsp_s). Les caméras RTSP manuelles la renseignent toujours.
+    rtsp_url: Optional[str] = Field(default=None)
     location: Optional[str] = Field(default=None, max_length=100)
     is_active: bool = Field(default=True)
+
+    # ── Source du flux ────────────────────────────────────────────────────────
+    # "rtsp" = caméra RTSP directe (saisie manuelle) ; "hikcentral" = importée du
+    # catalogue HikCentral (flux résolu à la demande). Le catalogue est importé
+    # NON traité (is_active=False) : une caméra devient traitée quand on la configure.
+    source_type: str = Field(default="rtsp", max_length=20)
+    hik_index_code: Optional[str] = Field(default=None, index=True, max_length=64)
+    hik_status: Optional[int] = Field(default=None)  # 1=en ligne, 2=hors-ligne (HikCentral)
 
     # ── Métadonnées géospatiales (cartographie OpenStreetMap / Leaflet) ───────
     # Nullable : une caméra non géolocalisée n'apparaît simplement pas sur la carte.

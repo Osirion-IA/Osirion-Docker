@@ -86,6 +86,15 @@ services:
       FERNET_KEY: ${FERNET_KEY}
       # Clé de service partagée avec le Core (auth M2M sans expiration). Vide = off.
       CORE_API_KEY: ${CORE_API_KEY:-}
+      # Source de flux HikCentral (OpenAPI Gateway, AK/SK). Vide = connecteur off.
+      HIK_HOST: ${HIK_HOST:-}
+      HIK_APP_KEY: ${HIK_APP_KEY:-}
+      HIK_APP_SECRET: ${HIK_APP_SECRET:-}
+      HIK_USER_ID: ${HIK_USER_ID:-}
+      HIK_VERIFY_SSL: ${HIK_VERIFY_SSL:-false}
+      HIK_STREAM_TYPE: ${HIK_STREAM_TYPE:-1}
+      # Synchro périodique du catalogue HikCentral (thread de fond). 0 = désactivée.
+      HIK_SYNC_INTERVAL_MINUTES: ${HIK_SYNC_INTERVAL_MINUTES:-15}
       BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS:-["http://localhost:3000"]}
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
       REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
@@ -171,6 +180,13 @@ services:
       # API MediaMTX : le Core y déclare/supprime à chaud 1 chemin par caméra
       # (cf. services.mediamtx_path_service).
       MEDIAMTX_API_BASE: http://host.docker.internal:9997
+      # ── Transcodage HikCentral (HEVC→H.264 pour le WebRTC navigateur) ─────────
+      # Sources HikCentral en H.265 : le relais ffmpeg (DANS le conteneur mediamtx)
+      # ré-encode en H.264. L'image mediamtx stock ne fournit PAS nvenc → défaut
+      # libx264 (CPU, quasi gratuit sur un sous-flux 360p@10fps).
+      HIK_TRANSCODE_ENCODER: ${HIK_TRANSCODE_ENCODER:-libx264}
+      HIK_TRANSCODE_FLAGS: ${HIK_TRANSCODE_FLAGS:--preset veryfast -tune zerolatency -crf 26 -g 20}
+      HIK_ONDEMAND_START_TIMEOUT: ${HIK_ONDEMAND_START_TIMEOUT:-30s}
       AUTH_EMAIL: ${AUTH_EMAIL}
       AUTH_PASSWORD: ${AUTH_PASSWORD}
       # Clé de service (auth M2M) : si définie, le Core l'utilise (X-API-Key) au lieu

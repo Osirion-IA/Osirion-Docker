@@ -4,6 +4,7 @@ import { useState, useMemo, useEffect } from "react";
 import { useAuth } from "../AuthContext";
 import OsShell from "../_osirion/OsShell";
 import { PageHeader } from "../_osirion/ui";
+import HikSyncButton from "../_osirion/HikSyncButton";
 
 // Liste dynamique des caméras
 const BASE_BACKEND_URL = process.env.NEXT_PUBLIC_BASE_BACKEND_URL;
@@ -431,15 +432,18 @@ export default function CamerasPage() {
           title="Gestion des caméras"
           subtitle={`${cameras.length} caméra(s) · ${statusCounts.active} active(s)`}
           actions={
-            canWrite ? (
-              <button
-                onClick={openAddModal}
-                className="px-3.5 py-2 rounded-os bg-os-cta text-white text-[13px] font-semibold hover:bg-os-cta-hover inline-flex items-center gap-2"
-              >
-                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 5v14M5 12h14" /></svg>
-                Ajouter une caméra
-              </button>
-            ) : null
+            <div className="flex items-center gap-2">
+              <HikSyncButton onSynced={async () => { const r = await fetch("/api/cameras"); if (r.ok) setCameras(await r.json()); }} />
+              {canWrite ? (
+                <button
+                  onClick={openAddModal}
+                  className="px-3.5 py-2 rounded-os bg-os-cta text-white text-[13px] font-semibold hover:bg-os-cta-hover inline-flex items-center gap-2"
+                >
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 5v14M5 12h14" /></svg>
+                  Ajouter une caméra
+                </button>
+              ) : null}
+            </div>
           }
         />
 

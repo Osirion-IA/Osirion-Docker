@@ -7,11 +7,13 @@
  * Sauvegarde via /api/zones et /api/zones/lines.
  */
 import { useState, useEffect, useCallback } from "react";
+import { Video } from "lucide-react";
 import OsShell from "../_osirion/OsShell";
 import { PageHeader, Card } from "../_osirion/ui";
 import { useAuth } from "../AuthContext";
 import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
 import CameraStream from "../live/CameraStream";
+import GroupedCameraPicker from "../_osirion/GroupedCameraPicker";
 
 const ZONE_KINDS = [
   { value: "occupancy", label: "Occupation", color: "#2f7fd1" },
@@ -36,17 +38,24 @@ export default function ZonesPage() {
   const [name, setName] = useState("");
   const [kind, setKind] = useState("occupancy");
   const [threshold, setThreshold] = useState("");
+  const [groups, setGroups] = useState([]);
   const [msg, setMsg] = useState("");
 
+  const loadCameras = useCallback(async () => {
+    const r = await fetchWithRefresh("/api/cameras");
+    if (r?.ok) {
+      const cams = await r.json();
+      const list = Array.isArray(cams) ? cams : [];
+      setCameras(list);
+      setCamId((prev) => (prev == null && list.length ? list[0].id : prev));
+    }
+  }, []);
+
+  useEffect(() => { loadCameras(); }, [loadCameras]);
   useEffect(() => {
     (async () => {
-      const r = await fetchWithRefresh("/api/cameras");
-      if (r?.ok) {
-        const cams = await r.json();
-        const list = Array.isArray(cams) ? cams : [];
-        setCameras(list);
-        setCamId((prev) => (prev == null && list.length ? list[0].id : prev));
-      }
+      const r = await fetchWithRefresh("/api/groups");
+      if (r?.ok) { const g = await r.json(); setGroups(Array.isArray(g) ? g : []); }
     })();
   }, []);
 
@@ -92,11 +101,16 @@ export default function ZonesPage() {
         });
         if (!r?.ok) { setMsg("Échec de l'enregistrement de la ligne."); return; }
       }
-      cancelDraft(); loadShapes(camId);
+      cancelDraft(); loadShapes(camId); loadCameras();  // is_active peut basculer (activation HikCentral)
     } catch { setMsg("Erreur réseau."); }
   };
   const delZone = async (id) => { await fetchWithRefresh(`/api/zones/${id}`, { method: "DELETE" }); loadShapes(camId); };
   const delLine = async (id) => { await fetchWithRefresh(`/api/zones/lines/${id}`, { method: "DELETE" }); loadShapes(camId); };
+
+  const selectedCam = cameras.find((c) => c.id === camId) || null;
+  // Caméra du catalogue HikCentral pas encore ingérée → aucun flux MediaMTX tant
+  // qu'elle n'a pas été activée (1re zone). On affiche un placeholder explicite.
+  const isUningested = selectedCam?.source_type === "hikcentral" && !selectedCam?.is_active;
 
   const ptStr = (pts) => pts.map((p) => `${p[0]},${p[1]}`).join(" ");
   const toolBtn = (active, activeColor) =>
@@ -108,13 +122,7 @@ export default function ZonesPage() {
         <PageHeader
           title="Zones & comptage"
           subtitle="Dessinez zones et lignes de comptage directement sur l'image de la caméra"
-          actions={
-            <select value={camId ?? ""} onChange={(e) => setCamId(Number(e.target.value))}
-              className="rounded-os border border-os-border bg-os-card px-3 py-2 text-[13px] text-os-t1 outline-none">
-              {cameras.length === 0 && <option value="">Aucune caméra</option>}
-              {cameras.map((c) => <option key={c.id} value={c.id}>Caméra · {c.cam_name || c.id}</option>)}
-            </select>
-          }
+          actions={<GroupedCameraPicker cameras={cameras} groups={groups} value={camId} onChange={setCamId} />}
         />
 
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
@@ -128,7 +136,17 @@ export default function ZonesPage() {
               </div>
 
               <div className="relative w-full aspect-video bg-[#0d0f12] rounded-os overflow-hidden border border-os-border-2">
-                {camId != null && <CameraStream cameraId={camId} showStats={false} />}
+                {camId != null && (isUningested ? (
+                  <div className="absolute inset-0 grid place-items-center text-center px-6">
+                    <div>
+                      <Video className="h-8 w-8 mx-auto mb-3 text-white/40" strokeWidth={1.6} />
+                      <p className="text-[13px] text-white/80">Caméra du catalogue — pas encore ingérée.</p>
+                      <p className="text-[12px] text-white/50 mt-1">Dessinez une première zone ou ligne : la caméra sera activée et son flux apparaîtra ici.</p>
+                    </div>
+                  </div>
+                ) : (
+                  <CameraStream cameraId={camId} showStats={false} />
+                ))}
                 {tool !== "select" && draft.length === 0 && (
                   <div className="absolute inset-0 grid place-items-center pointer-events-none">
                     <span className="os-num text-[12px] text-white/80 bg-black/50 px-3 py-1.5 rounded-os">Cliquez pour poser les sommets de la {tool === "line" ? "ligne" : "zone"}</span>

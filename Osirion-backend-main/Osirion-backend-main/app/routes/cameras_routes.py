@@ -44,9 +44,12 @@ def _to_camera_read(cam: Camera) -> CameraRead:
     return CameraRead(
         id=cam.id,
         cam_name=cam.cam_name,
+        # decrypter() renvoie None si rtsp_url est NULL (cas HikCentral).
         rtsp_url=decrypter(cam.rtsp_url),
         location=cam.location,
         is_active=cam.is_active,
+        source_type=cam.source_type,
+        hik_status=cam.hik_status,
         latitude=cam.latitude,
         longitude=cam.longitude,
         bearing=cam.bearing,

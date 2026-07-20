@@ -24,9 +24,17 @@ class CameraActiveUpdate(BaseModel):
 class CameraRead(BaseModel):
     id: int
     cam_name: str
-    rtsp_url: str
+    # NULL pour les caméras HikCentral (URL résolue à la demande, pas stockée).
+    rtsp_url: Optional[str] = None
     location: Optional[str]
     is_active: bool
+
+    # Source du flux : "rtsp" (caméra saisie manuellement) ou "hikcentral"
+    # (catalogue OpenAPI, URL résolue à la demande). Le Core s'en sert pour
+    # décider du transcodage HEVC→H.264 dans le relais MediaMTX.
+    source_type: str = "rtsp"
+    # Statut HikCentral au dernier sync : 1=en ligne, 2=hors-ligne, None=inconnu/RTSP.
+    hik_status: Optional[int] = None
 
     # Métadonnées géo.
     latitude: Optional[float] = None

@@ -19,6 +19,7 @@ from app.routes.groups_routes import router as groups_router
 from app.routes.zones_routes import router as zones_router
 from app.routes.analytics_routes import router as analytics_router
 from app.routes.rules_routes import router as rules_router
+from app.routes.hikcentral_routes import router as hikcentral_router
 from app.middleware.rate_limit import limiter
 from app.config import settings
 
@@ -39,7 +40,9 @@ app.state.limiter = limiter
 @app.on_event("startup")
 def startup_event():
     # Migrations appliquées par scripts/entrypoint.py (alembic upgrade head) avant uvicorn.
-    pass
+    # Synchro périodique du catalogue HikCentral (no-op si non configuré / intervalle 0).
+    from app.services.hikcentral_scheduler import start_periodic_sync
+    start_periodic_sync()
 
 
 @app.exception_handler(RateLimitExceeded)
@@ -91,6 +94,7 @@ app.include_router(groups_router, prefix="/groups", tags=["🗂️ Camera Groups
 app.include_router(zones_router, prefix="/zones", tags=["📐 Zones & Comptage"])
 app.include_router(analytics_router, prefix="/analytics", tags=["📈 Analytics"])
 app.include_router(rules_router, prefix="/rules", tags=["⚙️ Rules"])
+app.include_router(hikcentral_router, prefix="/hikcentral", tags=["🎥 HikCentral"])
 app.include_router(monitoring_router,prefix="/sysInfo", tags=["Syetem Informations"])
 
 # ─────────────────────────────────────────────

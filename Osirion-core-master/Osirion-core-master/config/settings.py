@@ -115,6 +115,25 @@ MEDIAMTX_RTSP_TRANSPORT = os.getenv('MEDIAMTX_RTSP_TRANSPORT', 'tcp')     # tcp 
 MEDIAMTX_ON_DEMAND_CLOSE_AFTER = os.getenv('MEDIAMTX_ON_DEMAND_CLOSE_AFTER', '30s')
 
 # ----------------------
+# Transcodage des sources HikCentral (HEVC/H.265 → H.264)
+# ----------------------
+# Les flux HikCentral (rtsp_s) sont en H.265, que le WebRTC navigateur NE décode
+# pas → le relais les ré-encode en H.264. ⚠ Le relais ffmpeg tourne DANS LE
+# CONTENEUR MEDIAMTX (image bluenviron/mediamtx:latest-ffmpeg), PAS dans le Core :
+# l'encodeur doit exister dans CETTE image. L'image stock fournit libx264 /
+# h264_qsv / h264_vaapi / h264_vulkan — mais PAS h264_nvenc (NVIDIA).
+#   • libx264 (DÉFAUT) : CPU, présent partout, quasi gratuit sur un 360p@10fps.
+#   • h264_vaapi / h264_qsv : accélération Intel/AMD si /dev/dri est monté.
+#   • h264_nvenc : exigerait une image MediaMTX custom (ffmpeg nvenc + GPU monté).
+# HIK_TRANSCODE_FLAGS : options ffmpeg (couplées à l'encodeur choisi).
+HIK_TRANSCODE_ENCODER = os.getenv('HIK_TRANSCODE_ENCODER', 'libx264')
+HIK_TRANSCODE_FLAGS = os.getenv(
+    'HIK_TRANSCODE_FLAGS', '-preset veryfast -tune zerolatency -crf 26 -g 20'
+)
+# Démarrage SMS HikCentral lent à la 1re connexion → timeout on-demand allongé.
+HIK_ONDEMAND_START_TIMEOUT = os.getenv('HIK_ONDEMAND_START_TIMEOUT', '30s')
+
+# ----------------------
 # Configuration du streaming web
 # ----------------------
 ENABLE_WEB_STREAMING = True       # Serveur Flask + Socket.IO (métadonnées overlay)
