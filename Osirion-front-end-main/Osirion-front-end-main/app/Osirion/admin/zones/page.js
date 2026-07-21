@@ -12,6 +12,7 @@ import OsShell from "../_osirion/OsShell";
 import { PageHeader, Card } from "../_osirion/ui";
 import { useAuth } from "../AuthContext";
 import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
+import { CORE_URL } from "../../../lib/publicUrls";
 import CameraStream from "../live/CameraStream";
 import GroupedCameraPicker from "../_osirion/GroupedCameraPicker";
 
@@ -39,6 +40,7 @@ export default function ZonesPage() {
   const [kind, setKind] = useState("occupancy");
   const [threshold, setThreshold] = useState("");
   const [groups, setGroups] = useState([]);
+  const [previewState, setPreviewState] = useState("idle"); // idle|loading|ready|error
   const [msg, setMsg] = useState("");
 
   const loadCameras = useCallback(async () => {
@@ -70,6 +72,24 @@ export default function ZonesPage() {
   }, []);
 
   useEffect(() => { setDraft([]); setTool("select"); setMsg(""); loadShapes(camId); }, [camId, loadShapes]);
+
+  // Prévisualisation d'une caméra du catalogue HikCentral NON ingérée : on demande
+  // au Core de créer un chemin MediaMTX `preview<id>` (transcodé, à la demande) →
+  // le flux est visible AVANT toute configuration, sans démarrer le traitement IA.
+  useEffect(() => {
+    const cam = cameras.find((c) => c.id === camId);
+    const uningested = cam?.source_type === "hikcentral" && !cam?.is_active;
+    if (camId == null || !uningested) { setPreviewState("idle"); return; }
+    let cancelled = false;
+    setPreviewState("loading");
+    (async () => {
+      try {
+        const res = await fetch(`${CORE_URL}/api/cameras/${camId}/preview`, { method: "POST" });
+        if (!cancelled) setPreviewState(res.ok ? "ready" : "error");
+      } catch { if (!cancelled) setPreviewState("error"); }
+    })();
+    return () => { cancelled = true; };
+  }, [camId, cameras]);
 
   const onSvgClick = (e) => {
     if (!canWrite || tool === "select") return;
@@ -137,13 +157,28 @@ export default function ZonesPage() {
 
               <div className="relative w-full aspect-video bg-[#0d0f12] rounded-os overflow-hidden border border-os-border-2">
                 {camId != null && (isUningested ? (
-                  <div className="absolute inset-0 grid place-items-center text-center px-6">
-                    <div>
-                      <Video className="h-8 w-8 mx-auto mb-3 text-white/40" strokeWidth={1.6} />
-                      <p className="text-[13px] text-white/80">Caméra du catalogue — pas encore ingérée.</p>
-                      <p className="text-[12px] text-white/50 mt-1">Dessinez une première zone ou ligne : la caméra sera activée et son flux apparaîtra ici.</p>
+                  previewState === "ready" ? (
+                    // Flux de prévisualisation (chemin preview<id>, sans traitement IA).
+                    <CameraStream cameraId={camId} streamPath={`preview${camId}`} showStats={false} />
+                  ) : (
+                    <div className="absolute inset-0 grid place-items-center text-center px-6">
+                      <div>
+                        {previewState === "loading" ? (
+                          <>
+                            <div className="h-8 w-8 mx-auto mb-3 rounded-full border-2 border-white/40 border-t-transparent os-anim-spin" />
+                            <p className="text-[13px] text-white/80">Préparation de la prévisualisation…</p>
+                            <p className="text-[12px] text-white/50 mt-1">Première connexion HikCentral — quelques secondes.</p>
+                          </>
+                        ) : (
+                          <>
+                            <Video className="h-8 w-8 mx-auto mb-3 text-white/40" strokeWidth={1.6} />
+                            <p className="text-[13px] text-white/80">Prévisualisation indisponible.</p>
+                            <p className="text-[12px] text-white/50 mt-1">Liaison agence muette ? Vous pouvez tout de même dessiner une zone pour l'activer.</p>
+                          </>
+                        )}
+                      </div>
                     </div>
-                  </div>
+                  )
                 ) : (
                   <CameraStream cameraId={camId} showStats={false} />
                 ))}

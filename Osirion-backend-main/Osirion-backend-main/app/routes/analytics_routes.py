@@ -17,6 +17,8 @@ from typing import Optional
 from datetime import datetime, timedelta
 from collections import defaultdict
 
+from sqlalchemy.orm import selectinload
+
 from app.database import get_session
 from app.models.events import (
     Event,
@@ -26,6 +28,8 @@ from app.models.events import (
     EVENT_CROWD_DETECTED,
 )
 from app.models.zones import Zone, ZONE_QUEUE
+from app.models.cameras import Camera
+from app.models.alerts import Alert
 from app.models.users import User
 from app.middleware.auth_middleware import require_viewer
 
@@ -68,12 +72,27 @@ def footfall(
 
     total_in = sum(s["entries"] for s in series)
     total_out = sum(s["exits"] for s in series)
+
+    # Comparaison à la période PRÉCÉDENTE (même durée, juste avant) → deltas WoW/DoD.
+    prev_since_date = since_date - timedelta(days=days)
+    prev_since_dt = datetime.combine(prev_since_date, datetime.min.time())
+    prev_rows = [e for e in _events(session, EVENT_LINE_CROSSED, prev_since_dt, camera_id)
+                 if e.timestamp < since_dt]
+    prev_in = sum(1 for e in prev_rows if (e.meta or {}).get("direction") == "in")
+    prev_out = sum(1 for e in prev_rows if (e.meta or {}).get("direction") == "out")
+
+    def _pct(cur, prev):
+        return round(100 * (cur - prev) / prev) if prev > 0 else None
+
     return {
         "days": days,
         "total_entries": total_in,
         "total_exits": total_out,
         "present_estimate": total_in - total_out,
         "series": series,
+        "previous": {"total_entries": prev_in, "total_exits": prev_out},
+        "delta_entries_pct": _pct(total_in, prev_in),
+        "delta_exits_pct": _pct(total_out, prev_out),
     }
 
 
@@ -192,6 +211,120 @@ def summary(_user: User = Depends(require_viewer), session: Session = Depends(ge
         "current_occupancy": current_occupancy,
         "crowd_alerts_today": crowd,
         "avg_wait_s": round(sum(qwaits) / len(qwaits), 1) if qwaits else 0,
+    }
+
+
+@router.get("/by-camera")
+def by_camera(
+    days: int = Query(7, ge=1, le=90),
+    _user: User = Depends(require_viewer),
+    session: Session = Depends(get_session),
+):
+    """Répartition SPATIALE de l'affluence : entrées/sorties + occupation courante
+    par caméra, et agrégat par site (groupe). Répond à « quelle agence / caméra
+    est la plus fréquentée ? »."""
+    since_date = datetime.utcnow().date() - timedelta(days=days - 1)
+    since_dt = datetime.combine(since_date, datetime.min.time())
+    lines = _events(session, EVENT_LINE_CROSSED, since_dt)
+    occ = _events(session, EVENT_ZONE_OCCUPANCY_CHANGED, since_dt)
+
+    per_cam = defaultdict(lambda: {"entries": 0, "exits": 0})
+    for e in lines:
+        direction = (e.meta or {}).get("direction")
+        if direction == "in":
+            per_cam[e.camera_id]["entries"] += 1
+        elif direction == "out":
+            per_cam[e.camera_id]["exits"] += 1
+
+    # Occupation courante par caméra = somme de la dernière occupation connue de ses zones.
+    latest_zone = {}
+    for e in occ:
+        zid = (e.meta or {}).get("zone_id")
+        if zid is not None:
+            latest_zone[zid] = (e.camera_id, (e.meta or {}).get("count", 0))
+    occ_per_cam = defaultdict(int)
+    for _zid, (cid, cnt) in latest_zone.items():
+        occ_per_cam[cid] += cnt
+
+    cams = session.exec(select(Camera).options(selectinload(Camera.groups))).all()
+    cam_meta = {c.id: {"name": c.cam_name, "site": (c.groups[0].name if c.groups else None)} for c in cams}
+
+    rows = []
+    for cid in set(per_cam) | set(occ_per_cam):
+        m = cam_meta.get(cid, {})
+        rows.append({
+            "camera_id": cid,
+            "name": m.get("name") or f"Caméra {cid}",
+            "site": m.get("site"),
+            "entries": per_cam[cid]["entries"],
+            "exits": per_cam[cid]["exits"],
+            "current_occupancy": occ_per_cam.get(cid, 0),
+        })
+    rows.sort(key=lambda r: r["entries"], reverse=True)
+
+    site_agg = defaultdict(lambda: {"entries": 0, "cameras": 0})
+    for r in rows:
+        s = r["site"] or "Sans site"
+        site_agg[s]["entries"] += r["entries"]
+        site_agg[s]["cameras"] += 1
+    sites = [{"site": s, **v} for s, v in site_agg.items()]
+    sites.sort(key=lambda r: r["entries"], reverse=True)
+
+    return {"days": days, "cameras": rows, "sites": sites}
+
+
+@router.get("/incidents")
+def incidents(
+    days: int = Query(7, ge=1, le=90),
+    _user: User = Depends(require_viewer),
+    session: Session = Depends(get_session),
+):
+    """Analyse SÉCURITÉ : attroupements détectés (CROWD_DETECTED) + alertes du
+    centre d'alertes — timeline journalière, répartition par sévérité / type /
+    caméra, et taux de résolution du workflow."""
+    since_date = datetime.utcnow().date() - timedelta(days=days - 1)
+    since_dt = datetime.combine(since_date, datetime.min.time())
+    crowd = _events(session, EVENT_CROWD_DETECTED, since_dt)
+    alerts = session.exec(select(Alert).where(Alert.created_at >= since_dt)).all()
+
+    per_day = defaultdict(lambda: {"crowd": 0, "alerts": 0})
+    for e in crowd:
+        per_day[e.timestamp.date().isoformat()]["crowd"] += 1
+    for a in alerts:
+        per_day[a.created_at.date().isoformat()]["alerts"] += 1
+    series = []
+    for i in range(days):
+        dd = (since_date + timedelta(days=i)).isoformat()
+        series.append({"date": dd, "crowd": per_day[dd]["crowd"], "alerts": per_day[dd]["alerts"]})
+
+    by_sev = defaultdict(int)
+    by_kind = defaultdict(int)
+    by_status = defaultdict(int)
+    by_cam = defaultdict(int)
+    for a in alerts:
+        by_sev[a.severity] += 1
+        by_kind[a.kind] += 1
+        by_status[a.status] += 1
+        if a.camera_id is not None:
+            by_cam[a.camera_id] += 1
+
+    cams = {c.id: c.cam_name for c in session.exec(select(Camera)).all()}
+    by_camera = [{"camera_id": cid, "name": cams.get(cid, f"Caméra {cid}"), "count": n}
+                 for cid, n in by_cam.items()]
+    by_camera.sort(key=lambda r: r["count"], reverse=True)
+
+    total = len(alerts)
+    resolved = by_status.get("resolved", 0)
+    return {
+        "days": days,
+        "crowd_total": len(crowd),
+        "alerts_total": total,
+        "series": series,
+        "by_severity": {k: by_sev.get(k, 0) for k in ("info", "warning", "critical")},
+        "by_kind": dict(by_kind),
+        "by_status": {k: by_status.get(k, 0) for k in ("new", "acknowledged", "resolved")},
+        "resolution_rate": round(100 * resolved / total) if total else None,
+        "by_camera": by_camera,
     }
 
 

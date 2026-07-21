@@ -143,6 +143,44 @@ class WebStreamingServer:
                 "server_time": time.time(),
             })
 
+        @self.app.route('/api/cameras/<int:cam_id>/preview', methods=['POST', 'DELETE'])
+        def preview_camera(cam_id):
+            """Prévisualisation d'une caméra du catalogue HikCentral SANS la traiter.
+
+            POST : résout l'URL rtsp_s + crée un chemin MediaMTX `preview<id>`
+            transcodé (H.264), à la demande → le navigateur peut lire le flux en
+            WHEP avant même de configurer la caméra. DELETE : nettoie le chemin.
+            """
+            from services.hik_stream_resolver import resolve_stream_url
+            from services.mediamtx_path_service import ensure_preview_path, delete_preview_path
+            cfg = self.surveillance_system.config
+            api_base = getattr(cfg, 'MEDIAMTX_API_BASE', 'http://mediamtx:9997')
+
+            if request.method == 'DELETE':
+                try:
+                    delete_preview_path(api_base, cam_id)
+                except Exception:
+                    logger.warning("Échec suppression chemin preview cam %s", cam_id, exc_info=True)
+                return jsonify({"ok": True})
+
+            if not getattr(cfg, 'MANAGE_MEDIAMTX_PATHS', True):
+                return jsonify({"error": "Gestion MediaMTX désactivée."}), 400
+            url = resolve_stream_url(cam_id, refresh=False)
+            if not url:
+                return jsonify({"error": "Flux indisponible (caméra non HikCentral ou liaison muette)."}), 502
+            try:
+                path = ensure_preview_path(
+                    api_base=api_base, cam_id=cam_id, rtsp_url=url,
+                    transport=getattr(cfg, 'MEDIAMTX_RTSP_TRANSPORT', 'tcp'),
+                    encoder=getattr(cfg, 'HIK_TRANSCODE_ENCODER', 'libx264'),
+                    encoder_flags=getattr(cfg, 'HIK_TRANSCODE_FLAGS', ''),
+                    start_timeout=getattr(cfg, 'HIK_ONDEMAND_START_TIMEOUT', '30s'),
+                )
+            except Exception:
+                logger.error("Échec création chemin preview cam %s", cam_id, exc_info=True)
+                return jsonify({"error": "Échec de création du flux de prévisualisation."}), 500
+            return jsonify({"ok": True, "path": path})
+
         @self.app.route('/api/stats')
         def system_stats():
             with self.stream_lock:

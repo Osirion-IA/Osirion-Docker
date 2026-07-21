@@ -114,9 +114,11 @@ COPY templates/         ./templates/
 COPY person_detection.py .
 COPY main_refactored.py .
 
-# Pré-télécharger le modèle YOLO de détection de personnes (yolo26n ≈ 5 MB) pour
-# éviter un téléchargement au premier démarrage (et fonctionner hors-ligne).
-RUN python -c "from ultralytics import YOLO; YOLO('yolo26n.pt'); print('yolo26n prêt')"
+# Pré-télécharger les modèles YOLO de détection de personnes pour éviter un
+# téléchargement au premier démarrage (et fonctionner hors-ligne). yolo26n ≈ 5 MB
+# (léger, défaut) et yolo26s ≈ 20 MB (plus précis sur petits/occultés — scènes
+# larges HikCentral 360p). Le modèle actif est choisi par PERSON_MODEL_PATH.
+RUN python -c "from ultralytics import YOLO; YOLO('yolo26n.pt'); YOLO('yolo26s.pt'); print('yolo26n + yolo26s prêts')"
 
 RUN mkdir -p logs
 

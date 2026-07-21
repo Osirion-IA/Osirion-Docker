@@ -165,6 +165,31 @@ def sync_paths(api_base: str, desired: Dict[int, Dict[str, Any]],
         _delete_path(api_base, name, timeout)
 
 
+def ensure_preview_path(api_base: str, cam_id: int, rtsp_url: str,
+                        transport: str = "tcp", encoder: str = "libx264",
+                        encoder_flags: str = "", start_timeout: str = "30s",
+                        close_after: str = "15s", timeout: float = 5.0) -> str:
+    """Crée/MAJ un chemin MediaMTX `preview<id>` pour PRÉVISUALISER une caméra du
+    catalogue SANS la traiter (pas d'IA, is_active reste False).
+
+    Le nom `preview<id>` est HORS du regex géré (`^cam\\d+$`) → la réconciliation du
+    Core ne le liste ni ne le supprime jamais (pas de conflit avec `cam<id>`).
+    `runOnDemand` + `close_after` court : le relais transcodé ne tourne QUE pendant
+    la prévisualisation (tant qu'un lecteur WHEP est là), puis s'arrête. Renvoie le
+    nom du chemin (à passer au lecteur WHEP)."""
+    name = f"preview{cam_id}"
+    conf = _path_conf(rtsp_url, transport, close_after, transcode=True,
+                      encoder=encoder, encoder_flags=encoder_flags,
+                      start_timeout=start_timeout)
+    _add_path(api_base, name, conf, timeout)  # bascule en patch si déjà présent (400)
+    return name
+
+
+def delete_preview_path(api_base: str, cam_id: int, timeout: float = 5.0) -> None:
+    """Supprime le chemin de prévisualisation `preview<id>` (nettoyage best-effort)."""
+    _delete_path(api_base, f"preview{cam_id}", timeout)
+
+
 def _add_path(api_base: str, name: str, conf: Dict[str, Any], timeout: float) -> None:
     try:
         r = requests.post(f"{api_base}/v3/config/paths/add/{name}", json=conf, timeout=timeout)

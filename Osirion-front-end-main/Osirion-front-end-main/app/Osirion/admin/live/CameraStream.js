@@ -27,7 +27,10 @@ function waitIceGatheringComplete(pc, timeoutMs) {
     });
 }
 
-export default function CameraStream({ cameraId, onLatencyUpdate, showStats = true }) {
+// streamPath : nom du chemin MediaMTX à lire (défaut `cam<id>`). Permet de lire un
+// chemin de PRÉVISUALISATION `preview<id>` pour une caméra du catalogue non encore
+// traitée (cf. éditeur de Zones).
+export default function CameraStream({ cameraId, streamPath, onLatencyUpdate, showStats = true }) {
     const videoRef = useRef(null);
     const canvasRef = useRef(null);
     const pcRef = useRef(null);
@@ -41,7 +44,8 @@ export default function CameraStream({ cameraId, onLatencyUpdate, showStats = tr
         let cancelled = false;
         let retryTimer = null;
         let resourceUrl = null;                  // ressource WHEP (DELETE au cleanup)
-        const whepUrl = `${MEDIAMTX_URL}/cam${cameraId}/whep`;
+        const path = streamPath || `cam${cameraId}`;
+        const whepUrl = `${MEDIAMTX_URL}/${path}/whep`;
 
         function closePc() {
             const pc = pcRef.current;
@@ -116,7 +120,7 @@ export default function CameraStream({ cameraId, onLatencyUpdate, showStats = tr
             }
             closePc();
         };
-    }, [cameraId]);
+    }, [cameraId, streamPath]);
 
     // ── Overlay : bounding boxes via Socket.IO 'metadata' ────────────────────
     useEffect(() => {
