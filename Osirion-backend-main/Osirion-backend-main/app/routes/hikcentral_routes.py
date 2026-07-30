@@ -10,17 +10,31 @@ Connecteur HikCentral — source de flux caméras.
                                        vérifie la liaison agence + rafraîchit l'URL.
 """
 import logging
+from datetime import datetime
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlmodel import Session
 
 from app.config import settings
 from app.database import get_session
-from app.middleware.auth_middleware import require_user
+from app.middleware.auth_middleware import require_user, require_admin
 from app.models.cameras import Camera
+from app.models.hikcentral_config import HikCentralConfig
 from app.services import hikcentral_connector as hik
 from app.services import hikcentral_scheduler as hik_scheduler
 from app.services.hikcentral_sync import sync_catalog
+from app.utils.security_utils import crypter
+
+
+class HikConfigIn(BaseModel):
+    """Infos de CONNEXION saisies depuis l'UI (Paramètres). Tous optionnels :
+    app_secret vide/omis = on conserve le secret déjà enregistré."""
+    host: Optional[str] = None
+    app_key: Optional[str] = None
+    app_secret: Optional[str] = None
+    user_id: Optional[str] = None
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -43,13 +57,89 @@ def _hik_camera_or_400(session: Session, cam_id: int) -> Camera:
 
 @router.get("/status")
 def status(_user=Depends(require_user)):
+    cfg = hik.get_config()
     return {
         "configured": hik.is_configured(),
-        "host": settings.HIK_HOST or None,
-        "stream_type": settings.HIK_STREAM_TYPE,  # 0=main, 1=sub
+        "host": cfg["host"] or None,
+        "stream_type": cfg["stream_type"],   # 0=main, 1=sub
+        "source": cfg["source"],             # "db" (UI) | "env" (repli)
         "sync_interval_minutes": settings.HIK_SYNC_INTERVAL_MINUTES,
         "periodic_running": hik_scheduler.is_running(),
     }
+
+
+# ─────────────────────────────────────────────
+# Configuration de connexion (saisie depuis l'UI — admin uniquement)
+# ─────────────────────────────────────────────
+@router.get("/config")
+def get_connection_config(_admin=Depends(require_admin), session: Session = Depends(get_session)):
+    """Config de connexion actuelle. Le secret n'est JAMAIS renvoyé (has_secret)."""
+    row = session.get(HikCentralConfig, 1)
+    cfg = hik.get_config()
+    return {
+        "host": row.host if row else None,
+        "app_key": row.app_key if row else None,
+        "user_id": row.user_id if row else None,
+        "has_secret": bool(row and row.app_secret_enc),
+        "source": cfg["source"],             # "db" | "env"
+        "configured": hik.is_configured(),
+        "effective_host": cfg["host"] or None,   # ce qui est réellement utilisé
+        "updated_at": row.updated_at.isoformat() if row and row.updated_at else None,
+        "updated_by": row.updated_by if row else None,
+    }
+
+
+@router.put("/config")
+def put_connection_config(
+    payload: HikConfigIn,
+    admin=Depends(require_admin),
+    session: Session = Depends(get_session),
+):
+    """Enregistre les infos de connexion. Secret vide/omis → on garde l'existant.
+    Priorité base > .env dès qu'un champ est renseigné."""
+    row = session.get(HikCentralConfig, 1)
+    if not row:
+        row = HikCentralConfig(id=1)
+    row.host = (payload.host or "").strip() or None
+    row.app_key = (payload.app_key or "").strip() or None
+    row.user_id = (payload.user_id or "").strip() or None
+    if payload.app_secret and payload.app_secret.strip():
+        row.app_secret_enc = crypter(payload.app_secret.strip())   # (re)chiffre
+    row.updated_at = datetime.utcnow()
+    row.updated_by = getattr(admin, "email", None)
+    session.add(row)
+    session.commit()
+    hik.invalidate_config()   # le connecteur relira la nouvelle config
+    cfg = hik.get_config()
+    return {
+        "message": "Configuration enregistrée.",
+        "configured": hik.is_configured(),
+        "source": cfg["source"],
+        "has_secret": bool(row.app_secret_enc),
+    }
+
+
+@router.post("/config/test")
+def test_connection(
+    payload: Optional[HikConfigIn] = Body(default=None),
+    _admin=Depends(require_admin),
+):
+    """Teste la connexion HikCentral. Avec un corps → teste ces valeurs (avant
+    enregistrement) ; sinon → teste la config effective actuelle. Le secret non
+    fourni retombe sur celui déjà enregistré (ou .env)."""
+    eff = hik.get_config()
+    cfg = {
+        "host": (payload.host if payload and payload.host else eff["host"]),
+        "app_key": (payload.app_key if payload and payload.app_key else eff["app_key"]),
+        "app_secret": (payload.app_secret if payload and payload.app_secret else eff["app_secret"]),
+        "user_id": (payload.user_id if payload and payload.user_id else eff["user_id"]),
+        "verify_ssl": eff["verify_ssl"],
+    }
+    try:
+        hik.test_connection(cfg)
+    except hik.HikCentralError as e:
+        raise HTTPException(status_code=502, detail=f"Échec de connexion : {e}")
+    return {"ok": True, "message": "Connexion HikCentral réussie."}
 
 
 @router.post("/sync")

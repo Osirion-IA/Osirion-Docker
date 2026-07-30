@@ -69,6 +69,16 @@ CROWD_MIN_SECONDS = float(os.getenv('CROWD_MIN_SECONDS', '3.0'))
 OCCUPANCY_EMIT_INTERVAL = float(os.getenv('OCCUPANCY_EMIT_INTERVAL', '2.0'))
 # Temps de présence minimal (s) pour émettre un ZONE_DWELL (filtre les passages éclairs).
 DWELL_MIN_SECONDS = float(os.getenv('DWELL_MIN_SECONDS', '1.0'))
+# ── Robustesse du comptage de franchissement de ligne (anti-jitter / ID-switch) ──
+# LINE_CROSS_MARGIN : bande morte perpendiculaire (unités image normalisées [0,1]).
+#   Le côté « engagé » d'un track ne bascule qu'au-delà de cette marge de part et
+#   d'autre → un track stationnant à cheval sur la ligne ne compte plus N fois.
+LINE_CROSS_MARGIN = float(os.getenv('LINE_CROSS_MARGIN', '0.02'))
+# Nombre de frames minimal entre deux comptages d'un même track sur une même ligne.
+LINE_CROSS_COOLDOWN_FRAMES = int(os.getenv('LINE_CROSS_COOLDOWN_FRAMES', '15'))
+# Âge de track minimal (frames observées) avant de compter un franchissement
+# (évite les comptages parasites juste après une (ré)apparition / un ID-switch).
+LINE_CROSS_MIN_AGE_FRAMES = int(os.getenv('LINE_CROSS_MIN_AGE_FRAMES', '3'))
 
 # ----------------------
 # Configuration de la reconnexion RTSP

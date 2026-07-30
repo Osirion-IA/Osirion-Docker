@@ -205,13 +205,8 @@ services:
       PERSON_DETECTION_CONFIDENCE: ${PERSON_DETECTION_CONFIDENCE:-0.4}   # confiance YOLO mini
       PERSON_YOLO_HALF: ${PERSON_YOLO_HALF:-true}                        # FP16 GPU (repli FP32 auto)
       BLUR_THRESHOLD: ${BLUR_THRESHOLD:-80.0}                            # gate anti-flou (0=off)
-      # ── MESURE (évaluation chapitre 4 du mémoire) ───────────────────────────
-      # Journalise latence/débit/cache/GPU + décisions reco
-      # dans /app/measurements/metrics.jsonl (bind mount → ./measurements sur l'hôte),
-      # dépouillé hors-ligne par tools/analyze_metrics.py. MEASURE_ENABLED=false → no-op.
-      MEASURE_ENABLED: ${MEASURE_ENABLED:-true}
-      MEASURE_FILE: /app/measurements/metrics.jsonl
-      MEASURE_SAMPLE_SECONDS: ${MEASURE_SAMPLE_SECONDS:-5}
+      # Dispositif de mesure (chapitre mémoire) retiré → no-op.
+      MEASURE_ENABLED: "false"
     volumes:
       # ── Bind mounts — packages Python modifiés (hot-reload du code) ──────────
       # Le modèle yolo26n.pt reste dans l'image (pré-téléchargé au build).
@@ -223,8 +218,6 @@ services:
       - ./Osirion-core-master/Osirion-core-master/main_refactored.py:/app/main_refactored.py
       # ── Named volume — logs persistants ────────────────────────────────────
       - core_logs:/app/logs
-      # ── Mesure (chapitre 4) — journal metrics.jsonl directement sur l'hôte ──
-      - ./measurements:/app/measurements
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:5000/api/cameras"]
       interval: 30s

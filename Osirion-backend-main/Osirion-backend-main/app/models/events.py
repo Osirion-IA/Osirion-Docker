@@ -1,6 +1,6 @@
 # app/models/event.py
 from sqlmodel import SQLModel, Field
-from sqlalchemy import Column, JSON
+from sqlalchemy import Column, JSON, Index
 from typing import Optional, Dict, Any
 from datetime import datetime
 
@@ -16,6 +16,13 @@ EVENT_LINE_CROSSED = "LINE_CROSSED"
 EVENT_ZONE_DWELL = "ZONE_DWELL"
 
 class Event(SQLModel, table=True):
+    # L'analytique filtre en permanence par (caméra, type d'événement, période).
+    # Index couvrant → évite le full scan de `event` (heatmap, footfall, insights…)
+    # à mesure que le volume grossit.
+    __table_args__ = (
+        Index("ix_event_camera_type_ts", "camera_id", "event_type", "timestamp"),
+    )
+
     id: Optional[int] = Field(default=None, primary_key=True)
     camera_id: int = Field(foreign_key="camera.id")
     event_type: str = Field(..., max_length=30)

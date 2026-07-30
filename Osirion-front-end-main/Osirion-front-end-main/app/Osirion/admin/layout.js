@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { AuthContext } from "./AuthContext";
 import AlertNotifier from "./AlertNotifier";
 import { getSetting } from "../../lib/settings";
+import { triggerRefresh } from "../../lib/fetchWithRefresh";
 
 // Lit le cookie non-httpOnly token_expires_at (timestamp ms)
 function getTokenExpiry() {
@@ -58,12 +59,15 @@ export default function AdminLayout({ children }) {
     let timer = null;
 
     async function doRefresh() {
-      const res = await fetch("/api/auth/refresh", { method: "POST" });
-      if (!res.ok) {
-        router.replace("/");
-      } else {
-        scheduleNext();
-      }
+      const res = await triggerRefresh();   // partagé avec fetchWithRefresh (anti-course rotation)
+      if (res.ok) { scheduleNext(); return; }
+      // Refresh KO : possible course (rotation / autre onglet) — vérifier la session
+      // AVANT de déconnecter (le cookie a peut-être déjà été rafraîchi ailleurs).
+      try {
+        const me = await fetch("/api/auth/me");
+        if (me.ok) { scheduleNext(); return; }
+      } catch { /* */ }
+      router.replace("/");
     }
 
     function scheduleNext() {
@@ -98,10 +102,22 @@ export default function AdminLayout({ children }) {
     // Délai RELU à chaque tick → une modification du paramètre « Session (min) »
     // s'applique À CHAUD (≤ 15 s), sans rechargement, et même depuis un autre
     // onglet (localStorage partagé). Aucune dépendance au cycle de vie du layout.
+    // Une vidéo EN LECTURE compte comme une activité : sur une plateforme de
+    // vidéosurveillance, regarder le mur de caméras (sans souris/clavier) n'est PAS
+    // de l'inactivité — sinon on serait déconnecté en pleine surveillance.
+    const isWatchingLive = () => {
+      for (const v of document.querySelectorAll("video")) {
+        if (!v.paused && !v.ended && v.readyState >= 2 && v.currentTime > 0) return true;
+      }
+      return false;
+    };
+
     const checkId = setInterval(async () => {
-      const minutes = Number(getSetting("sessionTimeout", 30)) || 30;
-      const timeoutMs = minutes * 60 * 1000;
-      if (loggingOut || Date.now() - lastActivity < timeoutMs) return;
+      const raw = getSetting("sessionTimeout", 30);
+      const minutes = Number.isFinite(Number(raw)) ? Number(raw) : 30;
+      if (minutes <= 0) return;                                     // 0 = déconnexion auto désactivée
+      if (isWatchingLive()) { lastActivity = Date.now(); return; }  // visionnage live = activité
+      if (loggingOut || Date.now() - lastActivity < minutes * 60 * 1000) return;
       loggingOut = true;
       clearInterval(checkId);
       try { await fetch("/api/auth/logout", { method: "POST" }); } catch { /* */ }

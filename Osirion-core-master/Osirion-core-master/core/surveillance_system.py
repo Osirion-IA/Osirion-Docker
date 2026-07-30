@@ -245,10 +245,26 @@ class SurveillanceSystem:
         cycle-ci (sync_paths log + réessai au suivant). N'impacte pas les autres.
         """
         for cam in desired.values():
-            if cam.get("source_type") == "hikcentral" and not cam.get("rtsp_url"):
-                url = resolve_stream_url(cam["id"])
-                if url:
-                    cam["rtsp_url"] = url
+            if cam.get("source_type") != "hikcentral" or cam.get("rtsp_url"):
+                continue
+            # Si la caméra est DÉJÀ en difficulté (capture non connectée / frames
+            # trop vieilles), l'URL rtsp_s a probablement EXPIRÉ (la passerelle SMS
+            # renvoie 5XX en boucle) → forcer une URL fraîche (bypass du cache
+            # backend) pour auto-guérir, au lieu d'attendre l'expiration du cache
+            # (jusqu'à 240 s). Sinon, résolution normale (cache).
+            force = False
+            cap = self.camera_captures.get(cam["id"])
+            if cap is not None:
+                try:
+                    h = cap.health() or {}
+                    age = h.get("last_frame_age_s")
+                    if not h.get("connected", True) or (age is not None and age > 10):
+                        force = True
+                except Exception:
+                    pass
+            url = resolve_stream_url(cam["id"], refresh=force)
+            if url:
+                cam["rtsp_url"] = url
 
     def _reconcile_cameras(self) -> None:
         """Compare l'état backend à l'état courant et applique les différences À

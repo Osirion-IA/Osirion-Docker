@@ -12,6 +12,7 @@ léger (point-dans-polygone / franchissement pour quelques tracks × quelques zo
 Les zones/lignes sont rafraîchies dans un THREAD DÉDIÉ (jamais de réseau sur le
 thread caméra). process() ne lit que des listes en cache (swap de référence atomique).
 """
+import math
 import threading
 import time
 from typing import Dict, List
@@ -35,13 +36,22 @@ class EventEngine:
         self._crowd_min_s = float(getattr(config, "CROWD_MIN_SECONDS", 3.0))
         self._occ_interval = float(getattr(config, "OCCUPANCY_EMIT_INTERVAL", 2.0))
         self._dwell_min_s = float(getattr(config, "DWELL_MIN_SECONDS", 1.0))
+        # Robustesse du comptage de ligne (anti-jitter / anti-ID-switch) :
+        self._line_margin = float(getattr(config, "LINE_CROSS_MARGIN", 0.02))         # bande morte perpendiculaire (unités image [0,1])
+        self._line_cooldown = int(getattr(config, "LINE_CROSS_COOLDOWN_FRAMES", 15))  # frames min entre 2 comptages d'un même track
+        self._line_min_age = int(getattr(config, "LINE_CROSS_MIN_AGE_FRAMES", 3))     # âge de track min avant de compter
 
         # État (muté UNIQUEMENT par le thread caméra dans process()).
         self._occ_last: Dict[int, int] = {}
         self._occ_last_emit: Dict[int, float] = {}
         self._crowd_since: Dict[int, float] = {}
         self._crowd_active: Dict[int, bool] = {}
-        self._line_side: Dict[int, Dict[int, float]] = {}
+        # Côté ENGAGÉ par (ligne, track) : ne bascule qu'au-delà de la bande morte
+        # (hystérésis → un track à cheval sur la ligne ne compte pas N fois).
+        self._line_committed: Dict[int, Dict[int, int]] = {}
+        self._line_last_cross: Dict[int, Dict[int, int]] = {}   # dernier frame compté par (ligne, track)
+        self._track_age: Dict[int, int] = {}                    # nb de frames vues par track (âge)
+        self._frame_no: int = 0
         # Appartenance + horodatage d'entrée par zone → temps de présence (ZONE_DWELL).
         self._zone_members: Dict[int, set] = {}
         self._zone_entry: Dict[int, Dict[int, float]] = {}
@@ -85,6 +95,15 @@ class EventEngine:
         now = time.time()
         zones = self.zones          # référence locale (swap atomique)
         lines = self.lines
+
+        # Âge des tracks (compteur d'observations) + numéro de frame → garde-fous du
+        # comptage de ligne. Purge des tracks disparus (borne mémoire).
+        self._frame_no += 1
+        live_ids = {t["track_id"] for t in tracks_norm}
+        for tid in live_ids:
+            self._track_age[tid] = self._track_age.get(tid, 0) + 1
+        for tid in [k for k in self._track_age if k not in live_ids]:
+            del self._track_age[tid]
 
         # ── Occupation + attroupement ──
         for z in zones:
@@ -148,8 +167,13 @@ class EventEngine:
                     self._crowd_since.pop(zid, None)
                     self._crowd_active.pop(zid, None)
 
-        # ── Franchissement de ligne (comptage) ──
-        cur_ids = {t["track_id"] for t in tracks_norm}
+        # ── Franchissement de ligne (comptage) — robuste au jitter et aux ID-switch ──
+        # Hystérésis : le côté « engagé » d'un track ne change qu'au-delà d'une BANDE
+        # MORTE (marge perpendiculaire) → un track à cheval sur la ligne ne génère
+        # plus N passages. Un comptage exige en plus un ÂGE de track minimal (évite
+        # les artefacts de (ré)apparition après un changement d'identifiant) et un
+        # COOLDOWN par (track, ligne) (évite les rebonds trop rapprochés).
+        cur_ids = live_ids
         for ln in lines:
             if not ln.get("is_active", True):
                 continue
@@ -158,21 +182,41 @@ class EventEngine:
             b = ln.get("point_b") or []
             if len(a) != 2 or len(b) != 2:
                 continue
-            sides = self._line_side.setdefault(lid, {})
+            ax, ay, bx, by = a[0], a[1], b[0], b[1]
+            seg_len = math.hypot(bx - ax, by - ay)
+            if seg_len < 1e-6:            # ligne dégénérée (2 points confondus)
+                continue
+            committed = self._line_committed.setdefault(lid, {})
+            last_cross = self._line_last_cross.setdefault(lid, {})
             in_positive = (ln.get("in_direction", "positive") == "positive")
             for t in tracks_norm:
-                s = segment_side(a[0], a[1], b[0], b[1], t["x"], t["y"])
-                prev_s = sides.get(t["track_id"])
-                sides[t["track_id"]] = s
-                if prev_s is not None and prev_s != 0 and s != 0 and (prev_s > 0) != (s > 0):
-                    direction = "in" if ((s > 0) == in_positive) else "out"
-                    event_dispatch.dispatch(
-                        self.camera_id, "LINE_CROSSED",
-                        meta={"line_id": lid, "line_name": ln.get("name"), "direction": direction},
-                    )
+                tid = t["track_id"]
+                # Distance perpendiculaire SIGNÉE, en unités image normalisées.
+                dist = segment_side(ax, ay, bx, by, t["x"], t["y"]) / seg_len
+                if dist > self._line_margin:
+                    side = 1
+                elif dist < -self._line_margin:
+                    side = -1
+                else:
+                    continue             # bande morte → côté engagé inchangé (anti-jitter)
+                prev = committed.get(tid)
+                committed[tid] = side
+                if prev is None or prev == side:
+                    continue             # 1re observation claire, ou pas de bascule
+                if self._track_age.get(tid, 0) < self._line_min_age:
+                    continue             # track trop jeune → probable (ré)apparition
+                if self._frame_no - last_cross.get(tid, -10 ** 9) < self._line_cooldown:
+                    continue             # cooldown : rebond trop rapproché
+                last_cross[tid] = self._frame_no
+                direction = "in" if ((side > 0) == in_positive) else "out"
+                event_dispatch.dispatch(
+                    self.camera_id, "LINE_CROSSED",
+                    meta={"line_id": lid, "line_name": ln.get("name"), "direction": direction},
+                )
             # Purge des tracks disparus (borne mémoire).
-            for tid in [k for k in sides if k not in cur_ids]:
-                sides.pop(tid, None)
+            for tid in [k for k in committed if k not in cur_ids]:
+                committed.pop(tid, None)
+                last_cross.pop(tid, None)
 
     def zones_for_point(self, x: float, y: float) -> List[int]:
         """Ids des zones contenant le point (normalisé) — enrichit le Scene Model."""
