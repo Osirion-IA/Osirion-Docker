@@ -95,6 +95,9 @@ services:
       HIK_STREAM_TYPE: ${HIK_STREAM_TYPE:-1}
       # Synchro périodique du catalogue HikCentral (thread de fond). 0 = désactivée.
       HIK_SYNC_INTERVAL_MINUTES: ${HIK_SYNC_INTERVAL_MINUTES:-15}
+      # Historique de connectivité caméra : le backend interroge la santé du Core
+      # (réseau interne Docker) et persiste les transitions d'état.
+      CORE_URL: ${CORE_URL:-http://core:5000}
       BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS:-["http://localhost:3000"]}
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
       REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}

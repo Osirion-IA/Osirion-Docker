@@ -10,7 +10,7 @@
  */
 import { useState, useEffect, useRef, useMemo } from "react";
 import OsShell from "../_osirion/OsShell";
-import { PageHeader, Card, EmptyState } from "../_osirion/ui";
+import { PageHeader, Card, Segmented, EmptyState } from "../_osirion/ui";
 import { Video, RotateCw } from "lucide-react";
 import { CORE_URL } from "../../../lib/publicUrls";
 import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
@@ -55,6 +55,9 @@ export default function CamerasHealthPage() {
   const [meta, setMeta] = useState({});        // id → { source_type, group_ids, cam_name }
   const [groups, setGroups] = useState([]);
   const [retry, setRetry] = useState({});      // id → { state: "pending"|"ok"|"err", msg }
+  const [groupId, setGroupId] = useState("");
+  const [camId, setCamId] = useState("");
+  const [stateFilter, setStateFilter] = useState("all");
   const histRef = useRef({});
 
   // Catalogue backend (source_type + site) — croisé avec la santé Core. Rafraîchi
@@ -123,14 +126,25 @@ export default function CamerasHealthPage() {
 
   // Enrichit chaque caméra santé (Core) avec son site + type (backend) puis regroupe.
   const sites = useMemo(() => {
-    const enriched = cameras.map((c) => ({
+    let enriched = cameras.map((c) => ({
       ...c,
       cam_name: c.name || meta[c.id]?.cam_name,
       group_ids: meta[c.id]?.group_ids || [],
       source_type: meta[c.id]?.source_type,
     }));
+    if (camId) enriched = enriched.filter((c) => c.id === Number(camId));
+    else if (groupId) enriched = enriched.filter((c) => (c.group_ids || []).includes(Number(groupId)));
+    if (stateFilter === "attention") enriched = enriched.filter((c) => ["offline", "stalled", "connecting"].includes(c.state));
+    else if (stateFilter !== "all") enriched = enriched.filter((c) => c.state === stateFilter);
     return groupCamerasBySite(enriched, groups);
-  }, [cameras, meta, groups]);
+  }, [cameras, meta, groups, groupId, camId, stateFilter]);
+
+  // Options de caméra limitées aux caméras traitées (santé), filtrées par agence.
+  const camOptions = useMemo(() => cameras
+    .map((c) => ({ id: c.id, name: c.name || meta[c.id]?.cam_name || `Caméra ${c.id}`, gids: meta[c.id]?.group_ids || [] }))
+    .filter((c) => !groupId || c.gids.includes(Number(groupId)))
+    .sort((a, b) => a.name.localeCompare(b.name, "fr")), [cameras, meta, groupId]);
+  const sel = "rounded-os border border-os-border bg-os-card px-3 py-2 text-[13px] text-os-t1 outline-none";
 
   const renderCard = (c) => {
     const m = stateMeta(c.state);
@@ -197,6 +211,19 @@ export default function CamerasHealthPage() {
           actions={<label className="flex items-center gap-2 text-[13px] text-os-t2"><input type="checkbox" checked={autoRefresh} onChange={() => setAutoRefresh((v) => !v)} /> Auto (2s)</label>}
         />
 
+        <div className="mb-5 flex flex-wrap items-center gap-2">
+          <select value={groupId} onChange={(e) => { setGroupId(e.target.value); setCamId(""); }} className={sel}>
+            <option value="">Toutes les agences</option>
+            {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+          </select>
+          <select value={camId} onChange={(e) => setCamId(e.target.value)} className={sel}>
+            <option value="">Toutes les caméras</option>
+            {camOptions.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          <Segmented value={stateFilter} onChange={setStateFilter} size="sm"
+            options={[{ value: "all", label: "Toutes" }, { value: "online", label: "En ligne" }, { value: "attention", label: "À surveiller" }]} />
+        </div>
+
         {status === "error" && (
           <Card className="p-4 mb-4"><p className="text-[13px] text-os-amber">Métriques indisponibles — Core injoignable sur {CORE_URL}.</p></Card>
         )}
@@ -204,6 +231,8 @@ export default function CamerasHealthPage() {
           <EmptyState icon={Video}>Lecture de la santé des caméras…</EmptyState>
         ) : cameras.length === 0 ? (
           <EmptyState icon={Video}>Aucune caméra traitée. Configurez une caméra (1re zone) : elle apparaîtra ici automatiquement.</EmptyState>
+        ) : sites.length === 0 ? (
+          <EmptyState icon={Video}>Aucune caméra ne correspond aux filtres.</EmptyState>
         ) : (
           <div className="space-y-7">
             {sites.map((s) => {

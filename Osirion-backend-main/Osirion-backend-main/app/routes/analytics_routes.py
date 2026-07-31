@@ -8,7 +8,7 @@ de table pré-agrégée pour l'instant (volume prototype ; la pré-agrégation
 Endpoints (VIEWER+) :
   - /analytics/footfall  : entrées / sorties / net par jour (LINE_CROSSED)
   - /analytics/occupancy : occupation par zone (ZONE_OCCUPANCY_CHANGED)
-  - /analytics/queues    : files (longueur + temps d'attente) (occupation + ZONE_DWELL)
+  - /analytics/queue-affluence / queue-performance : affluence & attente des FILES
   - /analytics/summary   : KPIs du jour (dashboard opérationnel)
 """
 from fastapi import APIRouter, Depends, Query
@@ -114,10 +114,29 @@ def occupancy(
             for e in rows if (e.meta or {}).get("zone_id") == zone_id
         ]
         counts = [p["count"] for p in pts]
+        # Moyenne PONDÉRÉE PAR LA DURÉE : l'occupation est un ÉTAT, pas un évènement
+        # — la moyenne brute des transitions serait fausse. On reconstruit la
+        # fonction en escalier et on intègre.
+        tw_num = tw_den = 0.0
+        evs_sorted = sorted(
+            ((e.timestamp, (e.meta or {}).get("count", 0)) for e in rows
+             if (e.meta or {}).get("zone_id") == zone_id),
+            key=lambda x: x[0],
+        )
+        if evs_sorted:
+            cur_t, cur_c = evs_sorted[0]
+            for t, c in evs_sorted[1:]:
+                dur = (t - cur_t).total_seconds()
+                if dur > 0:
+                    tw_num += cur_c * dur; tw_den += dur
+                cur_t, cur_c = t, c
+            dur = (datetime.utcnow() - cur_t).total_seconds()
+            if dur > 0:
+                tw_num += cur_c * dur; tw_den += dur
         return {
             "zone_id": zone_id,
             "series": pts,
-            "avg": round(sum(counts) / len(counts), 2) if counts else 0,
+            "avg": round(tw_num / tw_den, 2) if tw_den else (counts[-1] if counts else 0),
             "max": max(counts) if counts else 0,
             "current": counts[-1] if counts else 0,
         }
@@ -133,49 +152,6 @@ def occupancy(
                 "t": e.timestamp.isoformat(),
             }
     return {"zones": list(latest.values())}
-
-
-@router.get("/queues")
-def queues(
-    hours: int = Query(24, ge=1, le=168),
-    _user: User = Depends(require_viewer),
-    session: Session = Depends(get_session),
-):
-    """Par zone de type « file » : longueur actuelle + temps d'attente moy/max."""
-    qzones = session.exec(select(Zone).where(Zone.kind == ZONE_QUEUE)).all()
-    if not qzones:
-        return {"queues": []}
-
-    since = datetime.utcnow() - timedelta(hours=hours)
-    occ = _events(session, EVENT_ZONE_OCCUPANCY_CHANGED, since)
-    dwell = _events(session, EVENT_ZONE_DWELL, since)
-
-    last_len = {}
-    for e in occ:
-        zid = (e.meta or {}).get("zone_id")
-        if zid is not None:
-            last_len[zid] = (e.meta or {}).get("count", 0)
-
-    waits = defaultdict(list)
-    for e in dwell:
-        zid = (e.meta or {}).get("zone_id")
-        w = (e.meta or {}).get("dwell_s")
-        if zid is not None and w is not None:
-            waits[zid].append(w)
-
-    out = []
-    for z in qzones:
-        ws = waits.get(z.id, [])
-        out.append({
-            "zone_id": z.id,
-            "name": z.name,
-            "camera_id": z.camera_id,
-            "length": last_len.get(z.id, 0),
-            "wait_avg_s": round(sum(ws) / len(ws), 1) if ws else 0,
-            "wait_max_s": round(max(ws), 1) if ws else 0,
-            "samples": len(ws),
-        })
-    return {"queues": out}
 
 
 @router.get("/summary")
@@ -326,6 +302,185 @@ def incidents(
         "resolution_rate": round(100 * resolved / total) if total else None,
         "by_camera": by_camera,
     }
+
+
+# ─────────────────────────────────────────────
+# ANALYSE DES FILES (queue zones) — affluence basée occupation + performance
+# ─────────────────────────────────────────────
+def _accumulate_occupancy(evs, since, now, PS_H, S_H, PS_WH, S_WH, PS_DH, S_DH):
+    """Intègre la fonction en escalier d'occupation d'UNE zone (transitions
+    (timestamp, count)) en person-secondes/secondes, PONDÉRÉES PAR LA DURÉE, dans
+    des seaux par heure, par (jour_semaine, heure) et par (date, heure). Chaque
+    segment est découpé aux frontières horaires → moyenne temporelle EXACTE."""
+    if not evs:
+        return
+    cur_t = max(since, evs[0][0])
+    cur_c = evs[0][1]
+    segments = []
+    for t, c in evs[1:]:
+        if t <= cur_t:
+            cur_c = c
+            continue
+        segments.append((cur_t, t, cur_c))
+        cur_t, cur_c = t, c
+    segments.append((cur_t, now, cur_c))
+    for a, b, c in segments:
+        t = a
+        while t < b:
+            hour_end = t.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+            seg_end = min(b, hour_end)
+            dur = (seg_end - t).total_seconds()
+            if dur > 0:
+                h, wd, d = t.hour, t.weekday(), t.date()
+                PS_H[h] += c * dur; S_H[h] += dur
+                PS_WH[(wd, h)] += c * dur; S_WH[(wd, h)] += dur
+                PS_DH[(d, h)] += c * dur; S_DH[(d, h)] += dur
+            t = seg_end
+
+
+def _target_queue_zones(session, group_id, camera_id, zone_id):
+    """Zones de type 'queue' ciblées → {zone_id: {name, camera_id, site, threshold}}."""
+    stmt = select(Zone).where(Zone.kind == ZONE_QUEUE)
+    if zone_id is not None:
+        stmt = stmt.where(Zone.id == zone_id)
+    if camera_id is not None:
+        stmt = stmt.where(Zone.camera_id == camera_id)
+    zones = session.exec(stmt).all()
+    cam_ids = {z.camera_id for z in zones}
+    cams = session.exec(
+        select(Camera).options(selectinload(Camera.groups)).where(Camera.id.in_(cam_ids))
+    ).all() if cam_ids else []
+    site = {c.id: (c.groups[0].name if c.groups else None) for c in cams}
+    gids = {c.id: [g.id for g in c.groups] for c in cams}
+    if group_id is not None:
+        zones = [z for z in zones if group_id in gids.get(z.camera_id, [])]
+    return {z.id: {"name": z.name, "camera_id": z.camera_id,
+                   "site": site.get(z.camera_id), "threshold": z.threshold} for z in zones}
+
+
+@router.get("/queue-affluence")
+def queue_affluence(
+    days: int = Query(30, ge=1, le=180),
+    group_id: Optional[int] = None,
+    camera_id: Optional[int] = None,
+    zone_id: Optional[int] = None,
+    top: int = Query(8, ge=1, le=50),
+    _user: User = Depends(require_viewer),
+    session: Session = Depends(get_session),
+):
+    """Affluence basée sur l'OCCUPATION DES FILES (zones 'queue'), pondérée par la
+    durée : profil horaire, heatmap jour×heure, heure de pointe/creux et TOP des
+    moments les plus chargés. Filtres agence/caméra/file."""
+    now = datetime.utcnow()
+    since = now - timedelta(days=days)
+    zmeta = _target_queue_zones(session, group_id, camera_id, zone_id)
+    zids = set(zmeta)
+    if not zids:
+        return {"days": days, "has_queues": False, "queues": 0, "hourly": [],
+                "heatmap": [], "heatmap_max": 0, "peak_hour": None, "quietest_hour": None,
+                "busiest_periods": []}
+
+    occ = _events(session, EVENT_ZONE_OCCUPANCY_CHANGED, since)
+    by_zone = defaultdict(list)
+    for e in occ:
+        zid = (e.meta or {}).get("zone_id")
+        if zid in zids:
+            by_zone[zid].append((e.timestamp, (e.meta or {}).get("count", 0)))
+
+    PS_H, S_H = defaultdict(float), defaultdict(float)
+    PS_WH, S_WH = defaultdict(float), defaultdict(float)
+    PS_DH, S_DH = defaultdict(float), defaultdict(float)
+    for zid, evs in by_zone.items():
+        evs.sort(key=lambda x: x[0])
+        _accumulate_occupancy(evs, since, now, PS_H, S_H, PS_WH, S_WH, PS_DH, S_DH)
+
+    HOURS = list(range(24))
+    avg_h = {h: (PS_H[h] / S_H[h] if S_H[h] else 0.0) for h in HOURS}
+    hourly = [{"hour": h, "avg_occupancy": round(avg_h[h], 2)} for h in HOURS]
+    heatmap = [[round(PS_WH[(wd, h)] / S_WH[(wd, h)], 2) if S_WH[(wd, h)] else 0.0 for h in HOURS] for wd in range(7)]
+    heatmap_max = max((max(row) for row in heatmap), default=0)
+
+    has_data = any(S_H.values())
+    peak_hour = max(HOURS, key=lambda h: avg_h[h]) if has_data else None
+    biz = [h for h in HOURS if 6 <= h <= 22]
+    quietest_hour = min(biz, key=lambda h: avg_h[h]) if has_data else None
+
+    periods = [{"date": d.isoformat(), "hour": h, "avg_occupancy": round(PS_DH[(d, h)] / S_DH[(d, h)], 2)}
+               for (d, h) in S_DH if S_DH[(d, h)] > 0]
+    periods.sort(key=lambda p: -p["avg_occupancy"])
+
+    return {
+        "days": days, "has_queues": True, "queues": len(zids),
+        "hourly": hourly, "heatmap": heatmap, "heatmap_max": round(heatmap_max, 2),
+        "peak_hour": peak_hour, "peak_avg_occupancy": round(avg_h[peak_hour], 2) if peak_hour is not None else 0,
+        "quietest_hour": quietest_hour,
+        "busiest_periods": periods[:top],
+    }
+
+
+@router.get("/queue-performance")
+def queue_performance(
+    days: int = Query(7, ge=1, le=90),
+    group_id: Optional[int] = None,
+    camera_id: Optional[int] = None,
+    wait_threshold_s: int = Query(300, ge=10, le=7200),
+    _user: User = Depends(require_viewer),
+    session: Session = Depends(get_session),
+):
+    """Performance des files : longueur, attente MOYENNE + P90 + max, % au-dessus du
+    seuil (SLA), par file ; et CLASSEMENT DES AGENCES par temps d'attente moyen."""
+    now = datetime.utcnow()
+    since = now - timedelta(days=days)
+    zmeta = _target_queue_zones(session, group_id, camera_id, None)
+    zids = set(zmeta)
+    if not zids:
+        return {"days": days, "wait_threshold_s": wait_threshold_s, "queues": [], "agencies": []}
+
+    dwell = _events(session, EVENT_ZONE_DWELL, since)
+    occ = _events(session, EVENT_ZONE_OCCUPANCY_CHANGED, since)
+    waits = defaultdict(list)
+    for e in dwell:
+        zid = (e.meta or {}).get("zone_id")
+        w = (e.meta or {}).get("dwell_s")
+        if zid in zids and w is not None:
+            waits[zid].append(w)
+    last_len = {}
+    for e in occ:
+        zid = (e.meta or {}).get("zone_id")
+        if zid in zids:
+            last_len[zid] = (e.meta or {}).get("count", 0)
+
+    def _p90(vals):
+        if not vals:
+            return 0
+        s = sorted(vals)
+        return round(s[min(len(s) - 1, int(0.9 * len(s)))], 1)
+
+    def _avg(vals):
+        return round(sum(vals) / len(vals), 1) if vals else 0
+
+    queues = []
+    for zid, zm in zmeta.items():
+        ws = waits.get(zid, [])
+        over = sum(1 for w in ws if w > wait_threshold_s)
+        queues.append({
+            "zone_id": zid, "name": zm["name"], "site": zm["site"], "camera_id": zm["camera_id"],
+            "length": last_len.get(zid, 0), "wait_avg_s": _avg(ws), "wait_p90_s": _p90(ws),
+            "wait_max_s": round(max(ws), 1) if ws else 0, "samples": len(ws),
+            "over_threshold_pct": round(100 * over / len(ws)) if ws else None,
+        })
+    queues.sort(key=lambda q: -q["wait_avg_s"])
+
+    by_site = defaultdict(list)
+    for zid, zm in zmeta.items():
+        for w in waits.get(zid, []):
+            by_site[zm["site"] or "Sans site"].append(w)
+    agencies = [{"site": s, "wait_avg_s": _avg(v), "wait_p90_s": _p90(v),
+                 "over_threshold_pct": round(100 * sum(1 for w in v if w > wait_threshold_s) / len(v)),
+                 "samples": len(v)} for s, v in by_site.items() if v]
+    agencies.sort(key=lambda a: -a["wait_avg_s"])
+
+    return {"days": days, "wait_threshold_s": wait_threshold_s, "queues": queues, "agencies": agencies}
 
 
 @router.get("/insights")

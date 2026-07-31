@@ -5,10 +5,12 @@
  * Aucune identité : type, sens, caméra, zone/ligne, valeur. Données /api/events.
  */
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { ListOrdered } from "lucide-react";
+import { ListOrdered, FileSpreadsheet, FileText, FileType2 } from "lucide-react";
 import OsShell from "../_osirion/OsShell";
 import { PageHeader, Card, RefreshButton, EmptyState } from "../_osirion/ui";
+import { useAuth } from "../AuthContext";
 import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
+import { exportEvents } from "../../../lib/eventExport";
 
 // Type d'événement → libellé FR + couleur du point (rouge = anomalie uniquement).
 const TYPE_META = {
@@ -66,7 +68,19 @@ export default function EventsPage() {
     });
   }, [events, typeFilter, cameraFilter, search]);
 
+  const user = useAuth();
+  const canExport = ["admin", "user"].includes(user?.role || "viewer");
+  const doExport = (kind) => {
+    if (!filtered.length) return;
+    const parts = [];
+    if (typeFilter !== "tous") parts.push(`type : ${TYPE_META[typeFilter]?.label || typeFilter}`);
+    if (cameraFilter !== "tous") parts.push(`caméra : ${cameras.find((c) => String(c.id) === String(cameraFilter))?.name || cameraFilter}`);
+    if (search.trim()) parts.push(`recherche : ${search.trim()}`);
+    exportEvents(kind, filtered, { generatedAt: new Date().toLocaleString("fr-FR"), filters: parts.length ? parts.join(" · ") : "Aucun", count: filtered.length });
+  };
+
   const selectCls = "rounded-os border border-os-border bg-os-card px-3 py-2 text-[13px] text-os-t1 outline-none focus:border-os-t3";
+  const btn = "px-3 py-2 rounded-os text-[13px] font-semibold inline-flex items-center gap-2 disabled:opacity-40";
 
   return (
     <OsShell>
@@ -91,6 +105,14 @@ export default function EventsPage() {
               type="text" value={search} onChange={(e) => setSearch(e.target.value)}
               placeholder="Zone, caméra, lieu…" className={selectCls}
             />
+          </div>
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-os-border pt-3">
+            <span className="os-num text-[12px] text-os-t3">{filtered.length} / {events.length} événement(s){!canExport ? " · export réservé admin/opérateur" : ""}</span>
+            <div className="flex items-center gap-2">
+              <button onClick={() => doExport("excel")} disabled={!filtered.length || !canExport} className={`${btn} bg-os-cta text-white hover:bg-os-cta-hover`}><FileSpreadsheet className="h-4 w-4" /> Excel</button>
+              <button onClick={() => doExport("pdf")} disabled={!filtered.length || !canExport} className={`${btn} bg-os-cta text-white hover:bg-os-cta-hover`}><FileText className="h-4 w-4" /> PDF</button>
+              <button onClick={() => doExport("csv")} disabled={!filtered.length || !canExport} className={`${btn} border border-os-border text-os-t2 hover:text-os-t1`}><FileType2 className="h-4 w-4" /> CSV</button>
+            </div>
           </div>
         </Card>
 

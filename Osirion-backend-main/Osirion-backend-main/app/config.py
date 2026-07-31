@@ -58,6 +58,12 @@ class Settings(BaseSettings):
     # (synchro manuelle seulement, via POST /hikcentral/sync).
     HIK_SYNC_INTERVAL_MINUTES: int = 15
 
+    # ── Historique de connectivité caméra (poller backend → camera_status_event) ──
+    # Le backend interroge la santé du Core et persiste les transitions d'état.
+    CORE_URL: str = "http://core:5000"           # URL interne Docker du Core
+    CAMERA_STATUS_POLL_SECONDS: int = 15
+    CAMERA_STATUS_RECORDER_ENABLED: bool = True
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

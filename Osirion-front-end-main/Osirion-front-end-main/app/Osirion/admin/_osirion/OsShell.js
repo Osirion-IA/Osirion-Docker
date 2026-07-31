@@ -19,11 +19,10 @@ export default function OsShell({ children, alertsCount = 0, camsOnline = 0, cam
       <OsTopbar sections={SECTIONS} activeKey={section.key} alertsCount={alertsCount} user={user} />
       <div className="flex pt-[52px]">
         <OsSidebar
-          section={section}
+          sections={SECTIONS}
+          activeKey={section.key}
           activePath={pathname}
           alertsCount={alertsCount}
-          camsOnline={camsOnline}
-          camsTotal={camsTotal}
         />
         <main className="flex-1 min-w-0">{children}</main>
       </div>

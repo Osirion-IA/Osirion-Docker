@@ -9,6 +9,45 @@ import HikSyncButton from "../_osirion/HikSyncButton";
 // Liste dynamique des caméras
 const BASE_BACKEND_URL = process.env.NEXT_PUBLIC_BASE_BACKEND_URL;
 
+// Vue « Plan du site » — plan schématique à pastilles d'état (lat/long normalisées
+// dans une boîte 0..1). Fusionnée depuis l'ancienne page « Caméras & site ».
+function PlanView({ cameras }) {
+  const geo = cameras.filter((c) => c.latitude != null && c.longitude != null);
+  const bounds = geo.reduce((b, c) => ({
+    minLat: Math.min(b.minLat, c.latitude), maxLat: Math.max(b.maxLat, c.latitude),
+    minLng: Math.min(b.minLng, c.longitude), maxLng: Math.max(b.maxLng, c.longitude),
+  }), { minLat: Infinity, maxLat: -Infinity, minLng: Infinity, maxLng: -Infinity });
+  const pos = (c) => {
+    const spanLat = bounds.maxLat - bounds.minLat || 1;
+    const spanLng = bounds.maxLng - bounds.minLng || 1;
+    return {
+      left: `${8 + ((c.longitude - bounds.minLng) / spanLng) * 84}%`,
+      top: `${8 + (1 - (c.latitude - bounds.minLat) / spanLat) * 84}%`,
+    };
+  };
+  if (geo.length === 0) {
+    return (
+      <div className="rounded-os-lg bg-os-card border border-os-border p-8 text-center">
+        <p className="text-[13px] text-os-t3">Aucune caméra géolocalisée sur ce périmètre. Renseignez latitude/longitude (en éditant une caméra) pour la placer sur le plan.</p>
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-os-lg bg-os-card border border-os-border p-5">
+      <h3 className="text-[15px] font-semibold text-os-t1 mb-3">Plan du site · {geo.length} caméra(s) géolocalisée(s)</h3>
+      <div className="relative w-full max-w-3xl mx-auto aspect-[16/10] rounded-os bg-os-card-2 border border-os-border-2 overflow-hidden">
+        <div className="absolute inset-0 opacity-[0.5]" style={{ backgroundImage: "linear-gradient(var(--os-border) 1px, transparent 1px), linear-gradient(90deg, var(--os-border) 1px, transparent 1px)", backgroundSize: "28px 28px" }} />
+        {geo.map((c) => (
+          <div key={c.id} className="absolute -translate-x-1/2 -translate-y-1/2 flex flex-col items-center" style={pos(c)} title={c.cam_name}>
+            <span className={`h-3 w-3 rounded-full ring-4 ${c.is_active ? "bg-os-green ring-os-green/20" : "bg-os-t4 ring-os-t4/20"}`} />
+            <span className="mt-1 os-num text-[10px] text-os-t3 whitespace-nowrap max-w-[80px] truncate">{c.cam_name || `Caméra ${c.id}`}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function CamerasPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("tous");
@@ -449,15 +488,15 @@ export default function CamerasPage() {
 
           {/* Stats Cards */}
           <div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               {/* Total Caméras */}
               <div className="group relative overflow-hidden rounded-os-lg bg-os-card p-5 border border-os-border transition-all duration-300">
                 <div className="flex items-start justify-between">
                   <div>
-                    <div className="text-xs font-semibold text-os-t3 uppercase tracking-wider mb-2">
+                    <div className="text-xs font-semibold text-os-t3 mb-2">
                       Total Caméras
                     </div>
-                    <div className="text-3xl font-bold text-os-t1">
+                    <div className="os-num text-[26px] leading-none font-bold text-os-t1">
                       {statusCounts.tous}
                     </div>
                   </div>
@@ -483,14 +522,14 @@ export default function CamerasPage() {
               <div className="group relative overflow-hidden rounded-os-lg bg-os-card p-5 border border-os-border transition-all duration-300">
                 <div className="flex items-start justify-between">
                   <div>
-                    <div className="text-xs font-semibold text-os-green uppercase tracking-wider mb-2">
+                    <div className="text-xs font-semibold text-os-green mb-2">
                       En ligne
                     </div>
-                    <div className="text-3xl font-bold text-os-green">
+                    <div className="os-num text-[26px] leading-none font-bold text-os-green">
                       {statusCounts.active}
                     </div>
                   </div>
-                  <div className="h-12 w-12 rounded-os bg-os-card-2 border border-os-border-2 flex items-center justify-center animate-pulse">
+                  <div className="h-12 w-12 rounded-os bg-os-card-2 border border-os-border-2 flex items-center justify-center">
                     <svg
                       className="h-6 w-6 text-os-t3"
                       viewBox="0 0 24 24"
@@ -514,10 +553,10 @@ export default function CamerasPage() {
               <div className="group relative overflow-hidden rounded-os-lg bg-os-card p-5 border border-os-border transition-all duration-300">
                 <div className="flex items-start justify-between">
                   <div>
-                    <div className="text-xs font-semibold text-os-t3 uppercase tracking-wider mb-2">
+                    <div className="text-xs font-semibold text-os-t3 mb-2">
                       Hors ligne
                     </div>
-                    <div className="text-3xl font-bold text-os-t2">
+                    <div className="os-num text-[26px] leading-none font-bold text-os-t2">
                       {statusCounts.inactive}
                     </div>
                   </div>
@@ -539,38 +578,11 @@ export default function CamerasPage() {
                 </div>
               </div>
 
-              {/* Maintenance */}
-              <div className="group relative overflow-hidden rounded-os-lg bg-os-card p-5 border border-os-border transition-all duration-300">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <div className="text-xs font-semibold text-os-amber uppercase tracking-wider mb-2">
-                      Maintenance
-                    </div>
-                    <div className="text-3xl font-bold text-os-amber">
-                      {statusCounts.maintenance}
-                    </div>
-                  </div>
-                  <div className="h-12 w-12 rounded-os bg-os-card-2 border border-os-border-2 flex items-center justify-center">
-                    <svg
-                      className="h-6 w-6 text-os-t3"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                    >
-                      <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
-                    </svg>
-                  </div>
-                </div>
-                <div className="mt-3 text-xs text-os-amber font-medium">
-                  En cours de réparation
-                </div>
-              </div>
             </div>
           </div>
 
           {/* Filters & Search */}
-          <div className="px-6 lg:px-10 py-5 border-t border-os-border">
+          <div className="mt-5">
             <div className="flex flex-col lg:flex-row gap-4">
               {/* Search Bar */}
               <div className="flex-1 relative group">
@@ -650,6 +662,17 @@ export default function CamerasPage() {
                     <path d="M3 6h18M3 12h18M3 18h18" />
                   </svg>
                 </button>
+                <button
+                  onClick={() => setViewMode("plan")}
+                  title="Plan du site"
+                  className={`px-4 py-2 rounded-os text-sm font-medium transition-all ${
+                    viewMode === "plan" ? "bg-os-card text-os-t1 shadow-sm" : "text-os-t3 hover:text-os-t1"
+                  }`}
+                >
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M9 20l-5.5 1.8a1 1 0 0 1-1.3-1V5.7a1 1 0 0 1 .7-1L9 3m0 17 6-2m-6 2V3m6 15 5.5 1.8a1 1 0 0 0 1.3-1V5.7a1 1 0 0 0-.7-1L15 3m0 15V3M15 3 9 5" />
+                  </svg>
+                </button>
               </div>
 
               {/* Status Filter */}
@@ -658,7 +681,6 @@ export default function CamerasPage() {
                   { value: "tous", label: "Tous", count: statusCounts.tous },
                   { value: "active", label: "En ligne", count: statusCounts.active },
                   { value: "inactive", label: "Hors ligne", count: statusCounts.inactive },
-                  { value: "maintenance", label: "Maintenance", count: statusCounts.maintenance },
                 ].map((filter) => (
                   <button
                     key={filter.value}
@@ -722,8 +744,10 @@ export default function CamerasPage() {
           </div>
 
           {/* Content */}
-          <div className="px-6 lg:px-10 py-6">
-            {viewMode === "grid" ? (
+          <div className="mt-4">
+            {viewMode === "plan" ? (
+              <PlanView cameras={filteredCameras} />
+            ) : viewMode === "grid" ? (
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-5">
                 {filteredCameras.length === 0 ? (
                   <div className="col-span-full flex flex-col items-center justify-center py-20 text-os-t3">
@@ -916,16 +940,16 @@ export default function CamerasPage() {
                             className="rounded border-os-border text-os-blue focus:ring-os-t3"
                           />
                         </th>
-                        <th className="px-6 py-4 text-left text-xs font-semibold text-os-t3 uppercase tracking-wider">
+                        <th className="px-6 py-4 text-left text-xs font-semibold text-os-t3">
                           Caméra
                         </th>
-                        <th className="px-6 py-4 text-left text-xs font-semibold text-os-t3 uppercase tracking-wider">
+                        <th className="px-6 py-4 text-left text-xs font-semibold text-os-t3">
                           Emplacement
                         </th>
-                        <th className="px-6 py-4 text-left text-xs font-semibold text-os-t3 uppercase tracking-wider">
+                        <th className="px-6 py-4 text-left text-xs font-semibold text-os-t3">
                           Statut
                         </th>
-                        <th className="px-6 py-4 text-right text-xs font-semibold text-os-t3 uppercase tracking-wider">
+                        <th className="px-6 py-4 text-right text-xs font-semibold text-os-t3">
                           Actions
                         </th>
                       </tr>

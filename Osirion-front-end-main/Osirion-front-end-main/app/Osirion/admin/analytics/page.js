@@ -187,52 +187,75 @@ function Heatmap({ matrix, max }) {
 export default function AnalyticsPage() {
   const [period, setPeriod] = useState(30);
   const [tab, setTab] = useState("affluence");
+  const [groupId, setGroupId] = useState("");
+  const [camId, setCamId] = useState("");
+  const [groups, setGroups] = useState([]);
+  const [cameras, setCameras] = useState([]);
   const [ins, setIns] = useState(null);
   const [foot, setFoot] = useState(null);
-  const [queues, setQueues] = useState([]);
+  const [qaff, setQaff] = useState(null);       // affluence basée files (queue-affluence)
+  const [qperf, setQperf] = useState(null);     // performance files (queue-performance)
   const [occZones, setOccZones] = useState([]);
   const [byCam, setByCam] = useState(null);
   const [incidents, setIncidents] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  useEffect(() => {
+    (async () => {
+      const [g, c] = await Promise.all([fetchWithRefresh("/api/groups"), fetchWithRefresh("/api/cameras")]);
+      if (g?.ok) { const x = await g.json(); setGroups(Array.isArray(x) ? x : []); }
+      if (c?.ok) { const x = await c.json(); setCameras(Array.isArray(x) ? x : []); }
+    })();
+  }, []);
+
   const load = useCallback(async () => {
     setLoading(true);
+    const p = new URLSearchParams();
+    if (camId) p.set("camera_id", camId);
+    else if (groupId) p.set("group_id", groupId);
+    const fq = p.toString() ? `&${p}` : "";
     try {
       const hours = period * 24;
-      const [i, f, q, o, bc, inc] = await Promise.all([
+      const [i, f, qa, qp, o, bc, inc] = await Promise.all([
         fetchWithRefresh(`/api/analytics/insights?days=${period}`),
-        fetchWithRefresh(`/api/analytics/footfall?days=${period}`),
-        fetchWithRefresh("/api/analytics/queues"),
+        fetchWithRefresh(`/api/analytics/footfall?days=${period}${camId ? `&camera_id=${camId}` : ""}`),
+        fetchWithRefresh(`/api/analytics/queue-affluence?days=${period}${fq}`),
+        fetchWithRefresh(`/api/analytics/queue-performance?days=${Math.min(period, 90)}${fq}`),
         fetchWithRefresh(`/api/analytics/occupancy?hours=${hours}`),
         fetchWithRefresh(`/api/analytics/by-camera?days=${Math.min(period, 90)}`),
         fetchWithRefresh(`/api/analytics/incidents?days=${Math.min(period, 90)}`),
       ]);
       setIns(i?.ok ? await i.json() : null);
       setFoot(f?.ok ? await f.json() : null);
-      setQueues(q?.ok ? (await q.json()).queues || [] : []);
+      setQaff(qa?.ok ? await qa.json() : null);
+      setQperf(qp?.ok ? await qp.json() : null);
       setOccZones(o?.ok ? (await o.json()).zones || [] : []);
       setByCam(bc?.ok ? await bc.json() : null);
       setIncidents(inc?.ok ? await inc.json() : null);
     } finally { setLoading(false); }
-  }, [period]);
+  }, [period, groupId, camId]);
   useEffect(() => { load(); }, [load]);
 
   const d = ins || {};
   const today = d.today || {};
   const hasData = (d.total_entries || 0) > 0;
-  const peak = d.peak_hour;
   const maxOcc = Math.max(1, ...occZones.map((z) => z.count || 0));
 
+  // Affluence basée FILES (queue-affluence) — le pic vient de l'OCCUPATION des files,
+  // pas des entrées/sorties.
+  const qa = qaff || {};
+  const qPeak = qa.peak_hour;
+  const hasQueues = !!qa.has_queues;
+  const agencies = qperf?.agencies || [];
+  const fmtWaitShort = (s) => (!s ? "0 s" : s < 60 ? `${Math.round(s)} s` : `${Math.floor(s / 60)} min`);
+
   const recos = [];
-  if (hasData) {
-    if (peak != null) recos.push(`Affluence maximale vers ${peak}h–${peak + 1}h (${d.peak_hour_count} passages sur ${period} j). Renforcez l'accueil / les guichets sur ce créneau.`);
-    if (d.quietest_hour != null) recos.push(`Creux vers ${d.quietest_hour}h — fenêtre idéale pour les tâches de fond, la maintenance ou les pauses.`);
-    if (d.busiest_weekday != null) recos.push(`Jour le plus chargé : ${WD_LONG[d.busiest_weekday]} (${d.weekday_avg?.[d.busiest_weekday]} passages/jour en moyenne).`);
-    if (byCam?.cameras?.length) { const top = byCam.cameras[0]; recos.push(`Caméra la plus fréquentée : ${top.name}${top.site ? ` (${top.site})` : ""} — ${top.entries} entrées sur la période.`); }
-    if (today.vs_avg_pct != null) recos.push(today.vs_avg_pct >= 0
-      ? `Aujourd'hui +${today.vs_avg_pct}% vs un ${WD_LONG[new Date().getDay() === 0 ? 6 : new Date().getDay() - 1]} habituel — anticipez une journée chargée.`
-      : `Aujourd'hui ${today.vs_avg_pct}% vs d'habitude — affluence plus calme que la normale.`);
-  }
+  if (hasQueues && qPeak != null) recos.push(`Affluence maximale des files vers ${qPeak}h–${qPeak + 1}h (occupation moyenne ${qa.peak_avg_occupancy}). Renforcez les guichets sur ce créneau.`);
+  if (hasQueues && qa.quietest_hour != null) recos.push(`Files les plus calmes vers ${qa.quietest_hour}h — fenêtre idéale pour la maintenance ou les pauses.`);
+  if (agencies.length) { const w = agencies[0]; recos.push(`Agence à la plus forte attente : ${w.site} — moyenne ${fmtWaitShort(w.wait_avg_s)}, P90 ${fmtWaitShort(w.wait_p90_s)}.`); }
+  if (hasData && today.vs_avg_pct != null) recos.push(today.vs_avg_pct >= 0
+    ? `Aujourd'hui +${today.vs_avg_pct}% de passages vs d'habitude — anticipez une journée chargée.`
+    : `Aujourd'hui ${today.vs_avg_pct}% vs d'habitude — plus calme que la normale.`);
 
   // Export CSV de la tendance journalière (entrées/sorties/net).
   const exportCsv = () => {
@@ -270,6 +293,20 @@ export default function AnalyticsPage() {
           </div>
         )}
 
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <select value={groupId} onChange={(e) => { setGroupId(e.target.value); setCamId(""); }}
+            className="rounded-os border border-os-border bg-os-card px-3 py-2 text-[13px] text-os-t1 outline-none">
+            <option value="">Toutes les agences</option>
+            {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+          </select>
+          <select value={camId} onChange={(e) => setCamId(e.target.value)}
+            className="rounded-os border border-os-border bg-os-card px-3 py-2 text-[13px] text-os-t1 outline-none">
+            <option value="">Toutes les caméras</option>
+            {cameras.filter((c) => !groupId || (c.group_ids || []).includes(Number(groupId))).map((c) => <option key={c.id} value={c.id}>{c.cam_name || `Caméra ${c.id}`}</option>)}
+          </select>
+          <span className="text-[11px] text-os-t4">Filtres appliqués à l&apos;affluence des files et aux files &amp; attente.</span>
+        </div>
+
         <div className="grid grid-cols-2 xl:grid-cols-4 gap-4 mb-5">
           <Insight label="Aujourd'hui" icon={TrendingUp}
             value={loading ? "—" : (today.so_far ?? 0)}
@@ -279,19 +316,19 @@ export default function AnalyticsPage() {
             value={loading ? "—" : (foot?.total_entries ?? 0)}
             hint={deltaEntries != null ? `${deltaEntries >= 0 ? "+" : ""}${deltaEntries}% vs période préc.` : "période précédente vide"}
             trend={deltaEntries} />
-          <Insight label="Heure de pointe" icon={Clock}
-            value={loading ? "—" : peak != null ? `${peak}h–${peak + 1}h` : "—"}
-            hint={peak != null ? `${d.peak_hour_count} passages` : "pas encore de pic"} />
-          <Insight label="Jour le plus chargé" icon={CalendarDays}
-            value={loading ? "—" : d.busiest_weekday != null ? WD[d.busiest_weekday] : "—"}
-            hint={d.busiest_weekday != null ? `${d.weekday_avg?.[d.busiest_weekday]} passages/j` : "—"} />
+          <Insight label="Pic des files" icon={Clock}
+            value={loading ? "—" : qPeak != null ? `${qPeak}h–${qPeak + 1}h` : "—"}
+            hint={qPeak != null ? `occ. moy. ${qa.peak_avg_occupancy}` : hasQueues ? "pas encore de pic" : "aucune file"} />
+          <Insight label="Attente — top agence" icon={CalendarDays}
+            value={loading ? "—" : agencies.length ? fmtWaitShort(agencies[0].wait_avg_s) : "—"}
+            hint={agencies.length ? `${agencies[0].site} · P90 ${fmtWaitShort(agencies[0].wait_p90_s)}` : "aucune file"} />
         </div>
 
         <div className="mb-4"><Segmented value={tab} onChange={setTab} options={TABS} /></div>
 
         {tab === "affluence" && (
-          !hasData ? (
-            <Card className="p-5"><p className="text-[13px] text-os-t3 py-12 text-center">Aucune donnée de comptage. Dessinez une ligne de comptage dans « Zones » et activez une caméra — les passages alimenteront ces analyses.</p></Card>
+          !hasData && !hasQueues ? (
+            <Card className="p-5"><p className="text-[13px] text-os-t3 py-12 text-center">Aucune donnée. Dessinez une <b>zone « file d&apos;attente »</b> (pour l&apos;affluence des files) ou une <b>ligne de comptage</b> dans « Zones », et activez une caméra.</p></Card>
           ) : (
             <div className="space-y-4">
               <Card className="p-5">
@@ -310,10 +347,12 @@ export default function AnalyticsPage() {
               <div className="grid grid-cols-1 xl:grid-cols-[1.5fr_1fr] gap-4">
                 <Card className="p-5">
                   <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-[15px] font-semibold text-os-t1">Passages par heure</h3>
-                    <span className="os-num text-[12px] text-os-t3">total {d.total_entries} · {d.active_days} j</span>
+                    <h3 className="text-[15px] font-semibold text-os-t1">Occupation des files par heure</h3>
+                    <span className="os-num text-[12px] text-os-t3">{qa.queues || 0} file(s)</span>
                   </div>
-                  <HourlyBars hourly={d.hourly || []} peakHour={peak} />
+                  {hasQueues ? (
+                    <HourlyBars hourly={(qa.hourly || []).map((x) => ({ hour: x.hour, entries: x.avg_occupancy }))} peakHour={qPeak} />
+                  ) : <p className="text-[13px] text-os-t3 py-10 text-center">Aucune file configurée (zone « file d&apos;attente »).</p>}
                 </Card>
 
                 <Card className="p-5">
@@ -351,10 +390,25 @@ export default function AnalyticsPage() {
                 </Card>
               )}
 
+              {qa.busiest_periods?.length > 0 && (
+                <Card className="p-5">
+                  <h3 className="text-[15px] font-semibold text-os-t1 mb-1">Moments de forte affluence</h3>
+                  <p className="text-[12px] text-os-t3 mb-3">Créneaux (jour × heure) où les files ont été les plus chargées</p>
+                  <ul className="space-y-2">
+                    {qa.busiest_periods.map((p, i) => (
+                      <li key={i} className="flex items-center justify-between gap-3 rounded-os border border-os-border px-3 py-2 text-[13px]">
+                        <span className="text-os-t1">{new Date(p.date).toLocaleDateString("fr-FR", { weekday: "long", day: "2-digit", month: "short" })} · {p.hour}h–{p.hour + 1}h</span>
+                        <span className="os-num font-semibold text-os-t1">occ. moyenne {p.avg_occupancy}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </Card>
+              )}
+
               <Card className="p-5">
-                <h3 className="text-[15px] font-semibold text-os-t1">Carte de chaleur</h3>
-                <p className="text-[12px] text-os-t3 mb-4">Affluence moyenne par jour de semaine et par heure</p>
-                <Heatmap matrix={d.heatmap || []} max={d.heatmap_max || 0} />
+                <h3 className="text-[15px] font-semibold text-os-t1">Carte de chaleur — files</h3>
+                <p className="text-[12px] text-os-t3 mb-4">Occupation moyenne des files par jour de semaine et par heure</p>
+                <Heatmap matrix={qa.heatmap || []} max={qa.heatmap_max || 0} />
               </Card>
             </div>
           )
@@ -393,30 +447,64 @@ export default function AnalyticsPage() {
         )}
 
         {tab === "queues" && (
-          <Card className="p-5">
-            <h3 className="text-[15px] font-semibold text-os-t1 mb-3">Files & attente</h3>
-            {queues.length === 0 ? (
-              <p className="text-[13px] text-os-t3 py-8 text-center">Aucune zone de type « file ». Créez-en une dans « Zones ».</p>
-            ) : (
-              <table className="w-full text-[13px]">
-                <thead>
-                  <tr className="text-left text-[11px] uppercase tracking-wide text-os-t3 border-b border-os-border">
-                    <th className="py-2.5 font-semibold">File</th><th className="py-2.5 font-semibold text-right">Longueur</th><th className="py-2.5 font-semibold text-right">Attente moy.</th><th className="py-2.5 font-semibold text-right">Attente max</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {queues.map((q) => (
-                    <tr key={q.zone_id} className="border-b border-os-border last:border-0">
-                      <td className="py-2.5 text-os-t1">{q.name}</td>
-                      <td className="py-2.5 os-num text-os-t1 text-right font-semibold">{q.length}</td>
-                      <td className="py-2.5 os-num text-os-t2 text-right">{fmtWait(q.wait_avg_s)}</td>
-                      <td className="py-2.5 os-num text-os-t2 text-right">{fmtWait(q.wait_max_s)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          <div className="space-y-4">
+            <Card className="p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-[15px] font-semibold text-os-t1">Files & attente</h3>
+                {qperf?.wait_threshold_s ? <span className="text-[12px] text-os-t3">seuil SLA {fmtWait(qperf.wait_threshold_s)}</span> : null}
+              </div>
+              {!qperf?.queues?.length ? (
+                <p className="text-[13px] text-os-t3 py-8 text-center">Aucune zone de type « file » sur ce périmètre. Créez-en une dans « Zones ».</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[13px] min-w-[560px]">
+                    <thead>
+                      <tr className="text-left text-[11px] uppercase tracking-wide text-os-t3 border-b border-os-border">
+                        <th className="py-2.5 font-semibold">File</th>
+                        <th className="py-2.5 font-semibold text-right">Long.</th>
+                        <th className="py-2.5 font-semibold text-right">Attente moy.</th>
+                        <th className="py-2.5 font-semibold text-right">P90</th>
+                        <th className="py-2.5 font-semibold text-right">Max</th>
+                        <th className="py-2.5 font-semibold text-right">&gt; seuil</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {qperf.queues.map((q) => (
+                        <tr key={q.zone_id} className="border-b border-os-border last:border-0">
+                          <td className="py-2.5 text-os-t1">{q.name}{q.site ? <span className="text-os-t4"> · {q.site}</span> : null}</td>
+                          <td className="py-2.5 os-num text-os-t1 text-right font-semibold">{q.length}</td>
+                          <td className="py-2.5 os-num text-os-t2 text-right">{fmtWait(q.wait_avg_s)}</td>
+                          <td className="py-2.5 os-num text-os-t2 text-right">{fmtWait(q.wait_p90_s)}</td>
+                          <td className="py-2.5 os-num text-os-t3 text-right">{fmtWait(q.wait_max_s)}</td>
+                          <td className="py-2.5 os-num text-right" style={{ color: q.over_threshold_pct > 20 ? "var(--os-red)" : q.over_threshold_pct > 0 ? "var(--os-amber)" : "var(--os-t3)" }}>{q.over_threshold_pct == null ? "—" : `${q.over_threshold_pct}%`}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </Card>
+
+            {agencies.length > 0 && (
+              <Card className="p-5">
+                <h3 className="text-[15px] font-semibold text-os-t1 mb-1">Classement des agences — temps d&apos;attente</h3>
+                <p className="text-[12px] text-os-t3 mb-4">Attente moyenne par agence · P90 = 9 clients sur 10 servis en dessous</p>
+                <div className="space-y-3">
+                  {(() => { const max = Math.max(1, ...agencies.map((a) => a.wait_avg_s)); return agencies.map((a) => (
+                    <div key={a.site}>
+                      <div className="mb-1 flex items-baseline justify-between gap-3 text-[13px]">
+                        <span className="truncate text-os-t1">{a.site}</span>
+                        <span className="shrink-0 os-num text-os-t1 font-semibold">{fmtWait(a.wait_avg_s)}<span className="text-os-t4 font-normal"> · P90 {fmtWait(a.wait_p90_s)} · {a.over_threshold_pct}% &gt; seuil</span></span>
+                      </div>
+                      <div className="h-2 overflow-hidden rounded-full bg-os-border-2">
+                        <div className="h-full rounded-full" style={{ width: `${(a.wait_avg_s / max) * 100}%`, background: "var(--os-cta)" }} />
+                      </div>
+                    </div>
+                  )); })()}
+                </div>
+              </Card>
             )}
-          </Card>
+          </div>
         )}
 
         {tab === "occupancy" && (
