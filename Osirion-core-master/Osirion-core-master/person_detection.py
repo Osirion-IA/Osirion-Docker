@@ -23,19 +23,42 @@ logger = get_logger(__name__)
 # usage (ou pré-embarqué dans l'image Docker). Surcharger via PERSON_MODEL_PATH.
 _MODEL_PATH = os.getenv("PERSON_MODEL_PATH", "yolo26n.pt")
 _PERSON_CLASS = 0  # index COCO de la classe « person »
+# Résolution d'inférence (côté long, letterbox). 0/absent → défaut Ultralytics (640).
+# La monter améliore le recall des personnes petites/lointaines (coût GPU ~quadratique).
+_IMGSZ = int(os.getenv("PERSON_YOLO_IMGSZ", "0")) or None
 
 _MODEL = None
-_HALF = False
+_PRECISION: dict = {}             # kwargs de précision passés à predict() (FP16 ou vide)
 _LOCK = threading.Lock()          # sérialise les inférences (contexte CUDA partagé)
 _LOAD_LOCK = threading.Lock()     # protège le chargement paresseux
 _LOAD_FAILED = False
 PERSON_DETECTOR_AVAILABLE = False
 
 
+def _precision_kwargs(use_half: bool) -> dict:
+    """Argument de demi-précision, compatible avec les deux API Ultralytics.
+
+    `half=True` est DÉPRÉCIÉ depuis Ultralytics 8.4 : il fonctionne encore (il est
+    réacheminé vers `quantize`) mais journalise un avertissement À CHAQUE inférence,
+    ce qui noie les logs du Core (et fait tourner la rotation sur du bruit).
+    `quantize=16` est la forme canonique FP16 ; repli sur `half` si l'installation
+    est antérieure.
+    """
+    if not use_half:
+        return {}
+    try:
+        from ultralytics.utils import DEFAULT_CFG_DICT
+        if "quantize" in DEFAULT_CFG_DICT:
+            return {"quantize": 16}
+    except Exception:
+        pass
+    return {"half": True}
+
+
 def _load():
     """Charge le modèle une seule fois (paresseux, thread-safe). Renvoie le modèle
     ou None si le chargement échoue (dégradation gracieuse)."""
-    global _MODEL, _HALF, _LOAD_FAILED, PERSON_DETECTOR_AVAILABLE
+    global _MODEL, _PRECISION, _LOAD_FAILED, PERSON_DETECTOR_AVAILABLE
     if _MODEL is not None or _LOAD_FAILED:
         return _MODEL
     with _LOAD_LOCK:
@@ -50,15 +73,23 @@ def _load():
                 os.getenv("PERSON_YOLO_HALF", "true").lower() == "true"
                 and torch.cuda.is_available()
             )
+            precision = _precision_kwargs(use_half)
+
             # Warm-up : première inférence à vide pour éviter le pic de latence au
-            # démarrage (allocation CUDA, compilation des kernels).
+            # démarrage (allocation CUDA, compilation des kernels) — à l'imgsz réel.
             dummy = np.zeros((640, 640, 3), dtype=np.uint8)
-            model.predict(dummy, classes=[_PERSON_CLASS], half=use_half, verbose=False)
+            _warm_kwargs = {"classes": [_PERSON_CLASS], "verbose": False, **precision}
+            if _IMGSZ:
+                _warm_kwargs["imgsz"] = _IMGSZ
+            model.predict(dummy, **_warm_kwargs)
 
             _MODEL = model
-            _HALF = use_half
+            _PRECISION = precision
             PERSON_DETECTOR_AVAILABLE = True
-            logger.info(f"[person] modèle YOLO chargé ({_MODEL_PATH}, half={use_half}).")
+            logger.info(
+                f"[person] modèle YOLO chargé ({_MODEL_PATH}, "
+                f"fp16={bool(precision)}, imgsz={_IMGSZ or 'défaut(640)'})."
+            )
         except Exception as e:
             _LOAD_FAILED = True
             PERSON_DETECTOR_AVAILABLE = False
@@ -79,14 +110,16 @@ def detect_persons(frame, confidence_threshold: float = 0.4):
     if model is None:
         return []
     try:
+        predict_kwargs = {
+            "classes": [_PERSON_CLASS],
+            "conf": confidence_threshold,
+            "verbose": False,
+            **_PRECISION,
+        }
+        if _IMGSZ:
+            predict_kwargs["imgsz"] = _IMGSZ
         with _LOCK:
-            results = model.predict(
-                frame,
-                classes=[_PERSON_CLASS],
-                conf=confidence_threshold,
-                half=_HALF,
-                verbose=False,
-            )
+            results = model.predict(frame, **predict_kwargs)
     except Exception as e:
         logger.error(f"[person] inférence échouée : {e}")
         return []

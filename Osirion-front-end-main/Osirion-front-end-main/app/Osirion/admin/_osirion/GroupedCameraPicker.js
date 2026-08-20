@@ -5,15 +5,31 @@
 // agence → recherche + regroupement par site + pastille de statut facilitent la
 // sélection. Un tag « catalogue » signale les caméras non encore configurées
 // (activées à la 1re zone).
+//
+// `configured` ({ camId: { zones, lines } }) épingle EN TÊTE les caméras qui ont
+// déjà des zones/lignes : ce sont celles sur lesquelles on revient, et les
+// retrouver imposait sinon de fouiller tout le catalogue. Elles restent AUSSI
+// listées dans leur site plus bas (le catalogue reste complet). Comme cette liste
+// épinglée est à plat, chaque ligne rappelle le SITE : sans lui, « Camera 01 » ne
+// désigne rien dans un parc où le même nom revient d'une agence à l'autre.
 import { useState, useRef, useEffect, useMemo } from "react";
 import { ChevronDown, Search, Video } from "lucide-react";
-import { groupCamerasBySite, catalogStatus, TONE_COLOR } from "../../../lib/cameraGroups";
+import { groupCamerasBySite, catalogStatus, siteLabel, TONE_COLOR } from "../../../lib/cameraGroups";
 
 function Dot({ tone }) {
   return <span className="h-2 w-2 rounded-full shrink-0" style={{ background: TONE_COLOR[tone] }} />;
 }
 
-export default function GroupedCameraPicker({ cameras, groups, value, onChange }) {
+/** « 2 zones · 1 ligne » — ce qui est déjà tracé sur la caméra. */
+function configSummary(cfg) {
+  if (!cfg) return "";
+  const parts = [];
+  if (cfg.zones) parts.push(`${cfg.zones} zone${cfg.zones > 1 ? "s" : ""}`);
+  if (cfg.lines) parts.push(`${cfg.lines} ligne${cfg.lines > 1 ? "s" : ""}`);
+  return parts.join(" · ");
+}
+
+export default function GroupedCameraPicker({ cameras, groups, value, onChange, configured = {} }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const rootRef = useRef(null);
@@ -35,6 +51,24 @@ export default function GroupedCameraPicker({ cameras, groups, value, onChange }
       }))
       .filter((s) => s.cameras.length > 0);
   }, [cameras, groups, q]);
+
+  // Caméras déjà configurées, filtrées par la MÊME recherche (nom ou site) et
+  // triées par site puis par nom, pour que l'ordre reste prévisible.
+  const configuredCams = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return (cameras || [])
+      .filter((c) => {
+        const cfg = configured[c.id];
+        if (!cfg || (!cfg.zones && !cfg.lines)) return false;
+        if (!needle) return true;
+        const site = siteLabel(c, groups).toLowerCase();
+        return (c.cam_name || "").toLowerCase().includes(needle) || site.includes(needle);
+      })
+      .sort((a, b) => {
+        const s = siteLabel(a, groups).localeCompare(siteLabel(b, groups), "fr");
+        return s !== 0 ? s : (a.cam_name || "").localeCompare(b.cam_name || "", "fr");
+      });
+  }, [cameras, groups, configured, q]);
 
   useEffect(() => {
     if (!open) return;
@@ -77,9 +111,43 @@ export default function GroupedCameraPicker({ cameras, groups, value, onChange }
             </div>
           </div>
           <div className="max-h-[380px] overflow-y-auto py-1">
-            {sites.length === 0 && (
+            {sites.length === 0 && configuredCams.length === 0 && (
               <p className="px-3 py-6 text-center text-[13px] text-os-t3">Aucune caméra ne correspond.</p>
             )}
+
+            {configuredCams.length > 0 && (
+              <div className="mb-1 border-b border-os-border pb-1">
+                <div className="sticky top-0 flex items-center justify-between bg-os-card px-3 py-1.5">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-os-t3">Déjà configurées</span>
+                  <span className="os-num text-[11px] text-os-t4">{configuredCams.length}</span>
+                </div>
+                {configuredCams.map((c) => {
+                  const st = catalogStatus(c);
+                  const active = c.id === value;
+                  return (
+                    <button
+                      key={`cfg-${c.id}`}
+                      type="button"
+                      onClick={() => { onChange(c.id); setOpen(false); setQ(""); }}
+                      className={`w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-os-card-2 ${active ? "bg-os-card-2" : ""}`}
+                    >
+                      <Dot tone={st.tone} />
+                      <span className="min-w-0 flex-1">
+                        <span className={`block truncate text-[13px] ${active ? "font-semibold text-os-t1" : "text-os-t2"}`}>
+                          {c.cam_name || `Caméra ${c.id}`}
+                        </span>
+                        {/* Site + contenu déjà tracé : de quoi reconnaître la caméra
+                            hors de son groupe, et savoir ce qui s'y trouve déjà. */}
+                        <span className="block truncate text-[11px] text-os-t4">
+                          {siteLabel(c, groups)} · {configSummary(configured[c.id])}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
             {sites.map((s) => (
               <div key={s.id} className="mb-1">
                 <div className="sticky top-0 flex items-center justify-between bg-os-card px-3 py-1.5">

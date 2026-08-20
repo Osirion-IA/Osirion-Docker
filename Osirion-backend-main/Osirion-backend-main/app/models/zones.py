@@ -2,8 +2,11 @@
 """
 Primitives spatiales configurables PAR CAMÉRA (Vision Engine anonyme).
 
-- Zone      : polygone (occupation, file d'attente, attroupement).
+- Zone      : polygone (occupation, file d'attente, attroupement, exclusion).
 - CountLine : ligne de comptage (entrées/sorties) = segment A→B + sens « entrée ».
+
+Une zone « ignore » ne produit aucun événement : le Core y jette les détections
+avant le tracking (décor trompeur — affiche, écran, reflet dans une vitre).
 
 Coordonnées NORMALISÉES dans [0,1] (repère de la frame) → indépendantes de la
 résolution : le même tracé s'applique que la vidéo soit en 640×480 ou 1080p.
@@ -20,6 +23,7 @@ from datetime import datetime
 ZONE_OCCUPANCY = "occupancy"   # comptage des présents / occupation
 ZONE_QUEUE = "queue"           # file d'attente (longueur, temps d'attente)
 ZONE_CROWD = "crowd"           # détection d'attroupement (seuil de densité)
+ZONE_IGNORE = "ignore"         # EXCLUSION : aucune détection n'y est retenue
 ZONE_GENERIC = "generic"
 
 
@@ -37,6 +41,13 @@ class Zone(SQLModel, table=True):
     # Seuil d'occupation (nb de personnes) déclenchant CROWD_DETECTED. None = pas
     # de détection d'attroupement sur cette zone (occupation suivie quand même).
     threshold: Optional[int] = Field(default=None)
+    # Délai de CONFIRMATION (s) : une personne n'est comptée dans la zone qu'après
+    # y être restée SANS INTERRUPTION pendant ce délai. Filtre les passants et les
+    # arrêts brefs, qui gonflaient l'occupation et déclenchaient de faux
+    # attroupements. None = repli sur ZONE_MIN_PRESENCE_SECONDS (défaut Core) ;
+    # 0 = comptage IMMÉDIAT, à utiliser pour les zones d'intrusion où tout délai
+    # serait une régression de sécurité.
+    min_presence_s: Optional[float] = Field(default=None)
     organization_id: Optional[int] = Field(default=None, index=True)
     is_active: bool = Field(default=True)
     created_at: datetime = Field(default_factory=datetime.utcnow)

@@ -191,7 +191,7 @@ export default function CamerasHealthPage() {
               onClick={() => doRetry(c.id)}
               disabled={rt?.state === "pending"}
               className={`shrink-0 inline-flex items-center gap-1.5 rounded-os px-3 py-1.5 text-[12px] font-medium border disabled:opacity-50 ${
-                attention ? "border-transparent bg-os-cta text-white hover:bg-os-cta-hover" : "border-os-border text-os-t2 hover:text-os-t1"
+                attention ? "border-transparent bg-os-primary text-os-on-primary hover:bg-os-primary-hover" : "border-os-border text-os-t2 hover:text-os-t1"
               }`}
             >
               <RotateCw className={`h-3.5 w-3.5 ${rt?.state === "pending" ? "os-anim-spin" : ""}`} /> Relancer

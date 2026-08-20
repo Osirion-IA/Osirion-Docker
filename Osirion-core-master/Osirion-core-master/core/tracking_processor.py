@@ -50,7 +50,10 @@ class TrackingProcessor:
 
         self.frame_counter = 0
         self._blur_skip_count = 0
-        # Dernier point au sol par track → dérive vitesse/direction (Scene Model).
+        # Dernier point au sol par track : (x, y, horodatage) → vitesse/direction.
+        # L'horodatage est indispensable : la cadence de traitement varie avec la
+        # charge GPU (nombre de caméras actives), donc une vitesse en px/FRAME
+        # n'est comparable ni entre caméras ni dans le temps. On publie des px/s.
         self._last_foot: Dict[int, tuple] = {}
 
         # Event Engine : occupation / attroupement / franchissement de ligne (Phase C).
@@ -128,6 +131,12 @@ class TrackingProcessor:
         logger.info(f"[cam={self.cam_name}] traitement démarré (détection de personnes).")
         blur_threshold = getattr(self.config, "BLUR_THRESHOLD", 0.0) or 0.0
         conf = getattr(self.config, "PERSON_DETECTION_CONFIDENCE", 0.4)
+        # On DÉTECTE sous le seuil « haute confiance » : les boîtes faibles
+        # (plancher..conf) alimentent la récupération BYTE d'OC-SORT (maintien des
+        # tracks occlus). Le tracker re-sépare à det_thresh (= conf) → seules les
+        # détections > conf créent un track. Garde-fou : jamais au-dessus de conf.
+        track_min_conf = getattr(self.config, "PERSON_TRACK_MIN_CONFIDENCE", 0.1)
+        det_floor = min(track_min_conf, conf)
         self.event_engine.start()
         try:
             while not self.stop_event.is_set():
@@ -162,36 +171,51 @@ class TrackingProcessor:
                 if not skip:
                     # ── Détection de personnes (unique passe GPU) ────────────────
                     _t = time.perf_counter()
-                    boxes = detect_persons(frame, confidence_threshold=conf)
+                    boxes = detect_persons(frame, confidence_threshold=det_floor)
                     detect_ms = (time.perf_counter() - _t) * 1000.0
 
-                    # ── Tracking (OC-SORT) → identifiants anonymes persistants ───
+                    # ── Zones d'exclusion : on jette les détections du décor
+                    #    trompeur (affiche, écran, reflet) AVANT le tracker, pour
+                    #    qu'elles ne créent jamais de track ni de comptage. ────────
                     fh, fw = frame.shape[:2]
+                    boxes = self.event_engine.filter_ignored(boxes, fw, fh)
+
+                    # ── Tracking (OC-SORT) → identifiants anonymes persistants ───
                     img_info = [fh, fw]
                     tracks = self.tracker.update(
                         self._to_output_results(boxes), img_info, img_info
                     )
 
                     tracks_norm = []   # points au sol NORMALISÉS [0,1] pour l'Event Engine
+                    t_now = time.monotonic()
                     for track in tracks:
                         tlwh = track.tlwh
                         x, y, w, h = int(tlwh[0]), int(tlwh[1]), int(tlwh[2]), int(tlwh[3])
                         tid = int(track.track_id)
+                        # Position MAINTENUE (track en sursis : occlusion brève) →
+                        # comptée dans l'occupation, mais exclue des franchissements.
+                        predicted = bool(getattr(track, "predicted", False))
                         # Point au sol = centre du bord inférieur (projection « pieds »).
                         foot = (x + w / 2.0, y + h)
                         prev = self._last_foot.get(tid)
-                        vx, vy = (foot[0] - prev[0], foot[1] - prev[1]) if prev else (0.0, 0.0)
-                        self._last_foot[tid] = foot
+                        if prev is not None:
+                            dt = max(t_now - prev[2], 1e-3)      # garde-fou division
+                            vx, vy = (foot[0] - prev[0]) / dt, (foot[1] - prev[1]) / dt
+                        else:
+                            vx, vy = 0.0, 0.0
+                        self._last_foot[tid] = (foot[0], foot[1], t_now)
                         # Coordonnées normalisées (repère indépendant de la résolution).
                         nx = foot[0] / fw if fw else 0.0
                         ny = foot[1] / fh if fh else 0.0
-                        tracks_norm.append({"track_id": tid, "x": nx, "y": ny})
+                        tracks_norm.append({"track_id": tid, "x": nx, "y": ny,
+                                            "predicted": predicted})
                         detections.append({
                             "type": "person",
                             "track_id": tid,
                             "bbox": [x, y, x + w, y + h],
                             "foot": [round(foot[0], 1), round(foot[1], 1)],
-                            "velocity": [round(vx, 1), round(vy, 1)],
+                            "velocity": [round(vx, 1), round(vy, 1)],   # pixels/seconde
+                            "predicted": predicted,
                             # Zones (ids) contenant le point au sol → Scene Model enrichi.
                             "zones": self.event_engine.zones_for_point(nx, ny),
                         })

@@ -165,7 +165,11 @@ export default function CameraStream({ cameraId, streamPath, onLatencyUpdate, sh
                 const [x1, y1, x2, y2] = det.bbox;
                 const color = detectionColor(det);
                 ctx.strokeStyle = color;
+                // Position MAINTENUE (personne momentanément occultée, toujours
+                // comptée) : trait pointillé, pour ne pas la donner pour observée.
+                ctx.setLineDash(det.predicted ? [6, 5] : []);
                 ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+                ctx.setLineDash([]);
 
                 const label = det.label || '';
                 if (label) {

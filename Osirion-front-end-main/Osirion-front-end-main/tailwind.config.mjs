@@ -11,11 +11,20 @@ export default {
       colors: {
         background: "var(--background)",
         foreground: "var(--foreground)",
-        // ── Palette Osirion (câblée sur les tokens CSS de globals.css) ──────
+        // ── Palette Qwiper (câblée sur les tokens CSS de globals.css) ───────
         os: {
-          topbar: "var(--os-topbar)",
+          primary: "var(--os-primary)",
+          "primary-hover": "var(--os-primary-hover)",
+          "on-primary": "var(--os-on-primary)",
+          "brand-black": "var(--os-brand-black)",
+          "brand-grey": "var(--os-brand-grey)",
           sidebar: "var(--os-sidebar)",
           "sidebar-border": "var(--os-sidebar-border)",
+          "sidebar-t1": "var(--os-sidebar-t1)",
+          "sidebar-t2": "var(--os-sidebar-t2)",
+          "sidebar-t3": "var(--os-sidebar-t3)",
+          "sidebar-hover": "var(--os-sidebar-hover)",
+          "sidebar-active": "var(--os-sidebar-active)",
           bg: "var(--os-bg)",
           card: "var(--os-card)",
           "card-2": "var(--os-card-2)",
@@ -34,8 +43,9 @@ export default {
         },
       },
       fontFamily: {
-        // Rebrand : Plex Sans partout, Plex Mono pour tous les chiffres/métriques.
-        sans: ["var(--font-plex-sans)", "system-ui", "sans-serif"],
+        // Marque Qwiper : Jost partout, Plex Mono pour les chiffres/métriques
+        // (chasse fixe → compteurs alignés, cf. app/fonts.js).
+        sans: ["var(--font-jost)", "system-ui", "sans-serif"],
         mono: ["var(--font-plex-mono)", "ui-monospace", "monospace"],
       },
       borderRadius: {

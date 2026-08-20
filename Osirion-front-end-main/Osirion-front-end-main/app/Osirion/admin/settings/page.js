@@ -5,7 +5,7 @@
  * Persistance locale (siteName, sessionTimeout, passwordMinLength). Admin only.
  */
 import { useState, useEffect, useCallback } from "react";
-import { Settings as Cog, Shield, Target, CheckCircle2, Save, RotateCcw, Cctv, Plug } from "lucide-react";
+import { Settings as Cog, Shield, Target, CheckCircle2, Save, RotateCcw, Cctv, Plug, Mail, Send } from "lucide-react";
 import OsShell from "../_osirion/OsShell";
 import { PageHeader, Card, Segmented } from "../_osirion/ui";
 import { useAuth } from "../AuthContext";
@@ -99,6 +99,59 @@ export default function SettingsPage() {
     finally { setHikBusy(null); }
   };
 
+  // ── Notifications (email SMTP + webhook), persistées EN BASE (comme HikCentral) ──
+  const [notif, setNotif] = useState({ smtp_host: "", smtp_port: 587, smtp_user: "", smtp_password: "", smtp_from: "", smtp_use_tls: true, alert_email_to: "", alert_webhook_url: "", to: "" });
+  const [notifMeta, setNotifMeta] = useState({ has_password: false, source: null, email_configured: false, webhook_configured: false, loading: true });
+  const [notifBusy, setNotifBusy] = useState(null);   // "save" | "test" | null
+  const [notifMsg, setNotifMsg] = useState(null);
+
+  const loadNotif = useCallback(async () => {
+    setNotifMeta((m) => ({ ...m, loading: true }));
+    try {
+      const r = await fetchWithRefresh("/api/notifications/config");
+      if (r?.ok) {
+        const d = await r.json();
+        setNotif({
+          smtp_host: d.smtp_host || "", smtp_port: d.smtp_port ?? 587, smtp_user: d.smtp_user || "",
+          smtp_password: "", smtp_from: d.smtp_from || "", smtp_use_tls: d.smtp_use_tls ?? true,
+          alert_email_to: d.alert_email_to || "", alert_webhook_url: d.alert_webhook_url || "", to: "",
+        });
+        setNotifMeta({ has_password: !!d.has_password, source: d.source, email_configured: !!d.email_configured, webhook_configured: !!d.webhook_configured, loading: false });
+      } else setNotifMeta((m) => ({ ...m, loading: false }));
+    } catch { setNotifMeta((m) => ({ ...m, loading: false })); }
+  }, []);
+  useEffect(() => { loadNotif(); }, [loadNotif]);
+
+  const notifField = (k, v) => { setNotif((p) => ({ ...p, [k]: v })); setNotifMsg(null); };
+  const notifBody = () => {
+    const b = {
+      smtp_host: notif.smtp_host, smtp_port: notif.smtp_port ? Number(notif.smtp_port) : null,
+      smtp_user: notif.smtp_user, smtp_from: notif.smtp_from, smtp_use_tls: !!notif.smtp_use_tls,
+      alert_email_to: notif.alert_email_to, alert_webhook_url: notif.alert_webhook_url,
+    };
+    if (notif.smtp_password) b.smtp_password = notif.smtp_password;   // vide = conserver
+    return b;
+  };
+  const saveNotif = async () => {
+    setNotifBusy("save"); setNotifMsg(null);
+    try {
+      const r = await fetchWithRefresh("/api/notifications/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(notifBody()) });
+      const d = await r.json().catch(() => ({}));
+      if (r?.ok) { setNotifMsg({ ok: true, text: "Configuration enregistrée." }); await loadNotif(); }
+      else setNotifMsg({ ok: false, text: d?.detail || d?.message || "Échec de l'enregistrement." });
+    } catch { setNotifMsg({ ok: false, text: "Erreur réseau." }); }
+    finally { setNotifBusy(null); }
+  };
+  const testNotif = async () => {
+    setNotifBusy("test"); setNotifMsg(null);
+    try {
+      const r = await fetchWithRefresh("/api/notifications/config/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...notifBody(), to: notif.to || undefined }) });
+      const d = await r.json().catch(() => ({}));
+      setNotifMsg(r?.ok ? { ok: true, text: d?.message || "Email de test envoyé." } : { ok: false, text: d?.detail || d?.message || "Échec de l'envoi." });
+    } catch { setNotifMsg({ ok: false, text: "Erreur réseau." }); }
+    finally { setNotifBusy(null); }
+  };
+
   const inp = "w-full px-3.5 py-2.5 rounded-os border border-os-border bg-os-card text-[14px] text-os-t1 outline-none focus:border-os-t3";
   const lbl = "block text-[13px] font-semibold text-os-t1 mb-1.5";
 
@@ -112,7 +165,7 @@ export default function SettingsPage() {
         <PageHeader
           title="Paramètres"
           subtitle="Configuration du système Qwiper Sentinel"
-          actions={tab === "hikcentral" ? null : (
+          actions={["hikcentral", "notifications"].includes(tab) ? null : (
             <>
               {dirty && <span className="text-[12px] text-os-amber inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-os-amber os-anim-pulse" /> Non enregistré</span>}
               {saved && <span className="text-[12px] text-os-green inline-flex items-center gap-1.5"><CheckCircle2 className="h-4 w-4" /> Enregistré</span>}
@@ -123,7 +176,7 @@ export default function SettingsPage() {
         />
 
         <div className="mb-5">
-          <Segmented value={tab} onChange={setTab} options={[{ value: "general", label: "Général" }, { value: "security", label: "Sécurité" }, { value: "detection", label: "Détection" }, { value: "hikcentral", label: "HikCentral" }]} />
+          <Segmented value={tab} onChange={setTab} options={[{ value: "general", label: "Général" }, { value: "security", label: "Sécurité" }, { value: "detection", label: "Détection" }, { value: "notifications", label: "Notifications" }, { value: "hikcentral", label: "HikCentral" }]} />
         </div>
 
         {tab === "general" && (
@@ -168,6 +221,86 @@ export default function SettingsPage() {
             <p className="text-[13px] text-os-t3 rounded-os border border-os-border bg-os-card-2 p-4">
               La détection de personnes (anonyme) est toujours active sur les caméras. Les règles opérationnelles (attroupement, intrusion horaire…) se configurent dans « Règles & alertes ».
             </p>
+          </Card>
+        )}
+
+        {tab === "notifications" && (
+          <Card className="p-6 max-w-2xl">
+            <div className="flex items-center gap-3 mb-5">
+              <span className="h-10 w-10 grid place-items-center rounded-os bg-os-card-2 border border-os-border-2 text-os-t2"><Mail className="h-5 w-5" /></span>
+              <div>
+                <h3 className="text-[15px] font-semibold text-os-t1">Notifications par email</h3>
+                <p className="text-[13px] text-os-t3">Serveur SMTP pour l&apos;envoi des alertes</p>
+              </div>
+              <span className="ml-auto inline-flex items-center gap-1.5 text-[12px]">
+                <span className="h-2 w-2 rounded-full" style={{ background: notifMeta.email_configured ? "var(--os-green)" : "var(--os-t4)" }} />
+                <span className="text-os-t3">{notifMeta.email_configured ? "Configuré" : "Non configuré"}{notifMeta.source ? ` · ${notifMeta.source === "db" ? "base" : ".env"}` : ""}</span>
+              </span>
+            </div>
+
+            {notifMeta.source === "env" && (
+              <p className="mb-4 rounded-os border border-os-border bg-os-card-2 px-3.5 py-2.5 text-[12px] text-os-t3">
+                ⓘ Aucune configuration saisie ici : le système utilise le repli <span className="os-num">.env</span>. Enregistrez ci-dessous pour piloter l&apos;envoi des emails depuis l&apos;interface.
+              </p>
+            )}
+
+            <div className="space-y-4">
+              <div>
+                <label className={lbl}>Serveur SMTP</label>
+                <div className="grid grid-cols-1 sm:grid-cols-[2fr_1fr] gap-4">
+                  <input type="text" value={notif.smtp_host} onChange={(e) => notifField("smtp_host", e.target.value)} placeholder="smtp.gmail.com" className={inp} />
+                  <input type="number" value={notif.smtp_port} onChange={(e) => notifField("smtp_port", e.target.value)} placeholder="587" className={`${inp} os-num`} />
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className={lbl}>Utilisateur (login)</label>
+                  <input type="text" value={notif.smtp_user} onChange={(e) => notifField("smtp_user", e.target.value)} placeholder="compte@gmail.com" className={inp} autoComplete="off" />
+                </div>
+                <div>
+                  <label className={lbl}>Mot de passe</label>
+                  <input type="password" value={notif.smtp_password} onChange={(e) => notifField("smtp_password", e.target.value)} autoComplete="new-password"
+                    placeholder={notifMeta.has_password ? "•••••••• (laisser vide pour conserver)" : "Mot de passe d'application"} className={inp} />
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className={lbl}>Expéditeur (From)</label>
+                  <input type="text" value={notif.smtp_from} onChange={(e) => notifField("smtp_from", e.target.value)} placeholder="alertes@monsite.com" className={inp} />
+                </div>
+                <div>
+                  <label className={lbl}>Destinataires</label>
+                  <input type="text" value={notif.alert_email_to} onChange={(e) => notifField("alert_email_to", e.target.value)} placeholder="a@x.com, b@y.com" className={inp} />
+                </div>
+              </div>
+              <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                <input type="checkbox" checked={!!notif.smtp_use_tls} onChange={(e) => notifField("smtp_use_tls", e.target.checked)} className="h-4 w-4 accent-[var(--os-cta)]" />
+                <span className="text-[13px] text-os-t2">Chiffrement TLS (STARTTLS) — recommandé, port 587</span>
+              </label>
+              <div>
+                <label className={lbl}>Webhook (facultatif)</label>
+                <input type="text" value={notif.alert_webhook_url} onChange={(e) => notifField("alert_webhook_url", e.target.value)} placeholder="https://hooks.slack.com/…" className={inp} />
+                <p className="text-[12px] text-os-t3 mt-1.5">POST JSON à chaque alerte notifiée (Slack / Teams / endpoint).</p>
+              </div>
+              <div className="pt-3 border-t border-os-border">
+                <label className={lbl}>Email de test (facultatif)</label>
+                <input type="text" value={notif.to} onChange={(e) => notifField("to", e.target.value)} placeholder="destinataire du test — sinon les destinataires ci-dessus" className={inp} />
+              </div>
+            </div>
+
+            <p className="text-[12px] text-os-t3 mt-3">Mot de passe chiffré au repos, jamais réaffiché. Gmail : activez la validation en 2 étapes et utilisez un <b>mot de passe d&apos;application</b>. L&apos;envoi automatique s&apos;active <b>par règle</b> (Règles &amp; alertes).</p>
+            {notifMsg && <p className={`mt-3 text-[13px] ${notifMsg.ok ? "text-os-green" : "text-os-red"}`}>{notifMsg.text}</p>}
+
+            <div className="mt-5 flex items-center gap-2">
+              <button onClick={saveNotif} disabled={notifBusy != null}
+                className="px-3.5 py-2 rounded-os bg-os-cta text-white text-[13px] font-semibold hover:bg-os-cta-hover disabled:opacity-50 inline-flex items-center gap-2">
+                <Save className="h-4 w-4" /> {notifBusy === "save" ? "Enregistrement…" : "Enregistrer"}
+              </button>
+              <button onClick={testNotif} disabled={notifBusy != null}
+                className="px-3.5 py-2 rounded-os border border-os-border text-[13px] text-os-t2 hover:text-os-t1 disabled:opacity-50 inline-flex items-center gap-2">
+                <Send className="h-4 w-4" /> {notifBusy === "test" ? "Envoi…" : "Envoyer un test"}
+              </button>
+            </div>
           </Card>
         )}
 

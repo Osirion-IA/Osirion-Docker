@@ -32,28 +32,51 @@ from app.models.cameras import Camera
 from app.models.alerts import Alert
 from app.models.users import User
 from app.middleware.auth_middleware import require_viewer
+from app.services.response_cache import cache_get_or_set, cached_endpoint
+from app.routes.camera_status_routes import stats as camera_status_stats
 
 router = APIRouter()
 
 
-def _events(session: Session, event_type: str, since: datetime, camera_id: Optional[int] = None):
+def _events(session: Session, event_type: str, since: datetime,
+            camera_id: Optional[int] = None, camera_ids=None):
     stmt = select(Event).where(Event.event_type == event_type, Event.timestamp >= since)
     if camera_id is not None:
         stmt = stmt.where(Event.camera_id == camera_id)
+    elif camera_ids is not None:
+        # Filtre par ENSEMBLE de caméras (scope agence). Ensemble vide = aucune
+        # donnée (agence sans caméra) → in_([]) génère une condition fausse valide.
+        stmt = stmt.where(Event.camera_id.in_(camera_ids))
     return session.exec(stmt.order_by(Event.timestamp)).all()
 
 
+def _scope_camera_ids(session: Session, group_id: Optional[int], camera_id: Optional[int]):
+    """Ensemble des camera_id ciblés par le filtre agence/caméra, ou None = toutes.
+    `camera_id` prime sur `group_id`. Sert à SCOPER toutes les stats (pas seulement
+    les files) : sans lui, les filtres du tableau de bord ne changeaient pas les
+    chiffres d'affluence / occupation / incidents."""
+    if camera_id is not None:
+        return {camera_id}
+    if group_id is not None:
+        cams = session.exec(select(Camera).options(selectinload(Camera.groups))).all()
+        return {c.id for c in cams if any(g.id == group_id for g in c.groups)}
+    return None
+
+
 @router.get("/footfall")
+@cached_endpoint("analytics:footfall", 120)
 def footfall(
     days: int = Query(7, ge=1, le=90),
     camera_id: Optional[int] = None,
+    group_id: Optional[int] = None,
     _user: User = Depends(require_viewer),
     session: Session = Depends(get_session),
 ):
     """Entrées / sorties / net par jour (depuis LINE_CROSSED, meta.direction)."""
+    scope = _scope_camera_ids(session, group_id, camera_id)
     since_date = datetime.utcnow().date() - timedelta(days=days - 1)
     since_dt = datetime.combine(since_date, datetime.min.time())
-    rows = _events(session, EVENT_LINE_CROSSED, since_dt, camera_id)
+    rows = _events(session, EVENT_LINE_CROSSED, since_dt, camera_ids=scope)
 
     per_day = defaultdict(lambda: {"entries": 0, "exits": 0})
     for e in rows:
@@ -76,7 +99,7 @@ def footfall(
     # Comparaison à la période PRÉCÉDENTE (même durée, juste avant) → deltas WoW/DoD.
     prev_since_date = since_date - timedelta(days=days)
     prev_since_dt = datetime.combine(prev_since_date, datetime.min.time())
-    prev_rows = [e for e in _events(session, EVENT_LINE_CROSSED, prev_since_dt, camera_id)
+    prev_rows = [e for e in _events(session, EVENT_LINE_CROSSED, prev_since_dt, camera_ids=scope)
                  if e.timestamp < since_dt]
     prev_in = sum(1 for e in prev_rows if (e.meta or {}).get("direction") == "in")
     prev_out = sum(1 for e in prev_rows if (e.meta or {}).get("direction") == "out")
@@ -97,16 +120,20 @@ def footfall(
 
 
 @router.get("/occupancy")
+@cached_endpoint("analytics:occupancy", 30)
 def occupancy(
     hours: int = Query(24, ge=1, le=168),
     zone_id: Optional[int] = None,
+    camera_id: Optional[int] = None,
+    group_id: Optional[int] = None,
     _user: User = Depends(require_viewer),
     session: Session = Depends(get_session),
 ):
     """Avec zone_id : série temporelle + moy/max/actuel. Sans : dernière
-    occupation connue par zone (fenêtre `hours`)."""
+    occupation connue par zone (fenêtre `hours`). Scopé par agence/caméra."""
+    scope = _scope_camera_ids(session, group_id, camera_id)
     since = datetime.utcnow() - timedelta(hours=hours)
-    rows = _events(session, EVENT_ZONE_OCCUPANCY_CHANGED, since)
+    rows = _events(session, EVENT_ZONE_OCCUPANCY_CHANGED, since, camera_ids=scope)
 
     if zone_id is not None:
         pts = [
@@ -155,17 +182,24 @@ def occupancy(
 
 
 @router.get("/summary")
-def summary(_user: User = Depends(require_viewer), session: Session = Depends(get_session)):
-    """KPIs du jour pour le dashboard opérationnel."""
+@cached_endpoint("analytics:summary", 30)
+def summary(
+    camera_id: Optional[int] = None,
+    group_id: Optional[int] = None,
+    _user: User = Depends(require_viewer),
+    session: Session = Depends(get_session),
+):
+    """KPIs du jour pour le dashboard opérationnel. Scopé par agence/caméra."""
+    scope = _scope_camera_ids(session, group_id, camera_id)
     today = datetime.combine(datetime.utcnow().date(), datetime.min.time())
     since24 = datetime.utcnow() - timedelta(hours=24)
 
-    lines = _events(session, EVENT_LINE_CROSSED, today)
+    lines = _events(session, EVENT_LINE_CROSSED, today, camera_ids=scope)
     entries = sum(1 for e in lines if (e.meta or {}).get("direction") == "in")
     exits = sum(1 for e in lines if (e.meta or {}).get("direction") == "out")
-    crowd = len(_events(session, EVENT_CROWD_DETECTED, today))
+    crowd = len(_events(session, EVENT_CROWD_DETECTED, today, camera_ids=scope))
 
-    occ = _events(session, EVENT_ZONE_OCCUPANCY_CHANGED, since24)
+    occ = _events(session, EVENT_ZONE_OCCUPANCY_CHANGED, since24, camera_ids=scope)
     latest = {}
     for e in occ:
         zid = (e.meta or {}).get("zone_id")
@@ -173,17 +207,26 @@ def summary(_user: User = Depends(require_viewer), session: Session = Depends(ge
             latest[zid] = (e.meta or {}).get("count", 0)
     current_occupancy = sum(latest.values())
 
-    dwell = _events(session, EVENT_ZONE_DWELL, today)
+    dwell = _events(session, EVENT_ZONE_DWELL, today, camera_ids=scope)
     qids = {z.id for z in session.exec(select(Zone).where(Zone.kind == ZONE_QUEUE)).all()}
     qwaits = [
         (e.meta or {}).get("dwell_s") for e in dwell
         if (e.meta or {}).get("zone_id") in qids and (e.meta or {}).get("dwell_s") is not None
     ]
 
+    # « Présents » fiable : l'occupation par zone est un compte INSTANTANÉ (jamais
+    # négatif, sans dérive) → on la privilégie dès qu'au moins une zone d'occupation
+    # rapporte. Sinon, repli sur le flux entrées−sorties du jour BORNÉ à 0 : ce solde
+    # cumulé dérive (base minuit supposée vide + erreurs de comptage asymétriques) et
+    # n'a aucun sens en négatif. `present_source` indique lequel est affiché.
+    present_flow = max(0, entries - exits)
+    present_now = current_occupancy if latest else present_flow
     return {
         "entries_today": entries,
         "exits_today": exits,
-        "present_now_estimate": entries - exits,
+        "present_now_estimate": present_now,
+        "present_source": "occupancy" if latest else "flow",
+        "present_flow_estimate": present_flow,
         "current_occupancy": current_occupancy,
         "crowd_alerts_today": crowd,
         "avg_wait_s": round(sum(qwaits) / len(qwaits), 1) if qwaits else 0,
@@ -191,18 +234,22 @@ def summary(_user: User = Depends(require_viewer), session: Session = Depends(ge
 
 
 @router.get("/by-camera")
+@cached_endpoint("analytics:by-camera", 120)
 def by_camera(
     days: int = Query(7, ge=1, le=90),
+    camera_id: Optional[int] = None,
+    group_id: Optional[int] = None,
     _user: User = Depends(require_viewer),
     session: Session = Depends(get_session),
 ):
     """Répartition SPATIALE de l'affluence : entrées/sorties + occupation courante
     par caméra, et agrégat par site (groupe). Répond à « quelle agence / caméra
-    est la plus fréquentée ? »."""
+    est la plus fréquentée ? ». Scopé par agence/caméra."""
+    scope = _scope_camera_ids(session, group_id, camera_id)
     since_date = datetime.utcnow().date() - timedelta(days=days - 1)
     since_dt = datetime.combine(since_date, datetime.min.time())
-    lines = _events(session, EVENT_LINE_CROSSED, since_dt)
-    occ = _events(session, EVENT_ZONE_OCCUPANCY_CHANGED, since_dt)
+    lines = _events(session, EVENT_LINE_CROSSED, since_dt, camera_ids=scope)
+    occ = _events(session, EVENT_ZONE_OCCUPANCY_CHANGED, since_dt, camera_ids=scope)
 
     per_cam = defaultdict(lambda: {"entries": 0, "exits": 0})
     for e in lines:
@@ -250,18 +297,25 @@ def by_camera(
 
 
 @router.get("/incidents")
+@cached_endpoint("analytics:incidents", 120)
 def incidents(
     days: int = Query(7, ge=1, le=90),
+    camera_id: Optional[int] = None,
+    group_id: Optional[int] = None,
     _user: User = Depends(require_viewer),
     session: Session = Depends(get_session),
 ):
     """Analyse SÉCURITÉ : attroupements détectés (CROWD_DETECTED) + alertes du
     centre d'alertes — timeline journalière, répartition par sévérité / type /
-    caméra, et taux de résolution du workflow."""
+    caméra, et taux de résolution du workflow. Scopé par agence/caméra."""
+    scope = _scope_camera_ids(session, group_id, camera_id)
     since_date = datetime.utcnow().date() - timedelta(days=days - 1)
     since_dt = datetime.combine(since_date, datetime.min.time())
-    crowd = _events(session, EVENT_CROWD_DETECTED, since_dt)
-    alerts = session.exec(select(Alert).where(Alert.created_at >= since_dt)).all()
+    crowd = _events(session, EVENT_CROWD_DETECTED, since_dt, camera_ids=scope)
+    astmt = select(Alert).where(Alert.created_at >= since_dt)
+    if scope is not None:
+        astmt = astmt.where(Alert.camera_id.in_(scope))
+    alerts = session.exec(astmt).all()
 
     per_day = defaultdict(lambda: {"crowd": 0, "alerts": 0})
     for e in crowd:
@@ -359,6 +413,7 @@ def _target_queue_zones(session, group_id, camera_id, zone_id):
 
 
 @router.get("/queue-affluence")
+@cached_endpoint("analytics:queue-affluence", 120)
 def queue_affluence(
     days: int = Query(30, ge=1, le=180),
     group_id: Optional[int] = None,
@@ -419,6 +474,7 @@ def queue_affluence(
 
 
 @router.get("/queue-performance")
+@cached_endpoint("analytics:queue-performance", 30)
 def queue_performance(
     days: int = Query(7, ge=1, le=90),
     group_id: Optional[int] = None,
@@ -484,8 +540,11 @@ def queue_performance(
 
 
 @router.get("/insights")
+@cached_endpoint("analytics:insights", 120)
 def insights(
     days: int = Query(30, ge=7, le=180),
+    camera_id: Optional[int] = None,
+    group_id: Optional[int] = None,
     _user: User = Depends(require_viewer),
     session: Session = Depends(get_session),
 ):
@@ -498,10 +557,11 @@ def insights(
         de la BASELINE historique par (jour de semaine, heure) — statistique, pas
         de ML. Un indice de `confidence` évite de sur-interpréter peu de données.
     """
+    scope = _scope_camera_ids(session, group_id, camera_id)
     now = datetime.utcnow()
     since_date = now.date() - timedelta(days=days - 1)
     since_dt = datetime.combine(since_date, datetime.min.time())
-    lines = _events(session, EVENT_LINE_CROSSED, since_dt)
+    lines = _events(session, EVENT_LINE_CROSSED, since_dt, camera_ids=scope)
 
     HOURS = list(range(24))
     # Nombre d'occurrences de chaque jour de semaine dans la fenêtre (pour moyenner).
@@ -592,4 +652,39 @@ def insights(
         },
         "forecast": forecast,
         "confidence": confidence,
+    }
+
+
+@router.get("/cockpit")
+@cached_endpoint("analytics:cockpit", 300)
+def cockpit_overview(
+    group_id: Optional[int] = None,
+    camera_id: Optional[int] = None,
+    _user: User = Depends(require_viewer),
+    session: Session = Depends(get_session),
+):
+    """Vue agrégée du Cockpit en UNE requête : résumé du jour, occupation des
+    zones, performance des files et disponibilité caméras — les 4 blocs les plus
+    coûteux, scopés agence/caméra. Remplace 4 appels séparés répétés toutes les 8 s.
+    Chaque bloc RÉUTILISE le cache de son sous-endpoint (aucun recalcul redondant :
+    le Cockpit et les pages qui appellent ces endpoints directement partagent le
+    même cache).
+
+    Cache PROPRE de 5 min (300 s) au-dessus de ces caches : le Cockpit est un écran
+    de synthèse quotidienne, pas un mur temps réel (celui-ci passe par Socket.IO).
+    La base n'est donc plus sollicitée qu'une fois par 5 min pour cet écran, quel
+    que soit le nombre d'opérateurs connectés — contre ~2 recalculs par minute
+    auparavant (TTL de 30 s des sous-endpoints). Contrepartie assumée : les chiffres
+    peuvent avoir jusqu'à 5 min de retard ICI. Les autres pages qui appellent ces
+    mêmes sous-endpoints gardent, elles, leur fraîcheur de 30 s."""
+    return {
+        "summary": summary(camera_id=camera_id, group_id=group_id, session=session, _user=_user),
+        "occupancy": occupancy(hours=24, zone_id=None, camera_id=camera_id, group_id=group_id,
+                               session=session, _user=_user),
+        "queue_performance": queue_performance(
+            days=1, group_id=group_id, camera_id=camera_id,
+            wait_threshold_s=300, session=session, _user=_user),
+        "camera_status": camera_status_stats(
+            days=1, group_id=group_id, camera_id=camera_id,
+            session=session, _user=_user),
     }

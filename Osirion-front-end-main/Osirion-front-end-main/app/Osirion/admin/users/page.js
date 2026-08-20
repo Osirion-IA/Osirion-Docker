@@ -616,7 +616,7 @@ export default function UsersPage() {
                       onClick={() => setRoleFilter(f.value)}
                       className={`px-4 py-2 rounded-os text-sm font-medium transition-all flex items-center gap-2 ${
                         roleFilter === f.value
-                          ? "bg-os-cta text-white shadow-lg"
+                          ? "bg-os-primary text-os-on-primary shadow-lg"
                           : "bg-os-card text-os-t2 hover:bg-black/5 border border-os-border"
                       }`}
                     >

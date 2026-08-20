@@ -20,8 +20,19 @@ const ZONE_KINDS = [
   { value: "occupancy", label: "Occupation", color: "#2f7fd1" },
   { value: "queue", label: "File d'attente", color: "#f5a623" },
   { value: "crowd", label: "Attroupement", color: "#e60027" },
+  // Exclusion : rien n'y est détecté. À tracer sur un décor qui déclenche des
+  // détections permanentes (affiche, écran, reflet dans une vitre).
+  { value: "ignore", label: "Zone ignorée", color: "#7c8695" },
   { value: "generic", label: "Générique", color: "#1faa59" },
 ];
+// Aide contextuelle affichée sous le sélecteur de type.
+const KIND_HINT = {
+  occupancy: "Compte les personnes présentes dans le polygone.",
+  queue: "File d'attente : longueur et temps d'attente.",
+  crowd: "Alerte quand l'effectif dépasse le seuil pendant quelques secondes.",
+  ignore: "Aucune détection retenue ici — à poser sur un décor trompeur (affiche, écran, reflet).",
+  generic: "Zone repère, sans traitement particulier.",
+};
 const kindColor = (k) => (ZONE_KINDS.find((z) => z.value === k)?.color || "#1faa59");
 const kindLabel = (k) => (ZONE_KINDS.find((z) => z.value === k)?.label || k);
 const LINE_COLOR = "#f5a623";
@@ -39,7 +50,10 @@ export default function ZonesPage() {
   const [name, setName] = useState("");
   const [kind, setKind] = useState("occupancy");
   const [threshold, setThreshold] = useState("");
+  // Délai de confirmation : vide = valeur par défaut du moteur (5 s), 0 = immédiat.
+  const [minPresence, setMinPresence] = useState("");
   const [groups, setGroups] = useState([]);
+  const [configured, setConfigured] = useState({});   // { camId: { zones, lines } }
   const [previewState, setPreviewState] = useState("idle"); // idle|loading|ready|error
   const [msg, setMsg] = useState("");
 
@@ -61,6 +75,28 @@ export default function ZonesPage() {
     })();
   }, []);
 
+  // Index « quelles caméras sont DÉJÀ configurées » : { camId: { zones, lines } }.
+  // Les deux endpoints acceptent l'absence de camera_id → tout le parc en 2 appels
+  // (quelques dizaines de lignes au total). Sert à épingler ces caméras en tête du
+  // sélecteur, pour ne plus avoir à fouiller le catalogue afin de les retrouver.
+  const loadConfigured = useCallback(async () => {
+    const [zr, lr] = await Promise.all([
+      fetchWithRefresh("/api/zones"),
+      fetchWithRefresh("/api/zones/lines"),
+    ]);
+    const idx = {};
+    const tally = (rows, key) => {
+      for (const r of Array.isArray(rows) ? rows : []) {
+        if (r?.camera_id == null) continue;
+        if (!idx[r.camera_id]) idx[r.camera_id] = { zones: 0, lines: 0 };
+        idx[r.camera_id][key] += 1;
+      }
+    };
+    tally(zr?.ok ? await zr.json() : [], "zones");
+    tally(lr?.ok ? await lr.json() : [], "lines");
+    setConfigured(idx);
+  }, []);
+
   const loadShapes = useCallback(async (id) => {
     if (id == null) return;
     const [zr, lr] = await Promise.all([
@@ -69,7 +105,10 @@ export default function ZonesPage() {
     ]);
     setZones(zr?.ok ? await zr.json() : []);
     setLines(lr?.ok ? await lr.json() : []);
-  }, []);
+    // Point d'accroche unique : loadShapes est déjà rappelé après chaque création
+    // et chaque suppression → l'index reste à jour sans autre câblage.
+    loadConfigured();
+  }, [loadConfigured]);
 
   useEffect(() => { setDraft([]); setTool("select"); setMsg(""); loadShapes(camId); }, [camId, loadShapes]);
 
@@ -99,7 +138,7 @@ export default function ZonesPage() {
     const pt = [Math.round(x * 1000) / 1000, Math.round(y * 1000) / 1000];
     setDraft((d) => (tool === "line" ? [...d, pt].slice(-2) : [...d, pt]));
   };
-  const cancelDraft = () => { setDraft([]); setName(""); setThreshold(""); setMsg(""); setTool("select"); };
+  const cancelDraft = () => { setDraft([]); setName(""); setThreshold(""); setMinPresence(""); setMsg(""); setTool("select"); };
   const undoPoint = () => setDraft((d) => d.slice(0, -1));
 
   const save = async () => {
@@ -110,7 +149,14 @@ export default function ZonesPage() {
         if (draft.length < 3) { setMsg("Un polygone exige au moins 3 points."); return; }
         const r = await fetchWithRefresh("/api/zones", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ camera_id: camId, name: name.trim(), kind, polygon: draft, color: kindColor(kind), threshold: threshold ? Number(threshold) : null }),
+          body: JSON.stringify({
+            camera_id: camId, name: name.trim(), kind, polygon: draft, color: kindColor(kind),
+            threshold: (kind !== "ignore" && threshold) ? Number(threshold) : null,
+            // `0` est falsy en JS et c'est justement la valeur qui désarme le délai
+            // (comptage immédiat) : on teste la chaîne vide, pas la véracité.
+            // null = la zone suit le défaut du moteur.
+            min_presence_s: (kind !== "ignore" && minPresence !== "") ? Number(minPresence) : null,
+          }),
         });
         if (!r?.ok) { setMsg("Échec de l'enregistrement de la zone."); return; }
       } else if (tool === "line") {
@@ -142,7 +188,12 @@ export default function ZonesPage() {
         <PageHeader
           title="Zones & comptage"
           subtitle="Dessinez zones et lignes de comptage directement sur l'image de la caméra"
-          actions={<GroupedCameraPicker cameras={cameras} groups={groups} value={camId} onChange={setCamId} />}
+          actions={
+            <GroupedCameraPicker
+              cameras={cameras} groups={groups} value={camId} onChange={setCamId}
+              configured={configured}
+            />
+          }
         />
 
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
@@ -211,13 +262,31 @@ export default function ZonesPage() {
                       {ZONE_KINDS.map((k) => <option key={k.value} value={k.value}>{k.label}</option>)}
                     </select>
                   )}
-                  {tool === "zone" && (
+                  {tool === "zone" && kind !== "ignore" && (
                     <input type="number" min="1" value={threshold} onChange={(e) => setThreshold(e.target.value)} placeholder="Seuil (optionnel)" title="Seuil d'attroupement"
+                      className="w-36 px-3 py-2 rounded-os border border-os-border bg-os-card text-[13px] text-os-t1" />
+                  )}
+                  {tool === "zone" && kind !== "ignore" && (
+                    <input type="number" min="0" step="0.5" value={minPresence} onChange={(e) => setMinPresence(e.target.value)}
+                      placeholder="Délai 5 s" title="Secondes de présence avant de compter une personne. Vide = 5 s. 0 = immédiat (intrusion)."
                       className="w-36 px-3 py-2 rounded-os border border-os-border bg-os-card text-[13px] text-os-t1" />
                   )}
                   <button onClick={undoPoint} disabled={!draft.length} className="px-3 py-2 rounded-os text-[13px] border border-os-border text-os-t2 disabled:opacity-40">↶ Point</button>
                   <button onClick={save} className="px-4 py-2 rounded-os text-[13px] font-semibold bg-os-cta text-white hover:bg-os-cta-hover">Enregistrer</button>
                 </div>
+              )}
+              {canWrite && tool === "zone" && (
+                <>
+                  <p className="text-[12px] text-os-t3 mt-2">{KIND_HINT[kind]}</p>
+                  {kind !== "ignore" && (
+                    <p className="text-[12px] text-os-t3 mt-1">
+                      <span className="text-os-t2 font-semibold">Délai</span> : une personne n'est comptée
+                      qu'après être restée {minPresence === "" ? "5" : minPresence} s d'affilée dans la zone —
+                      quelqu'un qui ne fait que passer, ou qui s'arrête une seconde, est ignoré.
+                      Mettez <span className="os-num">0</span> pour une zone où l'alerte doit être immédiate (intrusion).
+                    </p>
+                  )}
+                </>
               )}
               {msg && <p className="text-[13px] text-os-red mt-2">{msg}</p>}
             </Card>
@@ -236,7 +305,12 @@ export default function ZonesPage() {
                         <span className="h-3 w-3 rounded-sm shrink-0" style={{ backgroundColor: z.color || kindColor(z.kind) }} />
                         <span className="min-w-0">
                           <span className="block text-[13px] font-semibold text-os-t1 truncate">{z.name}</span>
-                          <span className="block text-[11px] text-os-t3">{kindLabel(z.kind)}{z.threshold ? ` · seuil ${z.threshold}` : ""} · polygone · {(z.polygon || []).length} pts</span>
+                          <span className="block text-[11px] text-os-t3">
+                            {kindLabel(z.kind)}{z.threshold ? ` · seuil ${z.threshold}` : ""}
+                            {/* `!= null` : garde le 0 (comptage immédiat), écarte null/undefined. */}
+                            {z.min_presence_s != null && (z.min_presence_s === 0 ? " · comptage immédiat" : ` · délai ${z.min_presence_s} s`)}
+                            {" · polygone · "}{(z.polygon || []).length} pts
+                          </span>
                         </span>
                       </span>
                       {canWrite && <button onClick={() => delZone(z.id)} className="text-[12px] text-os-red hover:underline shrink-0">Suppr.</button>}

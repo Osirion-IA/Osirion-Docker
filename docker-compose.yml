@@ -207,7 +207,28 @@ services:
       PERSON_MODEL_PATH: ${PERSON_MODEL_PATH:-yolo26n.pt}
       PERSON_DETECTION_CONFIDENCE: ${PERSON_DETECTION_CONFIDENCE:-0.4}   # confiance YOLO mini
       PERSON_YOLO_HALF: ${PERSON_YOLO_HALF:-true}                        # FP16 GPU (repli FP32 auto)
+      # Plancher de confiance envoyé AU TRACKER (récupération BYTE des personnes
+      # occluses) — bien plus bas que la confiance de détection ci-dessus. Réduit le
+      # sous-comptage des files (une personne masquée 1–2 s n'est plus perdue).
+      PERSON_TRACK_MIN_CONFIDENCE: ${PERSON_TRACK_MIN_CONFIDENCE:-0.1}
+      # Résolution d'inférence YOLO (côté long). Vide/0 = défaut 640 ; 960/1280
+      # améliorent le recall des personnes petites/lointaines (fond de file) au prix
+      # d'un coût GPU ~quadratique. Baisser si le GPU sature (↔ nombre de caméras).
+      PERSON_YOLO_IMGSZ: ${PERSON_YOLO_IMGSZ:-960}
       BLUR_THRESHOLD: ${BLUR_THRESHOLD:-80.0}                            # gate anti-flou (0=off)
+      # ── Robustesse du comptage (tracking + Event Engine) ────────────────────
+      # Sursis de publication d'un track occlus (frames) : il reste compté à sa
+      # dernière position observée au lieu de disparaître ~4 frames. 0 = désactivé.
+      TRACK_COAST_FRAMES: ${TRACK_COAST_FRAMES:-8}
+      # Survie (frames) de l'état par track (âge, côté engagé d'une ligne) après sa
+      # dernière apparition → un passage n'est plus perdu si la personne est ratée
+      # une frame près de la ligne.
+      TRACK_STATE_TTL_FRAMES: ${TRACK_STATE_TTL_FRAMES:-90}
+      # Lissage (s) de l'occupation publiée — médiane glissante. 0 = instantané.
+      OCCUPANCY_SMOOTH_SECONDS: ${OCCUPANCY_SMOOTH_SECONDS:-1.5}
+      # Délai (s) avant de confirmer une sortie de zone (évite de couper en deux un
+      # temps d'attente à cause d'une occlusion).
+      DWELL_EXIT_GRACE_SECONDS: ${DWELL_EXIT_GRACE_SECONDS:-2.0}
       # Dispositif de mesure (chapitre mémoire) retiré → no-op.
       MEASURE_ENABLED: "false"
     volumes:

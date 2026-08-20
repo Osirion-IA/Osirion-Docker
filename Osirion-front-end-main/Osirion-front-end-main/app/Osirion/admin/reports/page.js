@@ -81,14 +81,14 @@ export default function ReportsPage() {
         ["Entrées (période)", foot?.total_entries ?? 0],
         ["Sorties (période)", foot?.total_exits ?? 0],
         ["Évolution vs période précédente", foot?.delta_entries_pct != null ? `${foot.delta_entries_pct >= 0 ? "+" : ""}${foot.delta_entries_pct}%` : "—"],
-        ["Pic des files (occupation)", qa?.peak_hour != null ? `${qa.peak_hour}h–${qa.peak_hour + 1}h (moy. ${qa.peak_avg_occupancy})` : "—"],
+        ["Heure la plus chargée", qa?.peak_hour != null ? `${qa.peak_hour}h–${qa.peak_hour + 1}h (en moyenne ${qa.peak_avg_occupancy} pers.)` : "—"],
       ] },
       { title: "Files & attente", rows: [
         ["Files suivies", qp?.queues?.length ?? 0],
         ["File la plus lente", topQ ? `${topQ.name}${topQ.site ? ` (${topQ.site})` : ""}` : "—"],
-        ["Attente moyenne (max file)", topQ ? fmtWait(topQ.wait_avg_s) : "—"],
-        ["Attente P90 (max file)", topQ ? fmtWait(topQ.wait_p90_s) : "—"],
-        ["Agence la plus lente", topA ? `${topA.site} — moy. ${fmtWait(topA.wait_avg_s)}, P90 ${fmtWait(topA.wait_p90_s)}` : "—"],
+        ["Attente moyenne (file la plus lente)", topQ ? fmtWait(topQ.wait_avg_s) : "—"],
+        ["Attente longue — 9 clients sur 10 en dessous", topQ ? fmtWait(topQ.wait_p90_s) : "—"],
+        ["Agence la plus lente", topA ? `${topA.site} — en moyenne ${fmtWait(topA.wait_avg_s)}, 9 clients sur 10 sous ${fmtWait(topA.wait_p90_s)}` : "—"],
       ] },
       { title: "Incidents (global)", rows: [
         ["Alertes", inc?.alerts_total ?? 0],

@@ -30,14 +30,24 @@ Préserve À L'IDENTIQUE le contrat consommé par le pipeline Osirion
     · entrée  : output_results = NumPy (N, 5) [x1, y1, x2, y2, score] (pixels frame) ;
                 img_info / img_size = (hauteur, largeur). Dans Osirion ils sont
                 ÉGAUX → facteur d'échelle = 1.0 (aucune remise à l'échelle).
-    · sortie  : liste d'objets exposant `.track_id` (int) et `.tlwh`
-                (x, y, largeur, hauteur en pixels frame).
+    · sortie  : liste d'objets exposant `.track_id` (int), `.tlwh`
+                (x, y, largeur, hauteur en pixels frame) et `.predicted` (bool :
+                position MAINTENUE, track non observé sur cette frame).
 
 Remplaçant direct de `BYTETracker(args, frame_rate=...)` : aucun autre fichier ne
 change de contrat.
 
 Réf. : J. Cao et al., « Observation-Centric SORT: Rethinking SORT for Robust
 Multi-Object Tracking », CVPR 2023.
+
+Deux ajouts propres à Osirion (comptage, pas benchmark MOT) :
+  • Confirmation DÉFINITIVE d'un track (`confirmed`) : une fois établi, il n'a plus
+    à re-cumuler `min_hits` appariements après une frame manquée.
+  • Sursis de publication (`max_coast`) : un track confirmé non apparié reste publié
+    quelques frames à sa dernière position observée, avec un drapeau `predicted`.
+Sans ces deux points, une occlusion d'UNE frame retirait la personne du Scene Model
+pendant 3 frames (mesuré : 1 frame ratée + 2 pour re-cumuler hit_streak), soit
+≈ 0,4–0,6 s à la cadence réelle → occupation clignotante et passages non comptés.
 
 Note d'implémentation : cette variante implémente OCM + OCR + rétention prolongée
 au-dessus d'un filtre de Kalman filterpy standard. Le ré-update « rétroactif » le
@@ -100,6 +110,21 @@ def _convert_x_to_bbox(x: np.ndarray) -> np.ndarray:
     cx, cy = float(x[0]), float(x[1])
     return np.array([cx - w / 2.0, cy - h / 2.0,
                      cx + w / 2.0, cy + h / 2.0], dtype=float).reshape((1, 4))
+
+
+def _touches_border(box: np.ndarray, img_w: float, img_h: float,
+                    frac: float = 0.02) -> bool:
+    """La boîte touche-t-elle un bord de l'image (à `frac` près) ?
+
+    Sert à distinguer une personne SORTIE DU CHAMP (boîte collée à un bord, il ne
+    faut pas la maintenir) d'une personne simplement OCCULTÉE au milieu de la scène
+    (boîte loin des bords, il faut la maintenir le temps de l'occlusion).
+    """
+    if not img_w or not img_h:
+        return False
+    m = max(8.0, frac * min(float(img_w), float(img_h)))
+    return (box[0] <= m or box[1] <= m
+            or box[2] >= float(img_w) - m or box[3] >= float(img_h) - m)
 
 
 def _speed_direction(bbox1: np.ndarray, bbox2: np.ndarray) -> np.ndarray:
@@ -257,6 +282,13 @@ class KalmanBoxTracker:
         self.observations: Dict[int, np.ndarray] = {}
         self.velocity: Optional[np.ndarray] = None
 
+        # Confirmation DÉFINITIVE du track (min_hits observations enchaînées). Une
+        # fois acquise, elle ne se perd plus : `hit_streak` est remis à 0 par
+        # predict() dès UNE frame manquée, et re-conditionner la publication à
+        # hit_streak ferait disparaître ~min_hits frames de plus un track qui a
+        # simplement été occlus une frame (clignotement du comptage).
+        self.confirmed = False
+
     def update(self, bbox: Optional[np.ndarray]) -> None:
         """Intègre une observation [x1, y1, x2, y2, score] ou None (track non vu)."""
         if bbox is None:
@@ -312,7 +344,7 @@ class OCSort:
 
     def __init__(self, det_thresh: float, max_age: int = 30, min_hits: int = 3,
                  iou_threshold: float = 0.3, delta_t: int = 3, inertia: float = 0.2,
-                 use_byte: bool = True):
+                 use_byte: bool = True, low_thresh: float = 0.1, max_coast: int = 0):
         self.det_thresh = det_thresh
         self.max_age = max_age
         self.min_hits = min_hits
@@ -320,6 +352,15 @@ class OCSort:
         self.delta_t = delta_t
         self.inertia = inertia
         self.use_byte = use_byte
+        # Plancher des détections FAIBLES exploitées par la 2ᵉ association (BYTE).
+        # Doit rester cohérent avec le seuil passé au détecteur (sinon les boîtes
+        # sous ce plancher sont produites par YOLO puis jetées ici, sans effet).
+        self.low_thresh = float(low_thresh)
+        # Sursis de publication (« coasting ») : nb de frames pendant lesquelles un
+        # track confirmé mais NON apparié reste publié, à sa dernière position
+        # observée. 0 = comportement historique (disparition immédiate). Borné par
+        # max_age (au-delà, le track est supprimé de toute façon).
+        self.max_coast = max(0, min(int(max_coast), int(max_age)))
 
         self.trackers: List[KalmanBoxTracker] = []
         self.frame_count = 0
@@ -328,10 +369,13 @@ class OCSort:
     def update(self, output_results: np.ndarray, img_info, img_size) -> np.ndarray:
         """Met à jour le tracker pour la frame courante.
 
-        Renvoie un tableau (M, 5) [x1, y1, x2, y2, track_id] en pixels frame.
+        Renvoie un tableau (M, 6) [x1, y1, x2, y2, track_id, predicted] en pixels
+        frame. `predicted` vaut 1.0 quand la boîte n'a PAS été observée sur cette
+        frame (track en sursis, position = dernière observation réelle) — l'aval
+        peut ainsi compter la personne sans lui attribuer un déplacement observé.
         """
         if output_results is None:
-            return np.empty((0, 5))
+            return np.empty((0, 6))
 
         self.frame_count += 1
 
@@ -349,7 +393,7 @@ class OCSort:
         dets = np.concatenate((bboxes, scores[:, None]), axis=1)
 
         remain_inds = scores > self.det_thresh
-        inds_second = np.logical_and(scores > 0.1, scores < self.det_thresh)
+        inds_second = np.logical_and(scores > self.low_thresh, scores < self.det_thresh)
         dets_second = dets[inds_second]   # détections faible confiance (BYTE)
         dets = dets[remain_inds]          # détections haute confiance
 
@@ -430,21 +474,38 @@ class OCSort:
         # pop par index décroissant sûr).
         i = len(self.trackers)
         for trk in reversed(self.trackers):
+            # Confirmation : acquise dès min_hits appariements enchaînés (ou pendant
+            # les toutes premières frames du tracker), puis DÉFINITIVE.
+            if trk.hit_streak >= self.min_hits or self.frame_count <= self.min_hits:
+                trk.confirmed = True
+
             if trk.last_observation.sum() < 0:
                 d = trk.get_state()[0]
             else:
-                # Préfère la dernière observation réelle à la prédiction Kalman.
+                # Préfère la dernière observation réelle à la prédiction Kalman :
+                # un track en sursis reste à sa dernière position CONNUE plutôt que
+                # de dériver le long d'une vitesse extrapolée (une dérive ferait
+                # traverser des zones/lignes à une personne qu'on ne voit plus).
                 d = trk.last_observation[:4]
-            if (trk.time_since_update < 1) and \
-               (trk.hit_streak >= self.min_hits or self.frame_count <= self.min_hits):
-                ret.append(np.concatenate((d, [trk.id])).reshape(1, -1))
+
+            # Publication : track vu cette frame, ou en sursis depuis ≤ max_coast
+            # frames. Une occlusion brève ne le retire donc plus du Scene Model.
+            # EXCEPTION : un track dont la dernière boîte touchait un BORD de l'image
+            # est très probablement sorti du champ — le maintenir sur-compterait la
+            # zone pendant ~1 s à chaque départ. On ne le prolonge donc pas.
+            coast = self.max_coast
+            if coast and trk.time_since_update > 0 and _touches_border(d, img_w, img_h):
+                coast = 0
+            if trk.confirmed and trk.time_since_update <= coast:
+                predicted = 1.0 if trk.time_since_update > 0 else 0.0
+                ret.append(np.concatenate((d, [trk.id, predicted])).reshape(1, -1))
             i -= 1
             if trk.time_since_update > self.max_age:
                 self.trackers.pop(i)
 
         if len(ret) > 0:
             return np.concatenate(ret)
-        return np.empty((0, 5))
+        return np.empty((0, 6))
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -455,13 +516,15 @@ class _Track:
     `.track_id` (int) et `.tlwh` (x, y, w, h en pixels frame). `.tlbr`/`.score`
     fournis en bonus (robustesse/avenir)."""
 
-    __slots__ = ("track_id", "_x1", "_y1", "_x2", "_y2", "score")
+    __slots__ = ("track_id", "_x1", "_y1", "_x2", "_y2", "score", "predicted")
 
-    def __init__(self, track_id, x1, y1, x2, y2, score=0.0):
+    def __init__(self, track_id, x1, y1, x2, y2, score=0.0, predicted=False):
         self.track_id = int(track_id)
         self._x1, self._y1 = float(x1), float(y1)
         self._x2, self._y2 = float(x2), float(y2)
         self.score = float(score)
+        # True = position MAINTENUE (track en sursis, non observé sur cette frame).
+        self.predicted = bool(predicted)
 
     @property
     def tlwh(self) -> np.ndarray:
@@ -497,6 +560,8 @@ class OCSortTrackerAdapter:
             delta_t=getattr(args, "delta_t", 3),
             inertia=getattr(args, "inertia", 0.2),
             use_byte=getattr(args, "use_byte", True),
+            low_thresh=getattr(args, "low_thresh", 0.1),
+            max_coast=getattr(args, "max_coast", 0),
         )
 
     def update(self, output_results, img_info, img_size) -> List[_Track]:
@@ -508,8 +573,9 @@ class OCSortTrackerAdapter:
             return []
 
         online = self.tracker.update(output_results, img_info, img_size)
-        # online : (M, 5) [x1, y1, x2, y2, track_id] en pixels frame.
+        # online : (M, 6) [x1, y1, x2, y2, track_id, predicted] en pixels frame.
         return [
-            _Track(int(row[4]), row[0], row[1], row[2], row[3])
+            _Track(int(row[4]), row[0], row[1], row[2], row[3],
+                   predicted=bool(row[5]) if len(row) > 5 else False)
             for row in online
         ]

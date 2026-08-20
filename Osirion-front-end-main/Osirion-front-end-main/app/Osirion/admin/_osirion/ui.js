@@ -30,8 +30,10 @@ export function Segmented({ value, onChange, options, size = "md" }) {
           <button
             key={o.value}
             onClick={() => onChange(o.value)}
+            /* Onglet actif = BLEU de marque. Le libellé passe en SOMBRE
+               (--os-on-primary) : du blanc sur ce bleu tomberait à 2,1:1. */
             className={`rounded-os ${pad} font-medium transition-colors ${
-              active ? "bg-os-cta text-white" : "text-os-t3 hover:text-os-t1"
+              active ? "bg-os-primary text-os-on-primary" : "text-os-t3 hover:text-os-t1"
             }`}
           >
             {o.label}

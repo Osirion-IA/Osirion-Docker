@@ -217,13 +217,13 @@ export default function AnalyticsPage() {
     try {
       const hours = period * 24;
       const [i, f, qa, qp, o, bc, inc] = await Promise.all([
-        fetchWithRefresh(`/api/analytics/insights?days=${period}`),
-        fetchWithRefresh(`/api/analytics/footfall?days=${period}${camId ? `&camera_id=${camId}` : ""}`),
+        fetchWithRefresh(`/api/analytics/insights?days=${period}${fq}`),
+        fetchWithRefresh(`/api/analytics/footfall?days=${period}${fq}`),
         fetchWithRefresh(`/api/analytics/queue-affluence?days=${period}${fq}`),
         fetchWithRefresh(`/api/analytics/queue-performance?days=${Math.min(period, 90)}${fq}`),
-        fetchWithRefresh(`/api/analytics/occupancy?hours=${hours}`),
-        fetchWithRefresh(`/api/analytics/by-camera?days=${Math.min(period, 90)}`),
-        fetchWithRefresh(`/api/analytics/incidents?days=${Math.min(period, 90)}`),
+        fetchWithRefresh(`/api/analytics/occupancy?hours=${hours}${fq}`),
+        fetchWithRefresh(`/api/analytics/by-camera?days=${Math.min(period, 90)}${fq}`),
+        fetchWithRefresh(`/api/analytics/incidents?days=${Math.min(period, 90)}${fq}`),
       ]);
       setIns(i?.ok ? await i.json() : null);
       setFoot(f?.ok ? await f.json() : null);
@@ -252,7 +252,7 @@ export default function AnalyticsPage() {
   const recos = [];
   if (hasQueues && qPeak != null) recos.push(`Affluence maximale des files vers ${qPeak}h–${qPeak + 1}h (occupation moyenne ${qa.peak_avg_occupancy}). Renforcez les guichets sur ce créneau.`);
   if (hasQueues && qa.quietest_hour != null) recos.push(`Files les plus calmes vers ${qa.quietest_hour}h — fenêtre idéale pour la maintenance ou les pauses.`);
-  if (agencies.length) { const w = agencies[0]; recos.push(`Agence à la plus forte attente : ${w.site} — moyenne ${fmtWaitShort(w.wait_avg_s)}, P90 ${fmtWaitShort(w.wait_p90_s)}.`); }
+  if (agencies.length) { const w = agencies[0]; recos.push(`Agence où l'on attend le plus : ${w.site} — en moyenne ${fmtWaitShort(w.wait_avg_s)}, et 9 clients sur 10 en dessous de ${fmtWaitShort(w.wait_p90_s)}.`); }
   if (hasData && today.vs_avg_pct != null) recos.push(today.vs_avg_pct >= 0
     ? `Aujourd'hui +${today.vs_avg_pct}% de passages vs d'habitude — anticipez une journée chargée.`
     : `Aujourd'hui ${today.vs_avg_pct}% vs d'habitude — plus calme que la normale.`);
@@ -289,7 +289,7 @@ export default function AnalyticsPage() {
 
         {d.confidence && d.confidence !== "high" && hasData && (
           <div className="mb-4 rounded-os border border-os-border bg-os-card px-4 py-2.5 text-[12px] text-os-t3">
-            ⓘ Historique {d.confidence === "low" ? "limité" : "partiel"} ({d.active_days} jour(s) de données) — les projections et prévisions s&apos;affineront à mesure que l&apos;historique s&apos;accumule.
+            ⓘ Fiabilité {d.confidence === "low" ? "limitée" : "partielle"} : seulement {d.active_days} jour(s) de données — les prévisions s&apos;affineront à mesure que l&apos;historique s&apos;accumule.
           </div>
         )}
 
@@ -304,24 +304,27 @@ export default function AnalyticsPage() {
             <option value="">Toutes les caméras</option>
             {cameras.filter((c) => !groupId || (c.group_ids || []).includes(Number(groupId))).map((c) => <option key={c.id} value={c.id}>{c.cam_name || `Caméra ${c.id}`}</option>)}
           </select>
-          <span className="text-[11px] text-os-t4">Filtres appliqués à l&apos;affluence des files et aux files &amp; attente.</span>
+          <span className="text-[11px] text-os-t4">Filtres appliqués à l&apos;ensemble des statistiques de la page.</span>
         </div>
 
+        {/* On met en tête ce qui déclenche une décision : l'attente ressentie par
+            les clients et la tendance RELATIVE (robustes au sous-comptage). Le total
+            absolu de fréquentation est relégué en dernier, cadré par son évolution. */}
         <div className="grid grid-cols-2 xl:grid-cols-4 gap-4 mb-5">
-          <Insight label="Aujourd'hui" icon={TrendingUp}
-            value={loading ? "—" : (today.so_far ?? 0)}
-            hint={hasData && today.projected_eod ? `projeté ~${today.projected_eod}${today.vs_avg_pct != null ? ` · ${today.vs_avg_pct >= 0 ? "+" : ""}${today.vs_avg_pct}% vs moy.` : ""}` : "passages entrants"}
-            trend={today.vs_avg_pct} />
-          <Insight label={`Entrées · ${period}j`} icon={TrendingUp}
-            value={loading ? "—" : (foot?.total_entries ?? 0)}
-            hint={deltaEntries != null ? `${deltaEntries >= 0 ? "+" : ""}${deltaEntries}% vs période préc.` : "période précédente vide"}
-            trend={deltaEntries} />
-          <Insight label="Pic des files" icon={Clock}
-            value={loading ? "—" : qPeak != null ? `${qPeak}h–${qPeak + 1}h` : "—"}
-            hint={qPeak != null ? `occ. moy. ${qa.peak_avg_occupancy}` : hasQueues ? "pas encore de pic" : "aucune file"} />
-          <Insight label="Attente — top agence" icon={CalendarDays}
+          <Insight label="Attente des clients" icon={Clock}
             value={loading ? "—" : agencies.length ? fmtWaitShort(agencies[0].wait_avg_s) : "—"}
-            hint={agencies.length ? `${agencies[0].site} · P90 ${fmtWaitShort(agencies[0].wait_p90_s)}` : "aucune file"} />
+            hint={agencies.length ? `${agencies[0].site} · 9 clients sur 10 attendent moins de ${fmtWaitShort(agencies[0].wait_p90_s)}` : "aucune file"} />
+          <Insight label="Par rapport à d'habitude" icon={TrendingUp}
+            value={loading ? "—" : (today.vs_avg_pct != null ? `${today.vs_avg_pct >= 0 ? "+" : ""}${today.vs_avg_pct}%` : (today.so_far ?? 0))}
+            hint={hasData && today.projected_eod ? `${today.so_far ?? 0} aujourd'hui · fin de journée estimée ~${today.projected_eod}` : "fréquentation du jour"}
+            trend={today.vs_avg_pct} />
+          <Insight label="Heure la plus chargée" icon={CalendarDays}
+            value={loading ? "—" : qPeak != null ? `${qPeak}h–${qPeak + 1}h` : "—"}
+            hint={qPeak != null ? `en moyenne ${qa.peak_avg_occupancy} pers. en file` : hasQueues ? "pas encore de pic" : "aucune file"} />
+          <Insight label={`Fréquentation · ${period} j`} icon={TrendingUp}
+            value={loading ? "—" : (foot?.total_entries ?? 0)}
+            hint={deltaEntries != null ? `${deltaEntries >= 0 ? "+" : ""}${deltaEntries}% vs période précédente` : "entrées comptées"}
+            trend={deltaEntries} />
         </div>
 
         <div className="mb-4"><Segmented value={tab} onChange={setTab} options={TABS} /></div>
@@ -398,7 +401,7 @@ export default function AnalyticsPage() {
                     {qa.busiest_periods.map((p, i) => (
                       <li key={i} className="flex items-center justify-between gap-3 rounded-os border border-os-border px-3 py-2 text-[13px]">
                         <span className="text-os-t1">{new Date(p.date).toLocaleDateString("fr-FR", { weekday: "long", day: "2-digit", month: "short" })} · {p.hour}h–{p.hour + 1}h</span>
-                        <span className="os-num font-semibold text-os-t1">occ. moyenne {p.avg_occupancy}</span>
+                        <span className="os-num font-semibold text-os-t1">en moyenne {p.avg_occupancy} pers.</span>
                       </li>
                     ))}
                   </ul>
@@ -433,7 +436,7 @@ export default function AnalyticsPage() {
                     <div key={c.camera_id}>
                       <div className="mb-1 flex items-baseline justify-between gap-3 text-[13px]">
                         <span className="truncate text-os-t1">{c.name}{c.site ? <span className="text-os-t4"> · {c.site}</span> : null}</span>
-                        <span className="shrink-0 os-num text-os-t1 font-semibold">{c.entries}<span className="text-os-t4 font-normal"> ent.</span>{c.current_occupancy ? <span className="text-os-t3 font-normal"> · {c.current_occupancy} présents</span> : null}</span>
+                        <span className="shrink-0 os-num text-os-t1 font-semibold">{c.entries}<span className="text-os-t4 font-normal"> entrées</span>{c.current_occupancy ? <span className="text-os-t3 font-normal"> · {c.current_occupancy} présents</span> : null}</span>
                       </div>
                       <div className="h-2 overflow-hidden rounded-full bg-os-border-2">
                         <div className="h-full rounded-full" style={{ width: `${((c.entries || 0) / max) * 100}%`, background: "var(--os-cta)" }} />
@@ -449,23 +452,24 @@ export default function AnalyticsPage() {
         {tab === "queues" && (
           <div className="space-y-4">
             <Card className="p-5">
-              <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center justify-between mb-1">
                 <h3 className="text-[15px] font-semibold text-os-t1">Files & attente</h3>
-                {qperf?.wait_threshold_s ? <span className="text-[12px] text-os-t3">seuil SLA {fmtWait(qperf.wait_threshold_s)}</span> : null}
+                {qperf?.wait_threshold_s ? <span className="text-[12px] text-os-t3">objectif : moins de {fmtWait(qperf.wait_threshold_s)}</span> : null}
               </div>
+              <p className="text-[12px] text-os-t3 mb-3">« Attente longue » = 9 clients sur 10 attendent moins que cette durée · « Trop longue » = part du temps passé au-dessus de l&apos;objectif.</p>
               {!qperf?.queues?.length ? (
                 <p className="text-[13px] text-os-t3 py-8 text-center">Aucune zone de type « file » sur ce périmètre. Créez-en une dans « Zones ».</p>
               ) : (
                 <div className="overflow-x-auto">
-                  <table className="w-full text-[13px] min-w-[560px]">
+                  <table className="w-full text-[13px] min-w-[640px]">
                     <thead>
                       <tr className="text-left text-[11px] uppercase tracking-wide text-os-t3 border-b border-os-border">
                         <th className="py-2.5 font-semibold">File</th>
-                        <th className="py-2.5 font-semibold text-right">Long.</th>
-                        <th className="py-2.5 font-semibold text-right">Attente moy.</th>
-                        <th className="py-2.5 font-semibold text-right">P90</th>
-                        <th className="py-2.5 font-semibold text-right">Max</th>
-                        <th className="py-2.5 font-semibold text-right">&gt; seuil</th>
+                        <th className="py-2.5 font-semibold text-right">Personnes</th>
+                        <th className="py-2.5 font-semibold text-right">Attente moyenne</th>
+                        <th className="py-2.5 font-semibold text-right">Attente longue</th>
+                        <th className="py-2.5 font-semibold text-right">Pire attente</th>
+                        <th className="py-2.5 font-semibold text-right">Trop longue</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -488,13 +492,13 @@ export default function AnalyticsPage() {
             {agencies.length > 0 && (
               <Card className="p-5">
                 <h3 className="text-[15px] font-semibold text-os-t1 mb-1">Classement des agences — temps d&apos;attente</h3>
-                <p className="text-[12px] text-os-t3 mb-4">Attente moyenne par agence · P90 = 9 clients sur 10 servis en dessous</p>
+                <p className="text-[12px] text-os-t3 mb-4">Attente moyenne par agence · la plus lente en haut</p>
                 <div className="space-y-3">
                   {(() => { const max = Math.max(1, ...agencies.map((a) => a.wait_avg_s)); return agencies.map((a) => (
                     <div key={a.site}>
                       <div className="mb-1 flex items-baseline justify-between gap-3 text-[13px]">
                         <span className="truncate text-os-t1">{a.site}</span>
-                        <span className="shrink-0 os-num text-os-t1 font-semibold">{fmtWait(a.wait_avg_s)}<span className="text-os-t4 font-normal"> · P90 {fmtWait(a.wait_p90_s)} · {a.over_threshold_pct}% &gt; seuil</span></span>
+                        <span className="shrink-0 os-num text-os-t1 font-semibold">{fmtWait(a.wait_avg_s)}<span className="text-os-t4 font-normal"> · 9 clients sur 10 sous {fmtWait(a.wait_p90_s)} · {a.over_threshold_pct}% trop longue</span></span>
                       </div>
                       <div className="h-2 overflow-hidden rounded-full bg-os-border-2">
                         <div className="h-full rounded-full" style={{ width: `${(a.wait_avg_s / max) * 100}%`, background: "var(--os-cta)" }} />
@@ -535,9 +539,9 @@ export default function AnalyticsPage() {
             <div className="space-y-4">
               <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
                 <Insight label="Alertes" icon={ShieldAlert} value={incidents.alerts_total} hint={`sur ${Math.min(period, 90)} j`} />
-                <Insight label="Attroupements" icon={ShieldAlert} value={incidents.crowd_total} hint="détections CROWD" />
+                <Insight label="Attroupements" icon={ShieldAlert} value={incidents.crowd_total} hint="attroupements détectés" />
                 <Insight label="Critiques" icon={ShieldAlert} value={incidents.by_severity.critical}
-                  hint={incidents.by_severity.warning ? `+ ${incidents.by_severity.warning} avert.` : "aucune"} />
+                  hint={incidents.by_severity.warning ? `+ ${incidents.by_severity.warning} avertissement(s)` : "aucune"} />
                 <Insight label="Taux de résolution" icon={ShieldAlert}
                   value={incidents.resolution_rate != null ? `${incidents.resolution_rate}%` : "—"}
                   hint={`${incidents.by_status.resolved} résolue(s) / ${incidents.alerts_total}`} />

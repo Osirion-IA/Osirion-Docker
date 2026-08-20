@@ -21,6 +21,7 @@ from app.routes.analytics_routes import router as analytics_router
 from app.routes.rules_routes import router as rules_router
 from app.routes.hikcentral_routes import router as hikcentral_router
 from app.routes.camera_status_routes import router as camera_status_router
+from app.routes.notifications_routes import router as notifications_router
 from app.middleware.rate_limit import limiter
 from app.config import settings
 
@@ -100,6 +101,7 @@ app.include_router(analytics_router, prefix="/analytics", tags=["📈 Analytics"
 app.include_router(rules_router, prefix="/rules", tags=["⚙️ Rules"])
 app.include_router(hikcentral_router, prefix="/hikcentral", tags=["🎥 HikCentral"])
 app.include_router(camera_status_router, prefix="/camera-status", tags=["📡 Camera Status"])
+app.include_router(notifications_router, prefix="/notifications", tags=["✉️ Notifications"])
 app.include_router(monitoring_router,prefix="/sysInfo", tags=["Syetem Informations"])
 
 # ─────────────────────────────────────────────

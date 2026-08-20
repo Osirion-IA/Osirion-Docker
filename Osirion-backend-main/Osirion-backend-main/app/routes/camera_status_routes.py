@@ -23,6 +23,7 @@ from app.models.camera_status_event import CameraStatusEvent
 from app.models.cameras import Camera
 from app.models.users import User
 from app.middleware.auth_middleware import require_viewer
+from app.services.response_cache import cached_endpoint
 
 router = APIRouter()
 
@@ -100,6 +101,7 @@ def _targets(session, group_id, camera_id):
 
 
 @router.get("/stats")
+@cached_endpoint("camera-status:stats", 30)
 def stats(
     days: int = Query(7, ge=1, le=90),
     group_id: Optional[int] = None,

@@ -16,11 +16,16 @@ EVENT_LINE_CROSSED = "LINE_CROSSED"
 EVENT_ZONE_DWELL = "ZONE_DWELL"
 
 class Event(SQLModel, table=True):
-    # L'analytique filtre en permanence par (caméra, type d'événement, période).
-    # Index couvrant → évite le full scan de `event` (heatmap, footfall, insights…)
-    # à mesure que le volume grossit.
+    # Deux profils d'accès distincts sur `event` :
+    #  - par caméra + type + période (footfall d'une caméra, by-camera) → index
+    #    couvrant qui COMMENCE par camera_id ;
+    #  - par type + période SANS caméra (occupation/files/summary/insights, qui
+    #    agrègent tout le parc) → l'index précédent est INUTILISABLE (camera_id en
+    #    tête), d'où un full scan de `event`. Le second index (event_type,
+    #    timestamp) sert exactement ces requêtes, y compris l'ORDER BY timestamp.
     __table_args__ = (
         Index("ix_event_camera_type_ts", "camera_id", "event_type", "timestamp"),
+        Index("ix_event_type_ts", "event_type", "timestamp"),
     )
 
     id: Optional[int] = Field(default=None, primary_key=True)

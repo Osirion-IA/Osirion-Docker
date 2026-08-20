@@ -1,11 +1,12 @@
 import "./globals.css";
 import { ThemeProvider } from "./ThemeProvider";
-import { plexSans, plexMono } from "./fonts";
+import { jost, plexMono } from "./fonts";
 
-// Polices IBM Plex Sans + Mono AUTO-HÉBERGÉES via next/font/local (fichiers .woff2
-// dans app/fonts/). On n'utilise PAS next/font/google : Google Fonts imposait un
-// téléchargement réseau AU BUILD (`npm run build`) qui cassait la construction de
-// l'image dès que fonts.googleapis.com était injoignable. Le local reste hors-ligne.
+// Polices Jost (marque Qwiper) + IBM Plex Mono (chiffres) AUTO-HÉBERGÉES via
+// next/font/local (fichiers .woff2 dans app/fonts/). On n'utilise PAS
+// next/font/google : Google Fonts imposait un téléchargement réseau AU BUILD
+// (`npm run build`) qui cassait la construction de l'image dès que
+// fonts.googleapis.com était injoignable. Le local reste hors-ligne.
 
 export const metadata = {
   title: "Qwiper Sentinel — Supervision de flux anonymes",
@@ -14,7 +15,7 @@ export const metadata = {
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="fr" suppressHydrationWarning className={`${plexSans.variable} ${plexMono.variable}`}>
+    <html lang="fr" suppressHydrationWarning className={`${jost.variable} ${plexMono.variable}`}>
       <head>
         <script
           dangerouslySetInnerHTML={{

@@ -36,6 +36,17 @@ export function groupCamerasBySite(cameras, groups) {
   return arr;
 }
 
+// Nom du/des site(s) d'une caméra. Sert à IDENTIFIER une caméra sortie de son
+// groupe — dans une liste à plat (« Déjà configurées »), l'entête de site qui
+// lève l'ambiguïté a disparu, or les noms se ressemblent beaucoup d'un site à
+// l'autre (« Camera 01 », « IPCamera 06 »…).
+export function siteLabel(camera, groups) {
+  const nameById = new Map((groups || []).map((g) => [g.id, g.name]));
+  const gids = camera?.group_ids || [];
+  if (!gids.length) return "Sans site";
+  return gids.map((gid) => nameById.get(gid) || `Groupe ${gid}`).join(" · ");
+}
+
 // Statut d'affichage d'une caméra du catalogue. Pour HikCentral, on s'appuie sur
 // hik_status (1=en ligne, 2=hors-ligne au dernier sync) ; sinon sur is_active.
 // Renvoie { tone: "green"|"red"|"muted", label }.

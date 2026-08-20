@@ -19,7 +19,7 @@ from app.models.alerts import Alert, ALERT_NEW, ALERT_ACKNOWLEDGED, ALERT_RESOLV
 from app.models.cameras import Camera
 from app.middleware.auth_middleware import require_viewer, require_user
 from app.services.notification_service import (
-    send_email, send_webhook, email_configured, webhook_configured,
+    send_email, send_webhook, email_configured, webhook_configured, snapshot_local_path,
 )
 
 router = APIRouter()
@@ -29,6 +29,11 @@ logger = logging.getLogger(__name__)
 class NotifyRequest(BaseModel):
     channel: str = "email"     # "email" | "webhook" | "both"
     to: Optional[str] = None   # surcharge facultative du destinataire email
+
+
+class ResolveAllRequest(BaseModel):
+    # None / "all" → toutes les non-résolues ; "new" | "acknowledged" → ce statut seul.
+    status: Optional[str] = None
 
 
 def _serialize(a: Alert, cam_name: Optional[str]) -> dict:
@@ -83,6 +88,30 @@ def alert_stats(
     }
 
 
+@router.post("/resolve-all")
+def resolve_all_alerts(
+    req: Optional[ResolveAllRequest] = None,
+    _current_user=Depends(require_user),
+    session: Session = Depends(get_session),
+):
+    """Action GROUPÉE : marque comme RÉSOLUES toutes les alertes non résolues.
+    Avec `status` (new|acknowledged) : ne traite que ce statut ; sinon tous les
+    non-résolus. Renvoie le nombre d'alertes effectivement résolues.
+
+    Déclaré AVANT les routes /{alert_id}/… : chemin fixe à un segment, aucune
+    collision (les autres exigent un id entier + un second segment)."""
+    stmt = select(Alert).where(Alert.status != ALERT_RESOLVED)
+    if req and req.status and req.status not in ("all", "tous"):
+        stmt = stmt.where(Alert.status == req.status)
+    alerts = session.exec(stmt).all()
+    for a in alerts:
+        a.status = ALERT_RESOLVED
+        session.add(a)
+    if alerts:
+        session.commit()
+    return {"resolved": len(alerts)}
+
+
 @router.post("/{alert_id}/acknowledge")
 def acknowledge_alert(
     alert_id: int,
@@ -132,6 +161,7 @@ def notify_alert(
     if not alert:
         raise HTTPException(status_code=404, detail="Alerte non trouvée.")
 
+    snap_path = snapshot_local_path(alert.snapshot_url)
     subject = f"[Osirion] Alerte — {alert.kind} : {alert.label}"
     body = (
         "Alerte Osirion\n\n"
@@ -141,6 +171,7 @@ def notify_alert(
         f"Caméra  : {alert.camera_id or '—'}\n"
         f"Date    : {alert.created_at}\n"
         f"Statut  : {alert.status}\n"
+        f"Capture : {'jointe à cet email' if snap_path else '—'}\n"
     )
     payload = {
         "source": "osirion", "alert_id": alert.id, "kind": alert.kind,
@@ -154,7 +185,7 @@ def notify_alert(
 
     results, ok_channels = [], []
     if do_email:
-        ok, msg = send_email(subject, body, to=req.to)
+        ok, msg = send_email(subject, body, to=req.to, attachment_path=snap_path)
         results.append({"channel": "email", "ok": ok, "message": msg})
         if ok:
             ok_channels.append("email")

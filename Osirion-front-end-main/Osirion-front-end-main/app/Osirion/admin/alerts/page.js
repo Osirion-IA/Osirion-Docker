@@ -6,9 +6,10 @@
  * (snapshot = boîtes anonymes). Données /api/alerts (+ stats, actions).
  */
 import { useState, useEffect, useCallback } from "react";
-import { Bell, Check, Archive, Send, Inbox, ChevronLeft, ChevronRight } from "lucide-react";
+import { Bell, Check, Archive, Send, Inbox, ChevronLeft, ChevronRight, CheckCheck } from "lucide-react";
 import OsShell from "../_osirion/OsShell";
 import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
+import { useAuth } from "../AuthContext";
 
 const STATUS_META = {
   new: { label: "Nouvelle", color: "var(--os-red)" },
@@ -39,7 +40,10 @@ export default function AlertsPage() {
   const [page, setPage] = useState(0);
   const [selectedId, setSelectedId] = useState(null);
   const [busyId, setBusyId] = useState(null);
+  const [busyBulk, setBusyBulk] = useState(false);
   const notifyAvailable = !!(stats?.notifications?.email || stats?.notifications?.webhook);
+  const user = useAuth();
+  const canResolve = ["admin", "user"].includes(user?.role || "viewer");
 
   const loadAlerts = useCallback(async () => {
     setLoading(true);
@@ -70,6 +74,25 @@ export default function AlertsPage() {
     } finally { setBusyId(null); }
   };
 
+  // Résolution GROUPÉE : selon le filtre courant, on résout les nouvelles, les
+  // acquittées, ou toutes les non-résolues (« Toutes »). Le décompte cible vient
+  // des stats globales (pas de la page affichée) → un seul appel suffit.
+  const bulkStatus = statusFilter === "new" ? "new" : statusFilter === "acknowledged" ? "acknowledged" : null;
+  const nNew = stats?.new ?? 0, nAck = stats?.acknowledged ?? 0;
+  const bulkTarget = bulkStatus === "new" ? nNew : bulkStatus === "acknowledged" ? nAck : nNew + nAck;
+
+  const resolveAll = async () => {
+    if (!bulkTarget) return;
+    if (!window.confirm(`Marquer ${bulkTarget} alerte${bulkTarget > 1 ? "s" : ""} comme résolue${bulkTarget > 1 ? "s" : ""} ?`)) return;
+    setBusyBulk(true);
+    try {
+      const res = await fetchWithRefresh("/api/alerts/resolve-all", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: bulkStatus }),
+      });
+      if (res && res.ok) { setSelectedId(null); setPage(0); await Promise.all([loadAlerts(), loadStats()]); }
+    } finally { setBusyBulk(false); }
+  };
+
   const c = (k) => (stats ? stats[k] ?? 0 : 0);
   const FILTERS = [
     { id: "tous", label: "Toutes", n: c("total") },
@@ -90,13 +113,23 @@ export default function AlertsPage() {
             <h1 className="text-[22px] font-bold text-os-t1">Centre d&apos;alertes</h1>
             <p className="text-[13px] text-os-t3 mt-0.5">Traitez les alertes déclenchées par le systeme</p>
           </div>
-          <div className="inline-flex items-center gap-1 rounded-os border border-os-border bg-os-card p-1">
-            {FILTERS.map((f) => (
-              <button key={f.id} onClick={() => { setStatusFilter(f.id); setPage(0); setSelectedId(null); }}
-                className={`rounded-os px-3 py-1.5 text-[13px] font-medium inline-flex items-center gap-1.5 ${statusFilter === f.id ? "bg-os-cta text-white" : "text-os-t3 hover:text-os-t1"}`}>
-                {f.label} <span className="os-num text-[11px] opacity-70">{f.n}</span>
+          <div className="flex items-center gap-2">
+            {canResolve && statusFilter !== "resolved" && bulkTarget > 0 && (
+              <button onClick={resolveAll} disabled={busyBulk}
+                title={statusFilter === "tous" ? "Résoudre toutes les alertes non résolues" : `Résoudre les alertes « ${STATUS_META[statusFilter]?.label || statusFilter} »`}
+                className="px-3 py-2 rounded-os border border-os-border bg-os-card text-[13px] font-semibold text-os-t2 hover:text-os-t1 inline-flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed">
+                <CheckCheck className="h-4 w-4" /> {busyBulk ? "Résolution…" : "Tout résoudre"}
+                <span className="os-num text-[11px] opacity-70">{bulkTarget}</span>
               </button>
-            ))}
+            )}
+            <div className="inline-flex items-center gap-1 rounded-os border border-os-border bg-os-card p-1">
+              {FILTERS.map((f) => (
+                <button key={f.id} onClick={() => { setStatusFilter(f.id); setPage(0); setSelectedId(null); }}
+                  className={`rounded-os px-3 py-1.5 text-[13px] font-medium inline-flex items-center gap-1.5 ${statusFilter === f.id ? "bg-os-primary text-os-on-primary" : "text-os-t3 hover:text-os-t1"}`}>
+                  {f.label} <span className="os-num text-[11px] opacity-70">{f.n}</span>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
@@ -154,7 +187,9 @@ export default function AlertsPage() {
             )}
           </div>
 
-          <div className="xl:sticky xl:top-[68px] h-fit">
+          {/* Collé en haut du viewport (16 px de marge) : il n'y a plus de topbar
+              de 52 px à compenser. */}
+          <div className="xl:sticky xl:top-4 h-fit">
             {!selected ? (
               <div className="rounded-os-lg border border-os-border bg-os-card py-16 text-center text-[13px] text-os-t3">Sélectionnez une alerte.</div>
             ) : (

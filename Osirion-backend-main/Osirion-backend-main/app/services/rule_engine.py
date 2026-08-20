@@ -27,7 +27,7 @@ from sqlmodel import Session, select
 from app.models.rules import Rule
 from app.models.alerts import Alert
 from app.models.events import Event
-from app.services.notification_service import send_email, send_webhook
+from app.services.notification_service import send_email, send_webhook, snapshot_local_path
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -225,6 +225,7 @@ def evaluate_event(session: Session, event: Event) -> None:
 
 
 def _send_notifications(session: Session, rule: Rule, alert: Alert, channels) -> None:
+    snap_path = snapshot_local_path(alert.snapshot_url)
     subject = f"[Osirion] {alert.severity.upper()} · {alert.kind} — {alert.label}"
     body = (
         f"Règle    : {rule.name}\n"
@@ -233,11 +234,12 @@ def _send_notifications(session: Session, rule: Rule, alert: Alert, channels) ->
         f"Détail   : {alert.label}\n"
         f"Caméra   : {alert.camera_id}\n"
         f"Date     : {alert.created_at}\n"
+        f"Capture  : {'jointe à cet email' if snap_path else '—'}\n"
     )
     sent = []
     try:
         if "email" in channels:
-            ok, _ = send_email(subject, body)
+            ok, _ = send_email(subject, body, attachment_path=snap_path)
             if ok:
                 sent.append("email")
         if "webhook" in channels:

@@ -21,7 +21,6 @@ load_dotenv()
 FRAME_WIDTH = int(os.getenv('FRAME_WIDTH', '1280'))
 FRAME_HEIGHT = int(os.getenv('FRAME_HEIGHT', '720'))
 FRAME_SIZE = (FRAME_WIDTH, FRAME_HEIGHT)
-PROCESS_EVERY_N_FRAME = 3         # 1 frame sur N traitée (allège le GPU à N caméras)
 FRAME_QUEUE_MAXSIZE = 4           # Buffer pour absorber les pics GPU
 FRAME_QUEUE_TIMEOUT = 0.1         # Timeout de récupération d'une frame (secondes)
 
@@ -31,12 +30,26 @@ FRAME_QUEUE_TIMEOUT = 0.1         # Timeout de récupération d'une frame (secon
 # Implémentation AUTONOME (core/trackers/oc_sort.py) ; l'adaptateur
 # OCSortTrackerAdapter préserve l'API update(dets, img_info, img_size).
 OC_SORT_ARGS = _types.SimpleNamespace(
-    det_thresh=0.4,       # Seuil des détections haute confiance
+    # Seuil des détections HAUTE confiance : crée/associe les tracks. Aligné sur
+    # PERSON_DETECTION_CONFIDENCE (même env) → cohérent avec ce que YOLO produit.
+    # Les détections ENTRE PERSON_TRACK_MIN_CONFIDENCE et ce seuil ne créent pas de
+    # track mais servent à MAINTENIR les tracks occlus (récupération BYTE, ci-dessous).
+    det_thresh=float(os.getenv('PERSON_DETECTION_CONFIDENCE', '0.4')),
     max_age=30,           # Frames avant suppression d'un track perdu
     iou_threshold=0.3,    # Seuil d'association IoU
     delta_t=3,            # Fenêtre de look-back pour l'estimation de vitesse
     inertia=0.2,          # Poids du terme d'inertie/momentum (OCM)
     use_byte=True,        # Récupération BYTE des détections faibles
+    # Plancher des détections FAIBLES exploitées par BYTE. DOIT valoir le seuil
+    # envoyé au détecteur (PERSON_TRACK_MIN_CONFIDENCE) : sinon les boîtes sous ce
+    # plancher sont calculées par YOLO puis jetées par le tracker (réglage sans effet).
+    low_thresh=float(os.getenv('PERSON_TRACK_MIN_CONFIDENCE', '0.1')),
+    # Sursis de publication : un track confirmé mais non apparié reste publié
+    # pendant N frames à sa DERNIÈRE POSITION OBSERVÉE (drapeau `predicted`).
+    # Sans lui, une occlusion d'UNE frame retirait la personne du Scene Model
+    # pendant 3 frames (le tracker exigeait à nouveau min_hits appariements) →
+    # occupation clignotante et franchissements perdus. 0 = comportement historique.
+    max_coast=int(os.getenv('TRACK_COAST_FRAMES', '8')),
 )
 
 # ----------------------
@@ -48,6 +61,18 @@ OC_SORT_ARGS = _types.SimpleNamespace(
 PERSON_MODEL_PATH = os.getenv('PERSON_MODEL_PATH', 'yolo26n.pt')
 PERSON_DETECTION_CONFIDENCE = float(os.getenv('PERSON_DETECTION_CONFIDENCE', '0.4'))
 PERSON_YOLO_HALF = os.getenv('PERSON_YOLO_HALF', 'true').lower() == 'true'
+# Plancher de confiance des détections ENVOYÉES AU TRACKER (bien plus bas que
+# PERSON_DETECTION_CONFIDENCE). Objectif : nourrir la récupération BYTE d'OC-SORT,
+# conçue pour MAINTENIR un track occlus grâce aux détections faibles (0.1–seuil).
+# Sans ce plancher bas, BYTE est « à jeun » et une personne masquée 1–2 s disparaît
+# du comptage (sous-comptage des files). Ces détections faibles ne CRÉENT jamais de
+# track (réservé au seuil haut) → gain de recall sans explosion de faux positifs.
+PERSON_TRACK_MIN_CONFIDENCE = float(os.getenv('PERSON_TRACK_MIN_CONFIDENCE', '0.1'))
+# Résolution d'INFÉRENCE YOLO (côté long, letterbox). Vide/0 = défaut Ultralytics
+# (640) → rétro-compatible. La monter (960, 1280…) augmente fortement le recall sur
+# les personnes petites/lointaines (fond de file), au prix d'un coût GPU ~quadratique
+# en la résolution. À arbitrer selon le budget GPU (↔ nombre de caméras actives).
+PERSON_YOLO_IMGSZ = int(os.getenv('PERSON_YOLO_IMGSZ', '0')) or None
 
 # Filtre qualité frame : variance de la transformée de Laplace sur la luminance.
 # Une frame trop floue (< seuil) est sautée (pas d'inférence, overlay conservé).
@@ -69,6 +94,26 @@ CROWD_MIN_SECONDS = float(os.getenv('CROWD_MIN_SECONDS', '3.0'))
 OCCUPANCY_EMIT_INTERVAL = float(os.getenv('OCCUPANCY_EMIT_INTERVAL', '2.0'))
 # Temps de présence minimal (s) pour émettre un ZONE_DWELL (filtre les passages éclairs).
 DWELL_MIN_SECONDS = float(os.getenv('DWELL_MIN_SECONDS', '1.0'))
+# Délai de CONFIRMATION (s) avant de compter une personne dans une zone : elle doit
+# y rester SANS INTERRUPTION pendant ce délai. Sans lui, l'appartenance était
+# instantanée — un simple passant gonflait l'occupation écrite en base et un flux
+# continu de passants déclenchait de faux attroupements (CROWD_MIN_SECONDS ne
+# regarde que le compte AGRÉGÉ, pas la durée de présence de CHAQUE personne).
+# Défaut de repli quand la zone ne fixe pas son propre `min_presence_s` ;
+# 0 = comptage immédiat (comportement d'avant).
+ZONE_MIN_PRESENCE_SECONDS = float(os.getenv('ZONE_MIN_PRESENCE_SECONDS', '5.0'))
+# Fenêtre (s) de LISSAGE de l'occupation : la valeur publiée est la médiane des
+# comptages de la fenêtre. Un raté de détection isolé n'écrit donc plus un point
+# faux dans l'historique dont vivent toutes les stats. 0 = valeur instantanée.
+OCCUPANCY_SMOOTH_SECONDS = float(os.getenv('OCCUPANCY_SMOOTH_SECONDS', '1.5'))
+# Délai (s) avant de CONFIRMER une sortie de zone. Un track qui revient dans ce
+# délai poursuit sa présence en cours : une occlusion ne coupe plus un temps
+# d'attente en deux (ce qui le sous-estimait mécaniquement).
+DWELL_EXIT_GRACE_SECONDS = float(os.getenv('DWELL_EXIT_GRACE_SECONDS', '2.0'))
+# Survie (frames) de l'état par track (âge, côté engagé d'une ligne) après sa
+# dernière apparition. Cet état était auparavant purgé dès UNE frame d'absence :
+# le track revenait « côté inconnu » et son franchissement n'était jamais compté.
+TRACK_STATE_TTL_FRAMES = int(os.getenv('TRACK_STATE_TTL_FRAMES', '90'))
 # ── Robustesse du comptage de franchissement de ligne (anti-jitter / ID-switch) ──
 # LINE_CROSS_MARGIN : bande morte perpendiculaire (unités image normalisées [0,1]).
 #   Le côté « engagé » d'un track ne bascule qu'au-delà de cette marge de part et
