@@ -52,6 +52,7 @@ class SurveillanceSystem:
         # Sérialise les ajouts/retraits/réconciliations de caméras (démarrage + supervision).
         self.camera_lock = threading.Lock()
         self._supervisor_thread = None
+        self._health_monitor_thread = None
 
         self.threads = []
         self.web_server = None
@@ -329,6 +330,28 @@ class SurveillanceSystem:
                     )
                     self._remove_camera(cam_id)
                     self._add_camera(desired[cam_id])
+                    continue
+
+                # Les seuils/régimes d'effectif sont de la configuration métier :
+                # les appliquer à chaud sans couper le flux vidéo.
+                processor = self.camera_processors.get(cam_id)
+                if processor is not None:
+                    try:
+                        processor.update_camera_config(desired[cam_id])
+                    except Exception:
+                        logger.warning(
+                            f"Caméra {cam_id} : mise à jour de la politique "
+                            "d'effectif impossible — nouvel essai au prochain cycle.",
+                            exc_info=True,
+                            extra={'camera_id': cam_id},
+                        )
+
+            # Met aussi à jour les métadonnées exposées (nom, emplacement,
+            # politique) par remplacement atomique de la liste.
+            running = set(self.camera_stop_events)
+            self.active_cameras = [
+                desired[camera_id] for camera_id in desired_ids if camera_id in running
+            ]
 
     def _supervise_loop(self) -> None:
         """Boucle de supervision : réconcilie périodiquement avec le backend."""
@@ -341,6 +364,30 @@ class SurveillanceSystem:
             except Exception:
                 logger.error("Erreur dans la boucle de supervision des caméras", exc_info=True)
         logger.info("Supervision des caméras arrêtée.")
+
+    def _health_monitor_loop(self) -> None:
+        """Propage rapidement la disponibilité vidéo aux machines métier."""
+        interval = max(
+            0.5,
+            float(getattr(self.config, "CAMERA_HEALTH_DECISION_INTERVAL", 2.0)),
+        )
+        logger.info(
+            "Décisions liées à la santé caméra actives (toutes les %.1fs).",
+            interval,
+        )
+        while not self.stop_event.is_set():
+            now = time.time()
+            try:
+                for row in self.camera_health():
+                    processor = self.camera_processors.get(row["id"])
+                    if processor is not None:
+                        processor.update_camera_health(row.get("state"), now=now)
+            except Exception:
+                logger.error(
+                    "Erreur dans la propagation de santé caméra", exc_info=True
+                )
+            if self.stop_event.wait(interval):
+                break
 
     def _measure_sampler_loop(self) -> None:
         """Échantillonneur de MESURE (chapitre 4) : émet périodiquement un
@@ -430,6 +477,13 @@ class SurveillanceSystem:
             self._supervisor_thread.start()
         else:
             logger.info("Supervision des caméras désactivée (CAMERA_REFRESH_SECONDS=0).")
+
+        self._health_monitor_thread = threading.Thread(
+            target=self._health_monitor_loop,
+            daemon=True,
+            name="camera-health-decisions",
+        )
+        self._health_monitor_thread.start()
 
         # Échantillonneur de MESURE (chapitre 4) — démarré seulement si activé.
         if get_measurement().enabled:

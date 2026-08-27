@@ -13,13 +13,76 @@ from app.database import get_session
 from app.models.zones import Zone, CountLine
 from app.models.cameras import Camera
 from app.models.users import User
+from app.models.work_schedule import WorkSchedule
 from app.schemas.zones_schema import (
-    ZoneCreate, ZoneUpdate, ZoneRead,
+    ZoneCreate, ZoneUpdate, ZoneRead, ZoneScheduleInline,
     CountLineCreate, CountLineUpdate, CountLineRead,
 )
 from app.middleware.auth_middleware import require_viewer, can_manage_cameras
 
 router = APIRouter()
+
+
+def _validate_schedule_assignment(
+    session: Session, kind: str, schedule_id: Optional[int]
+) -> None:
+    """Protège l'invariant métier d'une zone de présence.
+
+    L'UI applique déjà cette règle, mais le Core consomme aussi cette API
+    directement : l'invariant doit donc vivre côté serveur. Une zone `presence`
+    sans régime actif donnerait l'impression d'être surveillée alors que le Core
+    la suspend silencieusement.
+    """
+    if kind == "presence":
+        if schedule_id is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Une zone « Poste d'agent » exige un régime horaire actif.",
+            )
+        schedule = session.get(WorkSchedule, schedule_id)
+        if not schedule:
+            raise HTTPException(status_code=404, detail="Régime horaire non trouvé.")
+        if not schedule.is_active:
+            raise HTTPException(
+                status_code=409,
+                detail="Ce régime horaire est désactivé. Activez-le ou choisissez-en un autre.",
+            )
+    elif schedule_id is not None:
+        raise HTTPException(
+            status_code=422,
+            detail="Un régime horaire ne peut être affecté qu'à une zone « Poste d'agent ».",
+        )
+
+
+def _schedules_for(session: Session, zones: List[Zone]) -> dict:
+    """{id: WorkSchedule} pour les zones fournies, en UNE requête (pas de N+1).
+
+    Seuls les régimes ACTIFS sont renvoyés : désactiver un régime doit suspendre
+    la surveillance des postes qu'il couvre, sans avoir à toucher aux zones.
+    """
+    ids = {z.work_schedule_id for z in zones if z.work_schedule_id is not None}
+    if not ids:
+        return {}
+    rows = session.exec(
+        select(WorkSchedule).where(
+            WorkSchedule.id.in_(ids), WorkSchedule.is_active == True  # noqa: E712
+        )
+    ).all()
+    return {s.id: s for s in rows}
+
+
+def _zone_read(zone: Zone, schedules: dict) -> ZoneRead:
+    """Zone + régime horaire résolu, prêt pour le Core comme pour l'UI."""
+    s = schedules.get(zone.work_schedule_id) if zone.work_schedule_id else None
+    return ZoneRead(
+        **zone.model_dump(),
+        schedule=(
+            ZoneScheduleInline(
+                id=s.id, name=s.name, timezone=s.timezone,
+                segments=s.segments, absence_tolerance_s=s.absence_tolerance_s,
+            ) if s else None
+        ),
+    )
 
 
 def _camera_or_404(session: Session, camera_id: int) -> Camera:
@@ -55,7 +118,9 @@ def list_zones(
     stmt = select(Zone)
     if camera_id is not None:
         stmt = stmt.where(Zone.camera_id == camera_id)
-    return session.exec(stmt).all()
+    zones = session.exec(stmt).all()
+    schedules = _schedules_for(session, zones)
+    return [_zone_read(z, schedules) for z in zones]
 
 
 @router.post("/add", response_model=ZoneRead, status_code=201)
@@ -65,12 +130,13 @@ def add_zone(
     session: Session = Depends(get_session),
 ):
     camera = _camera_or_404(session, payload.camera_id)
+    _validate_schedule_assignment(session, payload.kind, payload.work_schedule_id)
     zone = Zone(**payload.model_dump())
     session.add(zone)
     _activate_on_first_config(session, camera)  # HikCentral : 1re config → traitée
     session.commit()
     session.refresh(zone)
-    return zone
+    return _zone_read(zone, _schedules_for(session, [zone]))
 
 
 @router.put("/{zone_id}", response_model=ZoneRead)
@@ -83,13 +149,17 @@ def update_zone(
     zone = session.get(Zone, zone_id)
     if not zone:
         raise HTTPException(status_code=404, detail="Zone non trouvée.")
-    for key, value in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    final_kind = data.get("kind", zone.kind)
+    final_sid = data.get("work_schedule_id", zone.work_schedule_id)
+    _validate_schedule_assignment(session, final_kind, final_sid)
+    for key, value in data.items():
         setattr(zone, key, value)
     zone.updated_at = datetime.utcnow()
     session.add(zone)
     session.commit()
     session.refresh(zone)
-    return zone
+    return _zone_read(zone, _schedules_for(session, [zone]))
 
 
 @router.delete("/{zone_id}")

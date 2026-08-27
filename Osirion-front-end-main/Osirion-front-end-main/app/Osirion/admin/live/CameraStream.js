@@ -30,7 +30,7 @@ function waitIceGatheringComplete(pc, timeoutMs) {
 // streamPath : nom du chemin MediaMTX à lire (défaut `cam<id>`). Permet de lire un
 // chemin de PRÉVISUALISATION `preview<id>` pour une caméra du catalogue non encore
 // traitée (cf. éditeur de Zones).
-export default function CameraStream({ cameraId, streamPath, onLatencyUpdate, showStats = true }) {
+export default function CameraStream({ cameraId, streamPath, onLatencyUpdate, showStats = true, showPresenceZones = true }) {
     const videoRef = useRef(null);
     const canvasRef = useRef(null);
     const pcRef = useRef(null);
@@ -38,6 +38,7 @@ export default function CameraStream({ cameraId, streamPath, onLatencyUpdate, sh
     const [status, setStatus] = useState('connecting');
     const [latency, setLatency] = useState(0);
     const [fps, setFps] = useState(0);
+    const [staffing, setStaffing] = useState(null);
 
     // ── Vidéo WebRTC (WHEP) depuis MediaMTX ──────────────────────────────────
     useEffect(() => {
@@ -133,6 +134,7 @@ export default function CameraStream({ cameraId, streamPath, onLatencyUpdate, sh
 
         socket.on('metadata', (data) => {
             if (data.camera_id !== cameraId) return;
+            setStaffing(data.staffing?.enabled ? data.staffing : null);
             const canvas = canvasRef.current;
             if (!canvas) return;
 
@@ -160,6 +162,55 @@ export default function CameraStream({ cameraId, streamPath, onLatencyUpdate, sh
             const fontPx = Math.max(12, Math.round(H / 24));
             ctx.font = `${fontPx}px ui-sans-serif, system-ui, sans-serif`;
             ctx.textBaseline = 'top';
+
+            // Zones « poste d'agent » : le polygone et l'état métier proviennent
+            // exactement de la même décision que /api/staffing. Cet overlay sert
+            // donc de contrôle terrain, pas de simple décoration côté navigateur.
+            if (showPresenceZones) {
+                const zoneColors = {
+                    occupied: '#22c55e', confirming: '#3b82f6',
+                    vacancy_pending: '#f59e0b', vacant: '#ef4444',
+                    off_schedule: '#64748b', unavailable: '#6b7280',
+                    unconfigured: '#6b7280', initializing: '#06b6d4',
+                };
+                const zoneLabels = {
+                    occupied: 'occupé', confirming: 'confirmation',
+                    vacancy_pending: 'vacance observée', vacant: 'vacant',
+                    off_schedule: 'hors horaire', unavailable: 'indisponible',
+                    unconfigured: 'non configuré', initializing: 'initialisation',
+                };
+                for (const zone of (data.presence_zones || [])) {
+                    const points = Array.isArray(zone.polygon) ? zone.polygon : [];
+                    if (points.length < 3) continue;
+                    const color = zoneColors[zone.state] || '#06b6d4';
+                    ctx.save();
+                    ctx.beginPath();
+                    points.forEach((point, index) => {
+                        const px = Number(point?.[0]) * W;
+                        const py = Number(point?.[1]) * H;
+                        if (index === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+                    });
+                    ctx.closePath();
+                    ctx.fillStyle = `${color}20`;
+                    ctx.fill();
+                    ctx.strokeStyle = color;
+                    ctx.lineWidth = Math.max(2, Math.round(W / 280));
+                    ctx.setLineDash(zone.state === 'unavailable' || zone.state === 'off_schedule' ? [8, 6] : []);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+
+                    const anchorX = Math.max(0, Math.min(W - 10, Number(points[0]?.[0]) * W));
+                    const anchorY = Math.max(0, Number(points[0]?.[1]) * H - fontPx - 10);
+                    const count = zone.state === 'occupied' ? ` · ${zone.confirmed_count || 1}` : '';
+                    const label = `${zone.zone_name || 'Poste'} · ${zoneLabels[zone.state] || zone.state}${count}`;
+                    const labelW = Math.min(W - anchorX, ctx.measureText(label).width + 10);
+                    ctx.fillStyle = `${color}e6`;
+                    ctx.fillRect(anchorX, anchorY, labelW, fontPx + 8);
+                    ctx.fillStyle = '#fff';
+                    ctx.fillText(label, anchorX + 5, anchorY + 4, Math.max(0, labelW - 10));
+                    ctx.restore();
+                }
+            }
 
             for (const det of (data.detections || [])) {
                 const [x1, y1, x2, y2] = det.bbox;
@@ -198,7 +249,7 @@ export default function CameraStream({ cameraId, streamPath, onLatencyUpdate, sh
                 ctx && ctx.clearRect(0, 0, canvas.width, canvas.height);
             }
         };
-    }, [cameraId]);
+    }, [cameraId, showPresenceZones]);
 
     const latencyColor =
         latency === 0 ? 'text-gray-400' :
@@ -226,6 +277,23 @@ export default function CameraStream({ cameraId, streamPath, onLatencyUpdate, sh
                 height={480}
                 className="absolute inset-0 w-full h-full pointer-events-none"
             />
+
+            {/* Effectif anonyme dans les zones personnel, fourni par le Core. */}
+            {staffing && (
+                <div className={`absolute top-3 right-3 z-10 rounded-md px-2.5 py-1.5 backdrop-blur-sm text-xs font-semibold ${
+                    staffing.low
+                        ? 'bg-red-600/90 text-white'
+                        : staffing.below_minimum
+                            ? 'bg-amber-500/90 text-black'
+                        : staffing.in_work
+                            ? 'bg-black/65 text-white'
+                            : 'bg-black/50 text-white/60'
+                }`}>
+                    <span className="font-mono">{staffing.count}/{staffing.maximum}</span>
+                    <span className="ml-1.5">agents</span>
+                    <span className="ml-1.5 text-[10px] opacity-75">min {staffing.minimum}</span>
+                </div>
+            )}
 
             {/* État connexion */}
             {status !== 'live' && (

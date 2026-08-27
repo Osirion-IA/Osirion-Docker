@@ -5,6 +5,7 @@ import {
   Gauge, LayoutGrid, Bell, BarChart3, ListOrdered, FileText,
   Shapes, SlidersHorizontal, Video, Layers, Activity,
   History, Server, Users, ScrollText, Settings, Info,
+  UserRoundCheck,
 } from "lucide-react";
 
 export const SECTIONS = [
@@ -13,6 +14,7 @@ export const SECTIONS = [
     kicker: "Temps réel", title: "Supervision",
     screens: [
       { label: "Cockpit", href: "/Osirion/admin/cockpit", icon: Gauge },
+      { label: "Présence agents", href: "/Osirion/admin/presence", icon: UserRoundCheck },
       { label: "Mur de caméras", href: "/Osirion/admin/live", icon: LayoutGrid },
       { label: "Centre d'alertes", href: "/Osirion/admin/alerts", icon: Bell, badge: "alerts" },
     ],

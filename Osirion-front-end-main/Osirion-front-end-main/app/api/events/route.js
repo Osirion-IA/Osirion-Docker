@@ -11,11 +11,12 @@ export async function GET(req) {
   if (!token) return NextResponse.json({ message: "Non authentifié." }, { status: 401 });
 
   try {
-    const { searchParams } = new URL(req.url);
-    const limit = searchParams.get("limit") || "50";
+    const url = new URL(req.url);
+    if (!url.searchParams.has("limit")) url.searchParams.set("limit", "50");
+    const query = url.searchParams.toString();
 
     const [eventsRes, camerasRes] = await Promise.all([
-      fetch(`${BACKEND}/events/?limit=${limit}`, {
+      fetch(`${BACKEND}/events/?${query}`, {
         headers: { Authorization: `Bearer ${token}` },
       }),
       fetch(`${BACKEND}/cameras/`, {

@@ -14,6 +14,12 @@ import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
 
 const PERIODS = [{ value: 7, label: "7j" }, { value: 30, label: "30j" }, { value: 90, label: "90j" }];
 const fmtWait = (s) => (!s ? "0 s" : s < 60 ? `${Math.round(s)} s` : `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`);
+const fmtDuration = (s) => {
+  s = Math.max(0, Math.round(Number(s) || 0));
+  if (s < 3600) return fmtWait(s);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return `${h} h${m ? ` ${m} min` : ""}`;
+};
 
 // PDF de synthèse (résumé décisionnel).
 function printSynthesis(sections, meta) {
@@ -56,14 +62,16 @@ export default function ReportsPage() {
     const fq = f ? `&${f}` : "";
     const days = Math.min(period, 90);
     try {
-      const [foot, qa, qp, inc, cs] = await Promise.all([
-        fetchWithRefresh(`/api/analytics/footfall?days=${days}${camId ? `&camera_id=${camId}` : ""}`).then((r) => (r?.ok ? r.json() : null)),
+      const [foot, qa, qp, inc, cs, absence, staffing] = await Promise.all([
+        fetchWithRefresh(`/api/analytics/footfall?days=${days}${fq}`).then((r) => (r?.ok ? r.json() : null)),
         fetchWithRefresh(`/api/analytics/queue-affluence?days=${days}${fq}`).then((r) => (r?.ok ? r.json() : null)),
         fetchWithRefresh(`/api/analytics/queue-performance?days=${days}${fq}`).then((r) => (r?.ok ? r.json() : null)),
-        fetchWithRefresh(`/api/analytics/incidents?days=${days}`).then((r) => (r?.ok ? r.json() : null)),
+        fetchWithRefresh(`/api/analytics/incidents?days=${days}${fq}`).then((r) => (r?.ok ? r.json() : null)),
         fetchWithRefresh(`/api/camera-status/stats?days=${days}${fq}`).then((r) => (r?.ok ? r.json() : null)),
+        fetchWithRefresh(`/api/analytics/post-absence?days=${days}${fq}`).then((r) => (r?.ok ? r.json() : null)),
+        fetchWithRefresh(`/api/analytics/staffing?days=${days}${fq}`).then((r) => (r?.ok ? r.json() : null)),
       ]);
-      setSyn({ foot, qa, qp, inc, cs });
+      setSyn({ foot, qa, qp, inc, cs, absence, staffing });
     } finally { setLoading(false); }
   }, [period, groupId, camId]);
   useEffect(() => { load(); }, [load]);
@@ -73,7 +81,7 @@ export default function ReportsPage() {
 
   const sections = useMemo(() => {
     if (!syn) return [];
-    const { foot, qa, qp, inc, cs } = syn;
+    const { foot, qa, qp, inc, cs, absence, staffing } = syn;
     const topQ = qp?.queues?.[0];
     const topA = qp?.agencies?.[0];
     return [
@@ -89,6 +97,20 @@ export default function ReportsPage() {
         ["Attente moyenne (file la plus lente)", topQ ? fmtWait(topQ.wait_avg_s) : "—"],
         ["Attente longue — 9 clients sur 10 en dessous", topQ ? fmtWait(topQ.wait_p90_s) : "—"],
         ["Agence la plus lente", topA ? `${topA.site} — en moyenne ${fmtWait(topA.wait_avg_s)}, 9 clients sur 10 sous ${fmtWait(topA.wait_p90_s)}` : "—"],
+      ] },
+      { title: "Présence aux postes", rows: [
+        ["Postes vacants actuellement", absence?.current_vacant ?? 0],
+        ["Épisodes d'absence clôturés", absence?.closed_episodes ?? 0],
+        ["Temps d'absence cumulé", fmtDuration(absence?.total_absence_s || 0)],
+        ["Durée moyenne d'une absence", fmtDuration(absence?.avg_absence_s || 0)],
+        ["Durée maximale", fmtDuration(absence?.max_absence_s || 0)],
+      ] },
+      { title: "Effectif agents", rows: [
+        ["Caméras configurées", staffing?.configured_cameras ?? 0],
+        ["Sous-effectifs actuellement", staffing?.current_shortages ?? 0],
+        ["Épisodes clôturés", staffing?.closed_episodes ?? 0],
+        ["Temps de sous-effectif cumulé", fmtDuration(staffing?.total_shortage_s || 0)],
+        ["Durée moyenne", fmtDuration(staffing?.avg_shortage_s || 0)],
       ] },
       { title: "Incidents (global)", rows: [
         ["Alertes", inc?.alerts_total ?? 0],

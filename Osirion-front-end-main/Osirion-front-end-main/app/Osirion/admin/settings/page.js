@@ -2,12 +2,14 @@
 
 /**
  * Paramètres — section Configurer (thème clair). Général / Sécurité / Détection.
- * Persistance locale (siteName, sessionTimeout, passwordMinLength). Admin only.
+ * Persistance locale (siteName, sessionTimeout, passwordMinLength). Les réglages
+ * système restent admin ; les opérateurs peuvent gérer les régimes horaires.
  */
 import { useState, useEffect, useCallback } from "react";
 import { Settings as Cog, Shield, Target, CheckCircle2, Save, RotateCcw, Cctv, Plug, Mail, Send } from "lucide-react";
 import OsShell from "../_osirion/OsShell";
 import { PageHeader, Card, Segmented } from "../_osirion/ui";
+import WorkSchedules from "../_osirion/WorkSchedules";
 import { useAuth } from "../AuthContext";
 import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
 
@@ -17,7 +19,9 @@ const PERSIST_KEYS = ["siteName", "sessionTimeout", "passwordMinLength"];
 export default function SettingsPage() {
   const user = useAuth();
   const isAdmin = user?.role === "admin";
+  const isOperator = user?.role === "user";
   const [tab, setTab] = useState("general");
+  const effectiveTab = isOperator ? "horaires" : tab;
   const [dirty, setDirty] = useState(false);
   const [saved, setSaved] = useState(false);
   const [settings, setSettings] = useState({ siteName: "Qwiper Sentinel", sessionTimeout: 30, passwordMinLength: 8 });
@@ -155,7 +159,7 @@ export default function SettingsPage() {
   const inp = "w-full px-3.5 py-2.5 rounded-os border border-os-border bg-os-card text-[14px] text-os-t1 outline-none focus:border-os-t3";
   const lbl = "block text-[13px] font-semibold text-os-t1 mb-1.5";
 
-  if (user && !isAdmin) {
+  if (user && !isAdmin && !isOperator) {
     return <OsShell><div className="p-6"><Card className="p-10 text-center"><p className="text-[14px] text-os-t2">Accès réservé aux administrateurs.</p></Card></div></OsShell>;
   }
 
@@ -165,7 +169,7 @@ export default function SettingsPage() {
         <PageHeader
           title="Paramètres"
           subtitle="Configuration du système Qwiper Sentinel"
-          actions={["hikcentral", "notifications"].includes(tab) ? null : (
+          actions={!isAdmin || ["hikcentral", "notifications", "horaires"].includes(effectiveTab) ? null : (
             <>
               {dirty && <span className="text-[12px] text-os-amber inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-os-amber os-anim-pulse" /> Non enregistré</span>}
               {saved && <span className="text-[12px] text-os-green inline-flex items-center gap-1.5"><CheckCircle2 className="h-4 w-4" /> Enregistré</span>}
@@ -176,10 +180,10 @@ export default function SettingsPage() {
         />
 
         <div className="mb-5">
-          <Segmented value={tab} onChange={setTab} options={[{ value: "general", label: "Général" }, { value: "security", label: "Sécurité" }, { value: "detection", label: "Détection" }, { value: "notifications", label: "Notifications" }, { value: "hikcentral", label: "HikCentral" }]} />
+          <Segmented value={effectiveTab} onChange={setTab} options={isAdmin ? [{ value: "general", label: "Général" }, { value: "security", label: "Sécurité" }, { value: "detection", label: "Détection" }, { value: "horaires", label: "Régimes horaires" }, { value: "notifications", label: "Notifications" }, { value: "hikcentral", label: "HikCentral" }] : [{ value: "horaires", label: "Régimes horaires" }]} />
         </div>
 
-        {tab === "general" && (
+        {effectiveTab === "general" && (
           <Card className="p-6 max-w-2xl">
             <div className="flex items-center gap-3 mb-5">
               <span className="h-10 w-10 grid place-items-center rounded-os bg-os-card-2 border border-os-border-2 text-os-t2"><Cog className="h-5 w-5" /></span>
@@ -191,7 +195,7 @@ export default function SettingsPage() {
           </Card>
         )}
 
-        {tab === "security" && (
+        {effectiveTab === "security" && (
           <Card className="p-6 max-w-2xl">
             <div className="flex items-center gap-3 mb-5">
               <span className="h-10 w-10 grid place-items-center rounded-os bg-os-card-2 border border-os-border-2 text-os-t2"><Shield className="h-5 w-5" /></span>
@@ -212,7 +216,7 @@ export default function SettingsPage() {
           </Card>
         )}
 
-        {tab === "detection" && (
+        {effectiveTab === "detection" && (
           <Card className="p-6 max-w-2xl">
             <div className="flex items-center gap-3 mb-5">
               <span className="h-10 w-10 grid place-items-center rounded-os bg-os-card-2 border border-os-border-2 text-os-t2"><Target className="h-5 w-5" /></span>
@@ -224,7 +228,10 @@ export default function SettingsPage() {
           </Card>
         )}
 
-        {tab === "notifications" && (
+        {/* Écriture : USER ou ADMIN, comme le backend (can_manage_cameras). */}
+        {effectiveTab === "horaires" && <WorkSchedules canWrite={["admin", "user"].includes(user?.role)} />}
+
+        {effectiveTab === "notifications" && (
           <Card className="p-6 max-w-2xl">
             <div className="flex items-center gap-3 mb-5">
               <span className="h-10 w-10 grid place-items-center rounded-os bg-os-card-2 border border-os-border-2 text-os-t2"><Mail className="h-5 w-5" /></span>
@@ -304,7 +311,7 @@ export default function SettingsPage() {
           </Card>
         )}
 
-        {tab === "hikcentral" && (
+        {effectiveTab === "hikcentral" && (
           <Card className="p-6 max-w-2xl">
             <div className="flex items-center gap-3 mb-5">
               <span className="h-10 w-10 grid place-items-center rounded-os bg-os-card-2 border border-os-border-2 text-os-t2"><Cctv className="h-5 w-5" /></span>

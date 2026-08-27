@@ -54,10 +54,16 @@ export default function CamerasPage() {
   const [selectedCameras, setSelectedCameras] = useState([]);
   const [viewMode, setViewMode] = useState("grid"); // "grid" or "table"
   const [cameras, setCameras] = useState([]);
+  const [schedules, setSchedules] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  const EMPTY_CAM_FORM = { cam_name: "", rtsp_url: "", location: "", is_active: true, latitude: "", longitude: "", bearing: "" };
+  const EMPTY_CAM_FORM = {
+    cam_name: "", rtsp_url: "", source_type: "rtsp", location: "", is_active: true,
+    latitude: "", longitude: "", bearing: "",
+    staffing_enabled: false, staffing_max_agents: "", staffing_min_agents: "",
+    staffing_tolerance_s: 300, staffing_work_schedule_id: "",
+  };
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState(null); // null = mode ajout
   const [modalForm, setModalForm] = useState(EMPTY_CAM_FORM);
@@ -97,6 +103,16 @@ export default function CamerasPage() {
       }
     };
     fetchCameras();
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      const response = await fetch("/api/work-schedules?active_only=true");
+      if (response.ok) {
+        const data = await response.json();
+        setSchedules(Array.isArray(data) ? data : []);
+      }
+    })();
   }, []);
 
   // Filtrer les caméras
@@ -162,11 +178,17 @@ export default function CamerasPage() {
     setModalForm({
       cam_name: camera.cam_name || "",
       rtsp_url: camera.rtsp_url || "",
+      source_type: camera.source_type || "rtsp",
       location: camera.location || "",
       is_active: !!camera.is_active,
       latitude: camera.latitude ?? "",
       longitude: camera.longitude ?? "",
       bearing: camera.bearing ?? "",
+      staffing_enabled: camera.staffing_min_agents != null,
+      staffing_max_agents: camera.staffing_max_agents ?? "",
+      staffing_min_agents: camera.staffing_min_agents ?? "",
+      staffing_tolerance_s: camera.staffing_tolerance_s ?? 300,
+      staffing_work_schedule_id: camera.staffing_work_schedule_id ?? "",
     });
     setModalError("");
     setShowModal(true);
@@ -184,6 +206,20 @@ export default function CamerasPage() {
     setSubmitting(true);
     setModalError("");
     const toNum = (v) => (v === "" || v === null || v === undefined ? null : Number(v));
+    if (modalForm.staffing_enabled) {
+      const maximum = Number(modalForm.staffing_max_agents);
+      const minimum = Number(modalForm.staffing_min_agents);
+      if (!maximum || !minimum || !modalForm.staffing_work_schedule_id) {
+        setModalError("Renseignez l'effectif maximum, le minimum requis et le régime horaire.");
+        setSubmitting(false);
+        return;
+      }
+      if (minimum > maximum) {
+        setModalError("L'effectif minimum ne peut pas dépasser l'effectif maximum.");
+        setSubmitting(false);
+        return;
+      }
+    }
     const payload = {
       cam_name: modalForm.cam_name,
       rtsp_url: modalForm.rtsp_url,
@@ -192,6 +228,10 @@ export default function CamerasPage() {
       latitude: toNum(modalForm.latitude),
       longitude: toNum(modalForm.longitude),
       bearing: modalForm.bearing === "" ? 0 : Number(modalForm.bearing),
+      staffing_max_agents: modalForm.staffing_enabled ? Number(modalForm.staffing_max_agents) : null,
+      staffing_min_agents: modalForm.staffing_enabled ? Number(modalForm.staffing_min_agents) : null,
+      staffing_tolerance_s: modalForm.staffing_enabled ? Number(modalForm.staffing_tolerance_s) : 300,
+      staffing_work_schedule_id: modalForm.staffing_enabled ? Number(modalForm.staffing_work_schedule_id) : null,
     };
     try {
       const url = editingId ? `/api/cameras/${editingId}` : "/api/cameras";
@@ -329,7 +369,7 @@ export default function CamerasPage() {
       {/* Modal ajout caméra */}
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-os-lg bg-os-card border border-os-border shadow-2xl">
+          <div className="w-full max-w-2xl max-h-[92vh] overflow-y-auto rounded-os-lg bg-os-card border border-os-border shadow-2xl">
             <div className="flex items-center justify-between p-6 border-b border-os-border">
               <h2 className="text-lg font-semibold text-os-t1">
                 {editingId ? "Modifier la caméra" : "Ajouter une caméra"}
@@ -364,16 +404,22 @@ export default function CamerasPage() {
               </div>
               <div>
                 <label className="block text-sm font-medium text-os-t2 mb-1.5">
-                  URL RTSP <span className="text-os-red">*</span>
+                  URL RTSP {modalForm.source_type !== "hikcentral" && <span className="text-os-red">*</span>}
                 </label>
                 <input
                   type="text"
-                  required
+                  required={modalForm.source_type !== "hikcentral"}
+                  disabled={modalForm.source_type === "hikcentral"}
                   value={modalForm.rtsp_url}
                   onChange={(e) => setModalForm((f) => ({ ...f, rtsp_url: e.target.value }))}
-                  placeholder="rtsp://192.168.1.100:554/stream"
-                  className="w-full px-4 py-2.5 bg-os-card-2 border border-os-border rounded-os text-sm font-mono focus:outline-none focus:ring-os-t3"
+                  placeholder={modalForm.source_type === "hikcentral" ? "Flux résolu automatiquement par HikCentral" : "rtsp://192.168.1.100:554/stream"}
+                  className="w-full px-4 py-2.5 bg-os-card-2 border border-os-border rounded-os text-sm font-mono focus:outline-none focus:ring-os-t3 disabled:opacity-60 disabled:cursor-not-allowed"
                 />
+                {modalForm.source_type === "hikcentral" && (
+                  <p className="mt-1.5 text-[11px] text-os-t3">
+                    La source vidéo reste gérée par HikCentral ; seuls les paramètres de la caméra sont modifiés ici.
+                  </p>
+                )}
               </div>
               <div>
                 <label className="block text-sm font-medium text-os-t2 mb-1.5">
@@ -426,6 +472,78 @@ export default function CamerasPage() {
                     className="w-full px-3 py-2.5 bg-os-card-2 border border-os-border rounded-os text-sm focus:outline-none focus:ring-os-t3"
                   />
                 </div>
+              </div>
+
+              <div className="rounded-os border border-os-border bg-os-card-2 p-4 space-y-3">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-semibold text-os-t1">Présence des agents</p>
+                    <p className="mt-1 text-[12px] text-os-t3">
+                      Compte uniquement les personnes présentes dans les zones « Poste d&apos;agent » de cette caméra.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setModalForm((f) => ({ ...f, staffing_enabled: !f.staffing_enabled }))}
+                    className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+                      modalForm.staffing_enabled ? "bg-os-cta" : "bg-os-border-2"
+                    }`}
+                    aria-label="Activer la surveillance de l'effectif"
+                  >
+                    <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${
+                      modalForm.staffing_enabled ? "translate-x-6" : "translate-x-1"
+                    }`} />
+                  </button>
+                </div>
+
+                {modalForm.staffing_enabled && (
+                  <>
+                    <div className="grid grid-cols-2 gap-3">
+                      <label className="text-[12px] font-medium text-os-t2">
+                        Effectif maximum attendu
+                        <input type="number" min="1" max="500" required
+                          value={modalForm.staffing_max_agents}
+                          onChange={(e) => setModalForm((f) => ({ ...f, staffing_max_agents: e.target.value }))}
+                          placeholder="ex. 6"
+                          className="mt-1.5 w-full px-3 py-2.5 bg-os-card border border-os-border rounded-os text-sm focus:outline-none focus:ring-os-t3" />
+                      </label>
+                      <label className="text-[12px] font-medium text-os-t2">
+                        Minimum requis
+                        <input type="number" min="1" max="500" required
+                          value={modalForm.staffing_min_agents}
+                          onChange={(e) => setModalForm((f) => ({ ...f, staffing_min_agents: e.target.value }))}
+                          placeholder="ex. 4"
+                          className="mt-1.5 w-full px-3 py-2.5 bg-os-card border border-os-border rounded-os text-sm focus:outline-none focus:ring-os-t3" />
+                      </label>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <label className="text-[12px] font-medium text-os-t2">
+                        Régime horaire
+                        <select required value={modalForm.staffing_work_schedule_id}
+                          onChange={(e) => setModalForm((f) => ({ ...f, staffing_work_schedule_id: e.target.value }))}
+                          className="mt-1.5 w-full px-3 py-2.5 bg-os-card border border-os-border rounded-os text-sm focus:outline-none focus:ring-os-t3">
+                          <option value="">— Choisir —</option>
+                          {schedules.map((schedule) => (
+                            <option key={schedule.id} value={schedule.id}>{schedule.name}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="text-[12px] font-medium text-os-t2">
+                        Alerter après
+                        <select value={modalForm.staffing_tolerance_s}
+                          onChange={(e) => setModalForm((f) => ({ ...f, staffing_tolerance_s: Number(e.target.value) }))}
+                          className="mt-1.5 w-full px-3 py-2.5 bg-os-card border border-os-border rounded-os text-sm focus:outline-none focus:ring-os-t3">
+                          {[60, 180, 300, 600, 900].map((seconds) => (
+                            <option key={seconds} value={seconds}>{seconds < 60 ? `${seconds} s` : `${seconds / 60} min`}</option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                    <p className="text-[11px] text-os-t3">
+                      L&apos;alerte est émise si l&apos;effectif reste strictement inférieur au minimum pendant ce délai.
+                    </p>
+                  </>
+                )}
               </div>
 
               <div className="flex items-center gap-3">
@@ -896,6 +1014,17 @@ export default function CamerasPage() {
                           <span className="truncate">{camera.location || "—"}</span>
                         </div>
 
+                        {camera.staffing_min_agents != null && (
+                          <div className="mb-3 rounded-os border border-os-border bg-os-card-2 px-3 py-2">
+                            <p className="text-[11px] font-semibold text-os-t2">
+                              Effectif : minimum {camera.staffing_min_agents} · maximum {camera.staffing_max_agents}
+                            </p>
+                            <p className="mt-0.5 text-[10px] text-os-t3 truncate">
+                              {camera.staffing_schedule?.name || "⚠ régime désactivé ou supprimé"}
+                            </p>
+                          </div>
+                        )}
+
                         <div className="grid grid-cols-3 gap-2 pt-3 border-t border-os-border">
                           <div className="text-center">
                             <div className="text-xs text-os-t3">RTSP</div>
@@ -949,6 +1078,9 @@ export default function CamerasPage() {
                         <th className="px-6 py-4 text-left text-xs font-semibold text-os-t3">
                           Statut
                         </th>
+                        <th className="px-6 py-4 text-left text-xs font-semibold text-os-t3">
+                          Effectif agents
+                        </th>
                         <th className="px-6 py-4 text-right text-xs font-semibold text-os-t3">
                           Actions
                         </th>
@@ -957,7 +1089,7 @@ export default function CamerasPage() {
                     <tbody className="divide-y divide-os-border">
                       {filteredCameras.length === 0 ? (
                         <tr>
-                          <td colSpan="5" className="px-6 py-16 text-center">
+                          <td colSpan="6" className="px-6 py-16 text-center">
                             <div className="flex flex-col items-center justify-center text-os-t3">
                               <svg
                                 className="h-16 w-16 mb-4 opacity-50"
@@ -1033,6 +1165,16 @@ export default function CamerasPage() {
                             </td>
                             <td className="px-6 py-4">
                               {getStatusBadge(camera.is_active ? "active" : "inactive")}
+                            </td>
+                            <td className="px-6 py-4">
+                              {camera.staffing_min_agents != null ? (
+                                <div className="text-[12px] text-os-t2">
+                                  <span className="os-num font-semibold">min {camera.staffing_min_agents} / max {camera.staffing_max_agents}</span>
+                                  <span className="block text-[11px] text-os-t4 truncate max-w-40">
+                                    {camera.staffing_schedule?.name || "Régime indisponible"}
+                                  </span>
+                                </div>
+                              ) : <span className="text-[12px] text-os-t4">Non configuré</span>}
                             </td>
                             <td className="px-6 py-4 text-right">
                               <div className="flex items-center justify-end gap-2">

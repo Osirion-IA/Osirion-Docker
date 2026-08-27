@@ -9,15 +9,15 @@ import { useAuth } from "./AuthContext";
  */
 export const ROLE_PERMISSIONS = {
   admin: {
-    pages: ["dashboard", "cameras", "live", "blacklist", "users", "alerts", "settings", "system-status"],
+    pages: ["dashboard", "cameras", "live", "presence", "blacklist", "users", "alerts", "settings", "system-status"],
     actions: ["view", "create", "edit", "delete", "manage-users", "manage-blacklist"],
   },
   user: {
-    pages: ["dashboard", "cameras", "live", "blacklist", "alerts"],
+    pages: ["dashboard", "cameras", "live", "presence", "blacklist", "alerts", "settings"],
     actions: ["view", "create", "edit", "manage-blacklist"],
   },
   viewer: {
-    pages: ["dashboard", "cameras", "live"],
+    pages: ["dashboard", "cameras", "live", "presence"],
     actions: ["view"],
   },
 };

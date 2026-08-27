@@ -215,6 +215,18 @@ services:
       # améliorent le recall des personnes petites/lointaines (fond de file) au prix
       # d'un coût GPU ~quadratique. Baisser si le GPU sature (↔ nombre de caméras).
       PERSON_YOLO_IMGSZ: ${PERSON_YOLO_IMGSZ:-960}
+      # Zones de présence : alterne les échelles (une seule passe par frame) car
+      # les postures assises peuvent être mieux reconnues à 640 qu'à 960.
+      PRESENCE_YOLO_SCALES: ${PRESENCE_YOLO_SCALES:-640,960}
+      PRESENCE_YOLO_SCALE_BLOCK_FRAMES: ${PRESENCE_YOLO_SCALE_BLOCK_FRAMES:-4}
+      # Part minimale de la boîte personne recouvrant une zone `presence`.
+      PRESENCE_BBOX_OVERLAP_MIN: ${PRESENCE_BBOX_OVERLAP_MIN:-0.50}
+      # Retient brièvement un candidat entre deux blocs d'échelle, sans remettre
+      # le chrono de vacance à zéro si ce n'était finalement qu'un passant.
+      PRESENCE_CANDIDATE_GRACE_SECONDS: ${PRESENCE_CANDIDATE_GRACE_SECONDS:-5}
+      # Une panne vidéo devient rapidement un état « indisponible », jamais un
+      # poste vide ; les épisodes métier sont suspendus à cette cadence.
+      CAMERA_HEALTH_DECISION_INTERVAL: ${CAMERA_HEALTH_DECISION_INTERVAL:-2}
       BLUR_THRESHOLD: ${BLUR_THRESHOLD:-80.0}                            # gate anti-flou (0=off)
       # ── Robustesse du comptage (tracking + Event Engine) ────────────────────
       # Sursis de publication d'un track occlus (frames) : il reste compté à sa

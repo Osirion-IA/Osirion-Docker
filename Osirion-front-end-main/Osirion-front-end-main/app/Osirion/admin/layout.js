@@ -7,6 +7,9 @@ import AlertNotifier from "./AlertNotifier";
 import { getSetting } from "../../lib/settings";
 import { triggerRefresh } from "../../lib/fetchWithRefresh";
 
+const LAST_ACTIVITY_KEY = "osirion-session-last-activity";
+const ACTIVITY_WRITE_INTERVAL_MS = 5000;
+
 // Lit le cookie non-httpOnly token_expires_at (timestamp ms)
 function getTokenExpiry() {
   if (typeof document === "undefined") return null;
@@ -87,17 +90,38 @@ export default function AdminLayout({ children }) {
   }, [user, router]);
 
   // Déconnexion automatique après inactivité (paramètre Sécurité « Session (min) »).
-  // Tout geste utilisateur réarme le délai ; passé ce délai sans activité, on
-  // efface la session (cookies) et on redirige vers la page de connexion.
+  // L'activité est partagée entre les onglets : un onglet ancien et inactif ne
+  // doit jamais effacer les cookies pendant qu'un autre onglet est utilisé.
   useEffect(() => {
     if (!user) return;
 
     let lastActivity = Date.now();
+    let lastSharedWrite = 0;
     let loggingOut = false;
 
-    const onActivity = () => { lastActivity = Date.now(); };
+    const readSharedActivity = () => {
+      try {
+        const value = Number(window.localStorage.getItem(LAST_ACTIVITY_KEY));
+        return Number.isFinite(value) ? value : 0;
+      } catch { return 0; }
+    };
+    const markActivity = (force = false) => {
+      const now = Date.now();
+      lastActivity = now;
+      if (!force && now - lastSharedWrite < ACTIVITY_WRITE_INTERVAL_MS) return;
+      lastSharedWrite = now;
+      try { window.localStorage.setItem(LAST_ACTIVITY_KEY, String(now)); } catch { /* */ }
+    };
+    const onActivity = () => markActivity();
+    const onSharedActivity = (event) => {
+      if (event.key !== LAST_ACTIVITY_KEY) return;
+      const value = Number(event.newValue);
+      if (Number.isFinite(value)) lastActivity = Math.max(lastActivity, value);
+    };
     const events = ["mousemove", "mousedown", "keydown", "scroll", "touchstart", "click"];
     events.forEach((e) => window.addEventListener(e, onActivity, { passive: true }));
+    window.addEventListener("storage", onSharedActivity);
+    markActivity(true);
 
     // Délai RELU à chaque tick → une modification du paramètre « Session (min) »
     // s'applique À CHAUD (≤ 15 s), sans rechargement, et même depuis un autre
@@ -116,8 +140,9 @@ export default function AdminLayout({ children }) {
       const raw = getSetting("sessionTimeout", 30);
       const minutes = Number.isFinite(Number(raw)) ? Number(raw) : 30;
       if (minutes <= 0) return;                                     // 0 = déconnexion auto désactivée
-      if (isWatchingLive()) { lastActivity = Date.now(); return; }  // visionnage live = activité
-      if (loggingOut || Date.now() - lastActivity < minutes * 60 * 1000) return;
+      if (isWatchingLive()) { markActivity(); return; }             // visionnage live = activité
+      const effectiveActivity = Math.max(lastActivity, readSharedActivity());
+      if (loggingOut || Date.now() - effectiveActivity < minutes * 60 * 1000) return;
       loggingOut = true;
       clearInterval(checkId);
       try { await fetch("/api/auth/logout", { method: "POST" }); } catch { /* */ }
@@ -126,6 +151,7 @@ export default function AdminLayout({ children }) {
 
     return () => {
       events.forEach((e) => window.removeEventListener(e, onActivity));
+      window.removeEventListener("storage", onSharedActivity);
       clearInterval(checkId);
     };
   }, [user, router]);

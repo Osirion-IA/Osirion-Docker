@@ -16,7 +16,7 @@ const STATUS_META = {
   acknowledged: { label: "Acquittée", color: "var(--os-amber)" },
   resolved: { label: "Résolue", color: "var(--os-green)" },
 };
-const KIND_LABEL = { queue: "File", crowd: "Attroupement", intrusion: "Intrusion", custom: "Alerte" };
+const KIND_LABEL = { queue: "File", crowd: "Attroupement", intrusion: "Intrusion", absence: "Poste vacant", staffing: "Sous-effectif", custom: "Alerte" };
 const SEV_COLOR = { info: "var(--os-blue)", warning: "var(--os-amber)", critical: "var(--os-red)" };
 const PAGE_SIZE = 12;
 

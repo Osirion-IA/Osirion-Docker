@@ -6,7 +6,7 @@
  * heatmap, prévision), le SPATIAL (sites & caméras), l'OPÉRATIONNEL (files,
  * occupation) et la SÉCURITÉ (incidents & alertes). Prévisions = base statistique
  * historique (pas de ML). Données : /analytics/{insights,footfall,queues,occupancy,
- * by-camera,incidents}.
+ * by-camera,incidents,post-absence,staffing}.
  */
 import { useState, useEffect, useCallback } from "react";
 import { TrendingUp, Clock, CalendarDays, Sparkles, ArrowUp, ArrowDown, Download, MapPin, ShieldAlert } from "lucide-react";
@@ -19,6 +19,13 @@ const WD_LONG = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "d
 const BIZ = Array.from({ length: 17 }, (_, i) => i + 6); // 6h..22h
 const hLabel = (h) => `${h}h`;
 const fmtWait = (s) => (!s ? "0 s" : s < 60 ? `${Math.round(s)} s` : `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`);
+const fmtDuration = (s) => {
+  s = Math.max(0, Math.round(Number(s) || 0));
+  if (s < 60) return `${s} s`;
+  if (s < 3600) return `${Math.floor(s / 60)} min ${s % 60 ? `${s % 60} s` : ""}`.trim();
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return `${h} h${m ? ` ${m} min` : ""}`;
+};
 const dLabel = (iso) => { const [, m, d] = iso.split("-"); return `${d}/${m}`; };
 const PERIODS = [{ value: 7, label: "7j" }, { value: 30, label: "30j" }, { value: 90, label: "90j" }];
 const TABS = [
@@ -26,6 +33,7 @@ const TABS = [
   { value: "sites", label: "Sites & caméras" },
   { value: "queues", label: "Files & attente" },
   { value: "occupancy", label: "Occupation" },
+  { value: "presence", label: "Présence & effectifs" },
   { value: "incidents", label: "Incidents" },
 ];
 
@@ -117,7 +125,7 @@ function RankBars({ rows, valueKey, labelKey, subKey, color = "var(--os-cta)", f
   return (
     <div className="space-y-3">
       {rows.map((r, i) => (
-        <div key={r.camera_id ?? r.site ?? i}>
+        <div key={r.zone_id ?? r.camera_id ?? r.site ?? i}>
           <div className="mb-1 flex items-baseline justify-between gap-3 text-[13px]">
             <span className="truncate text-os-t1">{r[labelKey] || "—"}{subKey && r[subKey] ? <span className="text-os-t4"> · {r[subKey]}</span> : null}</span>
             <span className="os-num shrink-0 font-semibold text-os-t1">{fmt(r[valueKey] || 0)}</span>
@@ -198,6 +206,8 @@ export default function AnalyticsPage() {
   const [occZones, setOccZones] = useState([]);
   const [byCam, setByCam] = useState(null);
   const [incidents, setIncidents] = useState(null);
+  const [absence, setAbsence] = useState(null);
+  const [staffing, setStaffing] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -216,7 +226,7 @@ export default function AnalyticsPage() {
     const fq = p.toString() ? `&${p}` : "";
     try {
       const hours = period * 24;
-      const [i, f, qa, qp, o, bc, inc] = await Promise.all([
+      const [i, f, qa, qp, o, bc, inc, pa, st] = await Promise.all([
         fetchWithRefresh(`/api/analytics/insights?days=${period}${fq}`),
         fetchWithRefresh(`/api/analytics/footfall?days=${period}${fq}`),
         fetchWithRefresh(`/api/analytics/queue-affluence?days=${period}${fq}`),
@@ -224,6 +234,8 @@ export default function AnalyticsPage() {
         fetchWithRefresh(`/api/analytics/occupancy?hours=${hours}${fq}`),
         fetchWithRefresh(`/api/analytics/by-camera?days=${Math.min(period, 90)}${fq}`),
         fetchWithRefresh(`/api/analytics/incidents?days=${Math.min(period, 90)}${fq}`),
+        fetchWithRefresh(`/api/analytics/post-absence?days=${period}${fq}`),
+        fetchWithRefresh(`/api/analytics/staffing?days=${period}${fq}`),
       ]);
       setIns(i?.ok ? await i.json() : null);
       setFoot(f?.ok ? await f.json() : null);
@@ -232,6 +244,8 @@ export default function AnalyticsPage() {
       setOccZones(o?.ok ? (await o.json()).zones || [] : []);
       setByCam(bc?.ok ? await bc.json() : null);
       setIncidents(inc?.ok ? await inc.json() : null);
+      setAbsence(pa?.ok ? await pa.json() : null);
+      setStaffing(st?.ok ? await st.json() : null);
     } finally { setLoading(false); }
   }, [period, groupId, camId]);
   useEffect(() => { load(); }, [load]);
@@ -532,6 +546,137 @@ export default function AnalyticsPage() {
               </div>
             )}
           </Card>
+        )}
+
+        {tab === "presence" && (
+          (absence?.closed_episodes || absence?.current_vacant || staffing?.configured_cameras || staffing?.closed_episodes) ? (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+                <Insight label="Postes vacants maintenant" icon={Clock}
+                  value={absence?.current_vacant || 0}
+                  hint="tolérance dépassée" />
+                <Insight label="Épisodes clôturés" icon={Clock}
+                  value={absence?.closed_episodes || 0}
+                  hint={`sur ${period} j`} />
+                <Insight label="Absence cumulée" icon={Clock}
+                  value={fmtDuration(absence?.total_absence_s)}
+                  hint={`${absence?.affected_posts || 0} poste(s) concerné(s)`} />
+                <Insight label="Durée moyenne" icon={Clock}
+                  value={fmtDuration(absence?.avg_absence_s)}
+                  hint={absence?.max_absence_s ? `maximum ${fmtDuration(absence.max_absence_s)}` : "aucun épisode"} />
+              </div>
+
+              <Card className="p-5">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <h3 className="text-[15px] font-semibold text-os-t1">Temps d&apos;absence par jour</h3>
+                    <p className="text-[12px] text-os-t3">Épisodes clôturés · durée réelle, pas seulement le dépassement de tolérance</p>
+                  </div>
+                  <Legend items={[{ label: "Minutes d'absence", color: "var(--os-amber)" }]} />
+                </div>
+                <TrendChart series={absence?.series || []} keys={[
+                  { k: "absence_minutes", label: "Minutes", color: "var(--os-amber)", fill: true },
+                ]} />
+              </Card>
+
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                <Card className="p-5">
+                  <h3 className="text-[15px] font-semibold text-os-t1 mb-1">Postes les plus touchés</h3>
+                  <p className="text-[12px] text-os-t3 mb-4">Classement par durée cumulée d&apos;absence</p>
+                  {absence?.zones?.length ? (
+                    <RankBars rows={absence?.zones || []} valueKey="total_absence_s" labelKey="zone_name" subKey="site"
+                      color="var(--os-amber)" fmt={fmtDuration} />
+                  ) : <p className="text-[13px] text-os-t3 py-8 text-center">Aucun épisode clôturé.</p>}
+                </Card>
+
+                <Card className="p-5">
+                  <h3 className="text-[15px] font-semibold text-os-t1 mb-1">Postes vacants</h3>
+                  <p className="text-[12px] text-os-t3 mb-4">Postes ayant déjà dépassé leur tolérance</p>
+                  {absence?.current_posts?.length ? (
+                    <ul className="space-y-2.5">
+                      {(absence?.current_posts || []).map((p) => (
+                        <li key={p.episode_id} className="rounded-os border border-os-border p-3 flex items-center justify-between gap-3">
+                          <span className="min-w-0">
+                            <span className="block text-[13px] font-semibold text-os-t1 truncate">{p.zone_name}</span>
+                            <span className="block text-[11px] text-os-t3 truncate">{p.camera_name}{p.site ? ` · ${p.site}` : ""}</span>
+                          </span>
+                          <span className="os-num text-[12px] font-semibold text-os-red shrink-0">
+                            ≥ {fmtDuration(p.vacant_s_at_signal)}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : <p className="text-[13px] text-os-t3 py-8 text-center">Aucun poste vacant actuellement.</p>}
+                </Card>
+              </div>
+
+              <div className="pt-2">
+                <h3 className="text-[17px] font-semibold text-os-t1">Effectif global par caméra</h3>
+                <p className="text-[12px] text-os-t3 mt-1">Agents uniques comptés dans l&apos;ensemble des zones « Poste d&apos;agent » de chaque caméra.</p>
+              </div>
+
+              <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+                <Insight label="Caméras configurées" icon={Clock}
+                  value={staffing?.configured_cameras || 0}
+                  hint="avec minimum et maximum" />
+                <Insight label="Sous-effectifs en cours" icon={ShieldAlert}
+                  value={staffing?.current_shortages || 0}
+                  hint="tolérance dépassée" />
+                <Insight label="Durée cumulée" icon={Clock}
+                  value={fmtDuration(staffing?.total_shortage_s)}
+                  hint={`${staffing?.closed_episodes || 0} épisode(s) clôturé(s)`} />
+                <Insight label="Durée moyenne" icon={Clock}
+                  value={fmtDuration(staffing?.avg_shortage_s)}
+                  hint={staffing?.max_shortage_s ? `maximum ${fmtDuration(staffing.max_shortage_s)}` : "aucun épisode"} />
+              </div>
+
+              <Card className="p-5">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <h3 className="text-[15px] font-semibold text-os-t1">Temps de sous-effectif par jour</h3>
+                    <p className="text-[12px] text-os-t3">Durée pendant laquelle l&apos;effectif est resté sous le minimum requis</p>
+                  </div>
+                  <Legend items={[{ label: "Minutes de sous-effectif", color: "var(--os-red)" }]} />
+                </div>
+                <TrendChart series={staffing?.series || []} keys={[
+                  { k: "shortage_minutes", label: "Minutes", color: "var(--os-red)", fill: true },
+                ]} />
+              </Card>
+
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                <Card className="p-5">
+                  <h3 className="text-[15px] font-semibold text-os-t1 mb-1">Caméras les plus touchées</h3>
+                  <p className="text-[12px] text-os-t3 mb-4">Classement par durée cumulée de sous-effectif</p>
+                  {staffing?.cameras?.length ? (
+                    <RankBars rows={staffing.cameras} valueKey="total_shortage_s" labelKey="camera_name" subKey="site"
+                      color="var(--os-red)" fmt={fmtDuration} />
+                  ) : <p className="text-[13px] text-os-t3 py-8 text-center">Aucun sous-effectif clôturé.</p>}
+                </Card>
+
+                <Card className="p-5">
+                  <h3 className="text-[15px] font-semibold text-os-t1 mb-1">Sous-effectifs en cours</h3>
+                  <p className="text-[12px] text-os-t3 mb-4">Dernier effectif constaté au déclenchement</p>
+                  {staffing?.current_cameras?.length ? (
+                    <ul className="space-y-2.5">
+                      {staffing.current_cameras.map((camera) => (
+                        <li key={camera.episode_id} className="rounded-os border border-os-border p-3 flex items-center justify-between gap-3">
+                          <span className="min-w-0">
+                            <span className="block text-[13px] font-semibold text-os-t1 truncate">{camera.camera_name}</span>
+                            <span className="block text-[11px] text-os-t3 truncate">{camera.site || "Sans site"} · manque {camera.missing || 0} agent(s)</span>
+                          </span>
+                          <span className="os-num text-[13px] font-semibold text-os-red shrink-0">
+                            {camera.count ?? 0}/{camera.maximum} · min {camera.minimum}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : <p className="text-[13px] text-os-t3 py-8 text-center">Aucun sous-effectif actuellement.</p>}
+                </Card>
+              </div>
+            </div>
+          ) : (
+            <Card className="p-5"><p className="text-[13px] text-os-t3 py-12 text-center">Aucune donnée de présence sur la période. Créez des zones « Poste d&apos;agent », puis configurez le minimum et le maximum dans la caméra.</p></Card>
+          )
         )}
 
         {tab === "incidents" && (

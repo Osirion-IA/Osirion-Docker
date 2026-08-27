@@ -366,16 +366,21 @@ class OCSort:
         self.frame_count = 0
         self._id_count = 0   # compteur d'ID propre à CETTE instance (par caméra)
 
-    def update(self, output_results: np.ndarray, img_info, img_size) -> np.ndarray:
+    def update(
+        self, output_results: np.ndarray, img_info, img_size,
+        allow_border_coast: bool = False,
+    ) -> np.ndarray:
         """Met à jour le tracker pour la frame courante.
 
-        Renvoie un tableau (M, 6) [x1, y1, x2, y2, track_id, predicted] en pixels
-        frame. `predicted` vaut 1.0 quand la boîte n'a PAS été observée sur cette
-        frame (track en sursis, position = dernière observation réelle) — l'aval
-        peut ainsi compter la personne sans lui attribuer un déplacement observé.
+        Renvoie un tableau (M, 7)
+        [x1, y1, x2, y2, track_id, predicted, score] en pixels frame.
+        `predicted` vaut 1.0 quand la boîte n'a PAS été observée sur cette frame
+        (track en sursis, position = dernière observation réelle). ``score`` est
+        la confiance de la dernière observation YOLO — utile pour expliquer une
+        décision de présence sans modifier l'association OC-SORT.
         """
         if output_results is None:
-            return np.empty((0, 6))
+            return np.empty((0, 7))
 
         self.frame_count += 1
 
@@ -494,18 +499,29 @@ class OCSort:
             # est très probablement sorti du champ — le maintenir sur-compterait la
             # zone pendant ~1 s à chaque départ. On ne le prolonge donc pas.
             coast = self.max_coast
-            if coast and trk.time_since_update > 0 and _touches_border(d, img_w, img_h):
+            if (
+                coast and trk.time_since_update > 0
+                and not allow_border_coast
+                and _touches_border(d, img_w, img_h)
+            ):
                 coast = 0
             if trk.confirmed and trk.time_since_update <= coast:
                 predicted = 1.0 if trk.time_since_update > 0 else 0.0
-                ret.append(np.concatenate((d, [trk.id, predicted])).reshape(1, -1))
+                score = (
+                    float(trk.last_observation[4])
+                    if len(trk.last_observation) >= 5 and trk.last_observation[4] >= 0
+                    else 0.0
+                )
+                ret.append(
+                    np.concatenate((d, [trk.id, predicted, score])).reshape(1, -1)
+                )
             i -= 1
             if trk.time_since_update > self.max_age:
                 self.trackers.pop(i)
 
         if len(ret) > 0:
             return np.concatenate(ret)
-        return np.empty((0, 6))
+        return np.empty((0, 7))
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -564,7 +580,9 @@ class OCSortTrackerAdapter:
             max_coast=getattr(args, "max_coast", 0),
         )
 
-    def update(self, output_results, img_info, img_size) -> List[_Track]:
+    def update(
+        self, output_results, img_info, img_size, allow_border_coast=False,
+    ) -> List[_Track]:
         """Voir docstring de classe. Renvoie [] si aucune détection exploitable."""
         if output_results is None:
             return []
@@ -572,10 +590,14 @@ class OCSortTrackerAdapter:
         if output_results.ndim != 2 or output_results.shape[1] < 5:
             return []
 
-        online = self.tracker.update(output_results, img_info, img_size)
-        # online : (M, 6) [x1, y1, x2, y2, track_id, predicted] en pixels frame.
+        online = self.tracker.update(
+            output_results, img_info, img_size,
+            allow_border_coast=bool(allow_border_coast),
+        )
+        # online : (M, 7) [x1, y1, x2, y2, track_id, predicted, score].
         return [
             _Track(int(row[4]), row[0], row[1], row[2], row[3],
+                   score=float(row[6]) if len(row) > 6 else 0.0,
                    predicted=bool(row[5]) if len(row) > 5 else False)
             for row in online
         ]

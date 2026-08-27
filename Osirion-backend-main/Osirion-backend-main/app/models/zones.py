@@ -24,6 +24,9 @@ ZONE_OCCUPANCY = "occupancy"   # comptage des présents / occupation
 ZONE_QUEUE = "queue"           # file d'attente (longueur, temps d'attente)
 ZONE_CROWD = "crowd"           # détection d'attroupement (seuil de densité)
 ZONE_IGNORE = "ignore"         # EXCLUSION : aucune détection n'y est retenue
+# Poste de travail surveillé : on suit son OCCUPATION pendant les heures de
+# travail du régime horaire lié (work_schedule_id) pour repérer les absences.
+ZONE_PRESENCE = "presence"
 ZONE_GENERIC = "generic"
 
 
@@ -48,6 +51,15 @@ class Zone(SQLModel, table=True):
     # 0 = comptage IMMÉDIAT, à utiliser pour les zones d'intrusion où tout délai
     # serait une régression de sécurité.
     min_presence_s: Optional[float] = Field(default=None)
+    # Régime horaire appliqué aux zones `presence` : porte les jours, créneaux,
+    # fuseau et tolérance d'absence. ON DELETE SET NULL — supprimer un régime ne
+    # doit jamais faire disparaître les zones (le poste reste tracé, il cesse
+    # simplement d'être surveillé tant qu'aucun régime ne lui est réaffecté).
+    work_schedule_id: Optional[int] = Field(
+        default=None,
+        sa_column=Column(Integer, ForeignKey("work_schedule.id", ondelete="SET NULL"),
+                         nullable=True, index=True),
+    )
     organization_id: Optional[int] = Field(default=None, index=True)
     is_active: bool = Field(default=True)
     created_at: datetime = Field(default_factory=datetime.utcnow)

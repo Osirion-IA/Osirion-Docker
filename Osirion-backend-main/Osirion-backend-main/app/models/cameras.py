@@ -1,6 +1,6 @@
 # app/models/camera.py
 from sqlmodel import SQLModel, Field, Relationship
-from sqlalchemy import Column, Integer, ForeignKey
+from sqlalchemy import Column, Integer, ForeignKey, CheckConstraint
 from typing import Optional, List, TYPE_CHECKING
 from datetime import datetime
 
@@ -40,6 +40,26 @@ class CameraGroupLink(SQLModel, table=True):
 
 
 class Camera(SQLModel, table=True):
+    __table_args__ = (
+        CheckConstraint(
+            "staffing_max_agents IS NULL OR staffing_max_agents BETWEEN 1 AND 500",
+            name="ck_camera_staffing_max_agents",
+        ),
+        CheckConstraint(
+            "staffing_min_agents IS NULL OR staffing_min_agents BETWEEN 1 AND 500",
+            name="ck_camera_staffing_min_agents",
+        ),
+        CheckConstraint(
+            "staffing_min_agents IS NULL OR staffing_max_agents IS NULL "
+            "OR staffing_min_agents <= staffing_max_agents",
+            name="ck_camera_staffing_min_le_max",
+        ),
+        CheckConstraint(
+            "staffing_tolerance_s BETWEEN 30 AND 28800",
+            name="ck_camera_staffing_tolerance",
+        ),
+    )
+
     id: Optional[int] = Field(default=None, primary_key=True)
     cam_name: str = Field(..., max_length=50)
     # Nullable : une caméra HikCentral n'a pas d'URL statique (résolue à la volée
@@ -63,6 +83,24 @@ class Camera(SQLModel, table=True):
     # Cap boussole 0–360° de l'objectif : sert à dessiner le cône de champ de
     # vision (field-of-view) sur la carte. Défaut 0.0 (plein nord).
     bearing: Optional[float] = Field(default=0.0)
+
+    # ── Effectif agents visible par cette caméra ─────────────────────────────
+    # Le comptage ne porte pas sur toute l'image (des clients pourraient y être
+    # présents), mais sur l'UNION des zones `presence` actives de la caméra.
+    # max = effectif nominal/capacité couverte ; min = seuil opérationnel sous
+    # lequel un épisode STAFFING_LOW est ouvert pendant les heures du régime.
+    staffing_max_agents: Optional[int] = Field(default=None)
+    staffing_min_agents: Optional[int] = Field(default=None)
+    staffing_tolerance_s: int = Field(default=300)
+    staffing_work_schedule_id: Optional[int] = Field(
+        default=None,
+        sa_column=Column(
+            Integer,
+            ForeignKey("work_schedule.id", ondelete="SET NULL"),
+            nullable=True,
+            index=True,
+        ),
+    )
 
     created_at: datetime = Field(default_factory=datetime.utcnow)
 

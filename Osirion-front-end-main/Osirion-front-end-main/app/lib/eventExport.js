@@ -5,12 +5,19 @@ const COLUMNS = ["ID", "Date", "Heure", "Type", "Caméra", "Zone/Ligne", "Sens",
 const TYPE_LABEL = {
   ZONE_OCCUPANCY_CHANGED: "Occupation", CROWD_DETECTED: "Attroupement",
   LINE_CROSSED: "Franchissement", ZONE_DWELL: "Présence",
+  POST_VACANT: "Poste vacant", POST_ABSENCE: "Absence clôturée",
+  STAFFING_LOW: "Sous-effectif", STAFFING_RECOVERED: "Effectif rétabli",
   ENTRY: "Entrée", EXIT: "Sortie", DETECTION: "Détection",
 };
 const dFr = (ts) => { const d = new Date(ts); return isNaN(d) ? "" : d.toLocaleDateString("fr-FR"); };
 const tFr = (ts) => { const d = new Date(ts); return isNaN(d) ? "" : d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }); };
 const dirFr = (dir) => (dir === "in" ? "Entrée" : dir === "out" ? "Sortie" : "—");
-const valOf = (m) => (m?.count != null ? `${m.count} pers.` : m?.dwell_s != null ? `${Math.round(m.dwell_s)} s` : "—");
+const valOf = (m) => (m?.shortage_s != null ? `${Math.round(m.shortage_s)} s de sous-effectif`
+  : m?.minimum != null ? `${m.count ?? 0}/${m.maximum} agents · min ${m.minimum}`
+  : m?.count != null ? `${m.count} pers.`
+  : m?.absence_s != null ? `${Math.round(m.absence_s)} s d'absence`
+  : m?.vacant_s != null ? `vide depuis ${Math.round(m.vacant_s)} s`
+  : m?.dwell_s != null ? `${Math.round(m.dwell_s)} s` : "—");
 
 function eventToRow(e) {
   const m = e.meta || {};

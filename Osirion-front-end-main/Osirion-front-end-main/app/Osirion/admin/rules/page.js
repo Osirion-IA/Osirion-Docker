@@ -16,12 +16,17 @@ const TRIGGERS = [
   { value: "CROWD_DETECTED", label: "Attroupement", cond: "count" },
   { value: "LINE_CROSSED", label: "Franchissement de ligne", cond: "direction" },
   { value: "ZONE_DWELL", label: "Temps de présence", cond: "wait" },
+  // Signal temps réel : l'épisode a dépassé la tolérance du régime. La durée
+  // finale POST_ABSENCE sert aux statistiques, pas à attendre avant d'alerter.
+  { value: "POST_VACANT", label: "Poste vacant", cond: "none" },
+  { value: "STAFFING_LOW", label: "Effectif sous le minimum", cond: "none" },
 ];
-const KINDS = ["intrusion", "crowd", "queue", "custom"];
+const KINDS = ["intrusion", "crowd", "queue", "absence", "staffing", "custom"];
 const DAYS = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
 const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
 const SEV = { info: { label: "Info", color: "var(--os-blue)" }, warning: { label: "Warning", color: "var(--os-amber)" }, critical: { label: "Critique", color: "var(--os-red)" } };
 const SEV_ORDER = ["info", "warning", "critical"];
+const GROUP_TRIGGERS = new Set(["POST_VACANT", "STAFFING_LOW"]);
 const triggerLabel = (v) => TRIGGERS.find((t) => t.value === v)?.label || v;
 const triggerCond = (v) => TRIGGERS.find((t) => t.value === v)?.cond;
 const FIELD_FR = { count: "occupation", dwell_s: "attente(s)", direction: "sens" };
@@ -29,6 +34,7 @@ const predTxt = (p) => `${FIELD_FR[p.field] || p.field} ${p.op} ${p.value}`;
 
 const EMPTY = {
   name: "", trigger: "ZONE_OCCUPANCY_CHANGED", zone_id: "", kind: "intrusion", severity: "warning",
+  work_schedule_id: "",
   min_count: "", max_count: "", min_wait_s: "", direction: "any",
   days: [], from: "", to: "", cooldown_min: "", notify_email: false, notify_webhook: false,
 };
@@ -38,6 +44,8 @@ const TEMPLATES = [
   { key: "attroupement", label: "Attroupement", form: { name: "Attroupement anormal", trigger: "CROWD_DETECTED", kind: "crowd", severity: "warning", min_count: "8", cooldown_min: "2" } },
   { key: "stationnement", label: "Stationnement prolongé", form: { name: "Stationnement prolongé", trigger: "ZONE_DWELL", kind: "custom", severity: "info", min_wait_s: "300", cooldown_min: "5" } },
   { key: "zone_interdite", label: "Zone interdite", form: { name: "Accès zone interdite", trigger: "ZONE_OCCUPANCY_CHANGED", kind: "intrusion", severity: "critical", min_count: "1", cooldown_min: "5", notify_email: true } },
+  { key: "poste_vacant", label: "Poste vacant", form: { name: "Poste d'agent vacant", trigger: "POST_VACANT", kind: "absence", severity: "warning", cooldown_min: "30", notify_email: true } },
+  { key: "sous_effectif", label: "Sous-effectif", form: { name: "Effectif agents insuffisant", trigger: "STAFFING_LOW", kind: "staffing", severity: "critical", cooldown_min: "30", notify_email: true } },
 ];
 
 export default function RulesPage() {
@@ -45,17 +53,27 @@ export default function RulesPage() {
   const canWrite = ["admin", "user"].includes(user?.role);
   const [rules, setRules] = useState([]);
   const [zones, setZones] = useState([]);
+  const [workSchedules, setWorkSchedules] = useState([]);
   const [form, setForm] = useState(EMPTY);
   const [msg, setMsg] = useState("");
 
   const load = useCallback(async () => {
-    const [r, z] = await Promise.all([fetchWithRefresh("/api/rules"), fetchWithRefresh("/api/zones")]);
+    const [r, z, w] = await Promise.all([
+      fetchWithRefresh("/api/rules"), fetchWithRefresh("/api/zones"),
+      fetchWithRefresh("/api/work-schedules?active_only=true"),
+    ]);
     setRules(r?.ok ? await r.json() : []);
     setZones(z?.ok ? await z.json() : []);
+    setWorkSchedules(w?.ok ? await w.json() : []);
   }, []);
   useEffect(() => { load(); }, [load]);
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  const setTrigger = (value) => setForm((current) => ({
+    ...current,
+    trigger: value,
+    work_schedule_id: GROUP_TRIGGERS.has(value) ? current.work_schedule_id : "",
+  }));
   const toggleDay = (i) => setForm((f) => ({ ...f, days: f.days.includes(i) ? f.days.filter((d) => d !== i) : [...f.days, i].sort() }));
   const applyTemplate = (t) => { setMsg(""); setForm({ ...EMPTY, ...t.form }); };
 
@@ -74,8 +92,9 @@ export default function RulesPage() {
     } else if (cond === "direction" && form.direction && form.direction !== "any") {
       conditions = { all: [{ field: "direction", op: "==", value: form.direction }] };
     }
+    const grouped = GROUP_TRIGGERS.has(form.trigger) && form.work_schedule_id !== "";
     let schedule = null;
-    if (form.days.length || form.from || form.to) {
+    if (!grouped && (form.days.length || form.from || form.to)) {
       schedule = {};
       if (form.days.length) schedule.days = form.days;
       if (form.from) schedule.from = form.from;
@@ -86,7 +105,8 @@ export default function RulesPage() {
     if (form.notify_webhook) notify_channels.push("webhook");
     const payload = {
       name: form.name.trim(), trigger: form.trigger,
-      zone_id: (cond === "direction" || form.zone_id === "") ? null : Number(form.zone_id),
+      zone_id: (cond === "direction" || form.trigger === "STAFFING_LOW" || form.zone_id === "") ? null : Number(form.zone_id),
+      work_schedule_id: grouped ? Number(form.work_schedule_id) : null,
       kind: form.kind, severity: form.severity,
       cooldown_s: form.cooldown_min !== "" ? Math.round(Number(form.cooldown_min) * 60) : 0,
       conditions, schedule, notify_channels,
@@ -101,8 +121,10 @@ export default function RulesPage() {
   const scheduleTxt = (s) => { if (!s) return "en permanence"; const d = (s.days || []).map((i) => DAYS[i]).join(" "); const h = s.from || s.to ? `${s.from || "00:00"}–${s.to || "23:59"}` : ""; return [d, h].filter(Boolean).join(" ") || "en permanence"; };
   const condTxt = (c) => { if (!c) return "—"; if (Array.isArray(c.all)) return c.all.map(predTxt).join(" et "); if (Array.isArray(c.any)) return c.any.map(predTxt).join(" ou "); return Object.entries(c).map(([k, v]) => `${k}=${v}`).join(", "); };
   const cooldownTxt = (s) => (!s ? null : s % 60 === 0 ? `${s / 60} min` : `${s}s`);
+  const scheduleName = (id) => workSchedules.find((item) => Number(item.id) === Number(id))?.name || `Groupe ${id}`;
 
   const cond = triggerCond(form.trigger);
+  const groupSelected = GROUP_TRIGGERS.has(form.trigger) && form.work_schedule_id !== "";
   const inp = "w-full px-3 py-2 rounded-os border border-os-border bg-os-card text-[13px] text-os-t1 outline-none focus:border-os-t3";
   const lbl = "text-[11px] font-semibold tracking-wide uppercase text-os-t4";
 
@@ -132,7 +154,7 @@ export default function RulesPage() {
 
               <div className="grid grid-cols-2 gap-3">
                 <label className={lbl}>Déclencheur
-                  <select value={form.trigger} onChange={(e) => set("trigger", e.target.value)} className={`${inp} mt-1`}>
+                  <select value={form.trigger} onChange={(e) => setTrigger(e.target.value)} className={`${inp} mt-1`}>
                     {TRIGGERS.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
                   </select>
                 </label>
@@ -154,12 +176,22 @@ export default function RulesPage() {
                 </label>
               </div>
 
-              {cond !== "direction" && (
+              {cond !== "direction" && form.trigger !== "STAFFING_LOW" && (
                 <label className={`${lbl} block`}>Zone (optionnel)
                   <select value={form.zone_id} onChange={(e) => set("zone_id", e.target.value)} className={`${inp} mt-1`}>
                     <option value="">Toutes les zones</option>
                     {zones.map((z) => <option key={z.id} value={z.id}>{z.name} (cam {z.camera_id})</option>)}
                   </select>
+                </label>
+              )}
+
+              {GROUP_TRIGGERS.has(form.trigger) && (
+                <label className={`${lbl} block`}>Groupe horaire (optionnel)
+                  <select value={form.work_schedule_id} onChange={(e) => set("work_schedule_id", e.target.value)} className={`${inp} mt-1`}>
+                    <option value="">Tous les groupes</option>
+                    {workSchedules.map((schedule) => <option key={schedule.id} value={schedule.id}>{schedule.name} · {schedule.zones_count} poste(s)</option>)}
+                  </select>
+                  <span className="normal-case tracking-normal font-normal block mt-1 text-[10px] text-os-t4">La règle s&apos;applique à toutes les caméras utilisant ce régime. Les jours, heures et pauses sont hérités du groupe.</span>
                 </label>
               )}
 
@@ -186,7 +218,7 @@ export default function RulesPage() {
                 </label>
               )}
 
-              <div>
+              {!groupSelected && <div>
                 <p className={`${lbl} mb-1.5`}>Plage horaire armée (vide = toujours)</p>
                 <div className="flex flex-wrap gap-1.5 mb-2">
                   {DAYS.map((d, i) => (
@@ -200,7 +232,12 @@ export default function RulesPage() {
                   <input type="time" value={form.to} onChange={(e) => set("to", e.target.value)} className={`${inp} !w-auto`} />
                   <span className="text-[11px] text-os-t4">(22:00 → 06:00 = nuit)</span>
                 </div>
-              </div>
+              </div>}
+              {groupSelected && (
+                <div className="rounded-os border border-os-blue/25 bg-os-blue/5 px-3 py-2 text-[11px] text-os-t2">
+                  Horaire armé hérité de « {scheduleName(form.work_schedule_id)} » — toute modification du groupe sera appliquée automatiquement.
+                </div>
+              )}
 
               <div className="flex items-center gap-4 text-[13px] text-os-t2">
                 <span className={lbl}>Notifier :</span>
@@ -233,7 +270,7 @@ export default function RulesPage() {
                             <p className="text-[13px] font-semibold text-os-t1 truncate">{r.name}</p>
                           </div>
                           <p className="text-[12px] text-os-t3 mt-1">
-                            {triggerLabel(r.trigger)} · {condTxt(r.conditions)} · {scheduleTxt(r.schedule)}{cd ? ` · ⏲ ${cd}` : ""}
+                            {triggerLabel(r.trigger)} · {condTxt(r.conditions)} · {r.work_schedule_id ? `groupe ${scheduleName(r.work_schedule_id)}` : scheduleTxt(r.schedule)}{cd ? ` · ⏲ ${cd}` : ""}
                             {r.notify_channels?.length ? ` · ${r.notify_channels.join("/")}` : ""}
                           </p>
                           <p className="os-num text-[11px] text-os-t4 mt-0.5">{r.trigger_count || 0} déclenchement{(r.trigger_count || 0) > 1 ? "s" : ""}</p>

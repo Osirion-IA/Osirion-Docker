@@ -6,6 +6,7 @@ from typing import List, Optional
 
 from app.models.cameras import Camera
 from app.models.camera_groups import CameraGroup
+from app.models.work_schedule import WorkSchedule
 from app.models.events import Event
 from app.models.alerts import Alert
 from app.database import engine
@@ -14,6 +15,7 @@ from app.schemas.camera_schema import (
     CameraRead,
     CameraActiveUpdate,
     CameraMapData,
+    CameraStaffingSchedule,
 )
 from app.utils.security_utils import crypter, decrypter
 
@@ -35,7 +37,37 @@ def get_session():
         yield session
 
 
-def _to_camera_read(cam: Camera) -> CameraRead:
+def _staffing_schedules_for(session: Session, cameras: List[Camera]) -> dict:
+    """Résout en une requête les régimes actifs utilisés par les caméras."""
+    ids = {
+        camera.staffing_work_schedule_id for camera in cameras
+        if camera.staffing_work_schedule_id is not None
+    }
+    if not ids:
+        return {}
+    rows = session.exec(
+        select(WorkSchedule).where(
+            WorkSchedule.id.in_(ids), WorkSchedule.is_active == True  # noqa: E712
+        )
+    ).all()
+    return {schedule.id: schedule for schedule in rows}
+
+
+def _validate_staffing_assignment(session: Session, camera_data: CameraCreate) -> None:
+    """Un effectif surveillé exige un régime existant et actif."""
+    if camera_data.staffing_min_agents is None:
+        return
+    schedule = session.get(WorkSchedule, camera_data.staffing_work_schedule_id)
+    if not schedule:
+        raise HTTPException(status_code=404, detail="Régime horaire d'effectif non trouvé.")
+    if not schedule.is_active:
+        raise HTTPException(
+            status_code=409,
+            detail="Le régime horaire d'effectif est désactivé.",
+        )
+
+
+def _to_camera_read(cam: Camera, staffing_schedule: Optional[WorkSchedule] = None) -> CameraRead:
     """Sérialise une caméra ORM en CameraRead : décryptage rtsp_url et
     appartenance aux groupes.
 
@@ -53,6 +85,18 @@ def _to_camera_read(cam: Camera) -> CameraRead:
         latitude=cam.latitude,
         longitude=cam.longitude,
         bearing=cam.bearing,
+        staffing_max_agents=cam.staffing_max_agents,
+        staffing_min_agents=cam.staffing_min_agents,
+        staffing_tolerance_s=cam.staffing_tolerance_s,
+        staffing_work_schedule_id=cam.staffing_work_schedule_id,
+        staffing_schedule=(
+            CameraStaffingSchedule(
+                id=staffing_schedule.id,
+                name=staffing_schedule.name,
+                timezone=staffing_schedule.timezone,
+                segments=staffing_schedule.segments,
+            ) if staffing_schedule else None
+        ),
         group_ids=[g.id for g in cam.groups],
         created_at=cam.created_at,
     )
@@ -78,6 +122,8 @@ def add_camera(
     location = camera.location
     is_active = camera.is_active
 
+    _validate_staffing_assignment(session, camera)
+
     if not cam_name or not rtsp_url:
         raise HTTPException(
             status_code=400,
@@ -92,6 +138,10 @@ def add_camera(
         latitude=camera.latitude,
         longitude=camera.longitude,
         bearing=camera.bearing if camera.bearing is not None else 0.0,
+        staffing_max_agents=camera.staffing_max_agents,
+        staffing_min_agents=camera.staffing_min_agents,
+        staffing_tolerance_s=camera.staffing_tolerance_s,
+        staffing_work_schedule_id=camera.staffing_work_schedule_id,
     )
 
     session.add(new_camera)
@@ -133,7 +183,11 @@ def get_cameras(
         stmt = stmt.where(Camera.groups.any(CameraGroup.id == group_id))
     cameras = session.exec(stmt).all()
 
-    return [_to_camera_read(cam) for cam in cameras]
+    staffing_schedules = _staffing_schedules_for(session, cameras)
+    return [
+        _to_camera_read(cam, staffing_schedules.get(cam.staffing_work_schedule_id))
+        for cam in cameras
+    ]
 
 
 # ─────────────────────────────────────────────
@@ -197,7 +251,8 @@ def get_camera(
     camera = session.get(Camera, camera_id)
     if not camera:
         raise HTTPException(status_code=404, detail="Caméra non trouvée")
-    return _to_camera_read(camera)
+    schedules = _staffing_schedules_for(session, [camera])
+    return _to_camera_read(camera, schedules.get(camera.staffing_work_schedule_id))
 
 
 # ─────────────────────────────────────────────
@@ -220,20 +275,37 @@ def update_camera(
     if not camera:
         raise HTTPException(status_code=404, detail="Caméra non trouvée")
 
+    _validate_staffing_assignment(session, camera_data)
+
     camera.cam_name = camera_data.cam_name
-    camera.rtsp_url = crypter(camera_data.rtsp_url)
+    if camera.source_type == "hikcentral":
+        # Le flux d'une caméra HikCentral est résolu dynamiquement. Une édition
+        # de ses seuils d'effectif ne doit ni exiger ni créer une URL RTSP.
+        pass
+    elif camera_data.rtsp_url:
+        camera.rtsp_url = crypter(camera_data.rtsp_url)
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="L'URL RTSP est obligatoire pour une caméra manuelle.",
+        )
     camera.location = camera_data.location
     camera.is_active = camera_data.is_active
     camera.latitude = camera_data.latitude
     camera.longitude = camera_data.longitude
     if camera_data.bearing is not None:
         camera.bearing = camera_data.bearing
+    camera.staffing_max_agents = camera_data.staffing_max_agents
+    camera.staffing_min_agents = camera_data.staffing_min_agents
+    camera.staffing_tolerance_s = camera_data.staffing_tolerance_s
+    camera.staffing_work_schedule_id = camera_data.staffing_work_schedule_id
 
     session.add(camera)
     session.commit()
     session.refresh(camera)
 
-    return _to_camera_read(camera)
+    schedules = _staffing_schedules_for(session, [camera])
+    return _to_camera_read(camera, schedules.get(camera.staffing_work_schedule_id))
 
 
 # ─────────────────────────────────────────────
@@ -267,7 +339,8 @@ def set_camera_active(
 
     # Décrypte la rtsp_url + expose groupes/géo/config effective (cohérent avec
     # GET /cameras/).
-    return _to_camera_read(camera)
+    schedules = _staffing_schedules_for(session, [camera])
+    return _to_camera_read(camera, schedules.get(camera.staffing_work_schedule_id))
 
 
 # ─────────────────────────────────────────────

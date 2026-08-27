@@ -23,7 +23,7 @@ Sévérité & anti-spam :
 - last_triggered_at / trigger_count : observabilité (dernier tir, nb de tirs).
 """
 from sqlmodel import SQLModel, Field
-from sqlalchemy import Column, JSON
+from sqlalchemy import Column, Integer, ForeignKey, JSON
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
@@ -38,6 +38,19 @@ class Rule(SQLModel, table=True):
     trigger: str = Field(..., max_length=30)
     # Restriction optionnelle à une zone (match event.meta.zone_id). None = toutes.
     zone_id: Optional[int] = Field(default=None)
+    # Portée groupe/régime : les événements de présence portent schedule_id.
+    # Une seule règle couvre ainsi toutes les zones et caméras rattachées au même
+    # groupe. CASCADE évite qu'une règle devienne accidentellement globale après
+    # suppression forcée du régime.
+    work_schedule_id: Optional[int] = Field(
+        default=None,
+        sa_column=Column(
+            Integer,
+            ForeignKey("work_schedule.id", ondelete="CASCADE"),
+            nullable=True,
+            index=True,
+        ),
+    )
     conditions: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSON))
     schedule: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSON))
     # Type d'alerte émise : "intrusion" | "crowd" | "queue" | "custom".

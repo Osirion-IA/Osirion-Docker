@@ -18,6 +18,10 @@ const TYPE_META = {
   CROWD_DETECTED: { label: "Attroupement", color: "var(--os-red)" },
   LINE_CROSSED: { label: "Franchissement", color: "var(--os-amber)" },
   ZONE_DWELL: { label: "Présence", color: "var(--os-blue)" },
+  POST_VACANT: { label: "Poste vacant", color: "var(--os-red)" },
+  POST_ABSENCE: { label: "Absence clôturée", color: "var(--os-amber)" },
+  STAFFING_LOW: { label: "Sous-effectif", color: "var(--os-red)" },
+  STAFFING_RECOVERED: { label: "Effectif rétabli", color: "var(--os-green)" },
   ENTRY: { label: "Entrée", color: "var(--os-t4)" },
   EXIT: { label: "Sortie", color: "var(--os-t4)" },
   DETECTION: { label: "Détection", color: "var(--os-t4)" },
@@ -140,7 +144,12 @@ export default function EventsPage() {
                   {filtered.map((e) => {
                     const meta = TYPE_META[e.event_type] || { label: e.event_type, color: "var(--os-t4)" };
                     const m = e.meta || {};
-                    const value = m.count != null ? `${m.count} pers.` : m.dwell_s != null ? `${Math.round(m.dwell_s)} s` : "—";
+                    const value = m.shortage_s != null ? `${Math.round(m.shortage_s)} s de sous-effectif`
+                      : m.minimum != null ? `${m.count ?? 0}/${m.maximum} agents · min ${m.minimum}`
+                      : m.count != null ? `${m.count} pers.`
+                      : m.absence_s != null ? `${Math.round(m.absence_s)} s d'absence`
+                      : m.vacant_s != null ? `vide depuis ${Math.round(m.vacant_s)} s`
+                      : m.dwell_s != null ? `${Math.round(m.dwell_s)} s` : "—";
                     return (
                       <tr key={e.id} className="border-b border-os-border last:border-0 hover:bg-black/[0.015] dark:hover:bg-white/[0.02]">
                         <td className="px-4 py-3 os-num text-os-t2 whitespace-nowrap">{fmtTime(e.timestamp)}</td>

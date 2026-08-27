@@ -84,6 +84,7 @@ class WebStreamingServer:
                 "protocol": "WebSocket (Socket.IO)",
                 "endpoints": {
                     "GET /api/cameras": "Liste des caméras disponibles",
+                    "GET /api/staffing": "Effectif agents courant par caméra",
                     "GET /api/stats": "Statistiques du système"
                 },
                 "websocket": {
@@ -140,6 +141,106 @@ class WebStreamingServer:
                 "cameras": cams,
                 "count": len(cams),
                 "online": sum(1 for c in cams if c.get("state") == "online"),
+                "server_time": time.time(),
+            })
+
+        @self.app.route('/api/staffing')
+        def staffing_overview():
+            """Instantané léger de l'effectif de toutes les caméras configurées.
+
+            Contrairement au Socket.IO, cet endpoint ne démarre aucun thread de
+            diffusion par caméra. Il convient donc à une page de supervision
+            globale, y compris pour un parc important.
+            """
+            health = {
+                row["id"]: row
+                for row in self.surveillance_system.camera_health()
+            }
+            rows = []
+            zone_priority = {
+                "unavailable": 100,
+                "vacant": 90,
+                "confirming": 70,
+                "vacancy_pending": 60,
+                "occupied": 50,
+                "off_schedule": 30,
+                "unconfigured": 20,
+                "initializing": 10,
+            }
+            for cam in self.surveillance_system.active_cameras:
+                cam_id = cam["id"]
+                processor = self.surveillance_system.camera_processors.get(cam_id)
+                status = (
+                    processor.presence_status_snapshot()
+                    if processor is not None else {}
+                )
+                staffing = status.get("staffing") or {}
+                presence_zones = status.get("presence_zones") or []
+                if (
+                    not staffing.get("enabled")
+                    and not staffing.get("available")
+                    and not presence_zones
+                ):
+                    continue
+                cam_health = health.get(cam_id, {})
+                age = cam_health.get("last_frame_age_s")
+                camera_state = cam_health.get("state", "unknown")
+                monitoring_available = camera_state == "online"
+                if not monitoring_available:
+                    staffing = {
+                        **staffing,
+                        "monitoring_available": False,
+                        "monitoring_state": "unavailable",
+                        "monitoring_reason": camera_state,
+                        "decision_state": "unavailable",
+                        "count": None,
+                        "in_work": False,
+                        "below_minimum": False,
+                        "low": False,
+                    }
+                    presence_zones = [
+                        {
+                            **zone,
+                            "state": "unavailable",
+                            "monitoring_available": False,
+                            "monitoring_reason": camera_state,
+                        }
+                        for zone in presence_zones
+                    ]
+
+                presence_state = max(
+                    (zone.get("state", "initializing") for zone in presence_zones),
+                    key=lambda state: zone_priority.get(state, 0),
+                    default="unconfigured",
+                )
+                staffing_state = staffing.get("decision_state", "unconfigured")
+                decision_state = (
+                    "unavailable" if not monitoring_available
+                    else (
+                        staffing_state
+                        if staffing_state in {"staffing_low", "staffing_pending"}
+                        else presence_state
+                    )
+                )
+                rows.append({
+                    **staffing,
+                    "camera_id": cam_id,
+                    "camera_name": cam.get("cam_name"),
+                    "location": cam.get("location"),
+                    "camera_state": camera_state,
+                    "monitoring_available": monitoring_available,
+                    "last_frame_age_s": age,
+                    "updated_at": (
+                        time.time() - float(age) if age is not None else None
+                    ),
+                    "decision_state": decision_state,
+                    "staffing_state": staffing_state,
+                    "presence_state": presence_state,
+                    "presence_zones": presence_zones,
+                })
+            return jsonify({
+                "cameras": rows,
+                "count": len(rows),
                 "server_time": time.time(),
             })
 

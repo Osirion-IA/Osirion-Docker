@@ -100,11 +100,14 @@ def _load():
     return _MODEL
 
 
-def detect_persons(frame, confidence_threshold: float = 0.4):
+def detect_persons(frame, confidence_threshold: float = 0.4,
+                   imgsz_override: int = None):
     """Détecte les personnes dans `frame`.
 
-    Renvoie une liste de [x1, y1, x2, y2, score] (float). Liste vide si aucune
-    personne, si le modèle n'a pas pu être chargé, ou en cas d'erreur d'inférence.
+    Renvoie une liste de [x1, y1, x2, y2, score] (float). ``imgsz_override``
+    permet au pipeline d'alterner les échelles pour les caméras de présence sans
+    charger un second modèle ni lancer deux inférences sur la même frame. Liste
+    vide si aucune personne, si le modèle manque ou en cas d'erreur d'inférence.
     """
     model = _MODEL or _load()
     if model is None:
@@ -116,8 +119,9 @@ def detect_persons(frame, confidence_threshold: float = 0.4):
             "verbose": False,
             **_PRECISION,
         }
-        if _IMGSZ:
-            predict_kwargs["imgsz"] = _IMGSZ
+        effective_imgsz = int(imgsz_override) if imgsz_override else _IMGSZ
+        if effective_imgsz:
+            predict_kwargs["imgsz"] = effective_imgsz
         with _LOCK:
             results = model.predict(frame, **predict_kwargs)
     except Exception as e:

@@ -160,10 +160,21 @@ def _label(rule: Rule, event: Event) -> str:
     meta = event.meta or {}
     ctx = meta.get("zone_name") or meta.get("line_name") or ""
     extra = []
-    if meta.get("count") is not None:
+    if meta.get("count") is not None and meta.get("minimum") is None:
         extra.append(f"{meta['count']} pers.")
     if meta.get("dwell_s") is not None:
         extra.append(f"{int(meta['dwell_s'])}s")
+    if meta.get("vacant_s") is not None:
+        extra.append(f"vide depuis {int(meta['vacant_s'])}s")
+    if meta.get("absence_s") is not None:
+        extra.append(f"absence {int(meta['absence_s'])}s")
+    if meta.get("minimum") is not None and meta.get("maximum") is not None:
+        extra.append(
+            f"effectif {meta.get('count', 0)}/{meta['maximum']} "
+            f"(minimum {meta['minimum']})"
+        )
+    if meta.get("shortage_s") is not None:
+        extra.append(f"sous-effectif {int(meta['shortage_s'])}s")
     if meta.get("direction"):
         extra.append(str(meta["direction"]))
     suffix = f" ({', '.join(extra)})" if extra else ""
@@ -171,6 +182,24 @@ def _label(rule: Rule, event: Event) -> str:
 
 
 # ── Évaluation ───────────────────────────────────────────────────────────────
+def _scope_matches(rule: Rule, meta) -> bool:
+    """Vérifie les portées zone et groupe sans dépendre de la base.
+
+    POST_VACANT et STAFFING_LOW portent ``schedule_id`` dans leurs métadonnées.
+    La portée de groupe reste ainsi stable même lorsque des caméras sont ajoutées
+    ou retirées du régime partagé.
+    """
+    meta = meta or {}
+    if rule.zone_id is not None and meta.get("zone_id") != rule.zone_id:
+        return False
+    if (
+        rule.work_schedule_id is not None
+        and meta.get("schedule_id") != rule.work_schedule_id
+    ):
+        return False
+    return True
+
+
 def evaluate_event(session: Session, event: Event) -> None:
     try:
         rules = session.exec(
@@ -188,7 +217,7 @@ def evaluate_event(session: Session, event: Event) -> None:
     meta = event.meta or {}
 
     for rule in rules:
-        if rule.zone_id is not None and meta.get("zone_id") != rule.zone_id:
+        if not _scope_matches(rule, meta):
             continue
         if not _schedule_armed(rule.schedule, now):
             continue

@@ -1,6 +1,6 @@
 # app/schemas/zones_schema.py
 from pydantic import BaseModel, field_validator
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime
 
 # Un point = [x, y] normalisé dans [0, 1].
@@ -40,6 +40,8 @@ class ZoneCreate(BaseModel):
     color: Optional[str] = None
     threshold: Optional[int] = None
     min_presence_s: Optional[float] = None
+    # Régime horaire — pertinent pour les zones `presence` uniquement.
+    work_schedule_id: Optional[int] = None
 
     @field_validator("polygon")
     @classmethod
@@ -63,6 +65,7 @@ class ZoneUpdate(BaseModel):
     color: Optional[str] = None
     threshold: Optional[int] = None
     min_presence_s: Optional[float] = None
+    work_schedule_id: Optional[int] = None
     is_active: Optional[bool] = None
 
     @field_validator("polygon")
@@ -80,6 +83,21 @@ class ZoneUpdate(BaseModel):
         return _check_min_presence(v)
 
 
+class ZoneScheduleInline(BaseModel):
+    """Régime horaire RÉSOLU, inliné dans la zone.
+
+    Le Core reçoit ainsi les horaires en même temps que la géométrie : pas de
+    second appel réseau par caméra, et surtout pas de fenêtre où une zone serait
+    surveillée sans savoir quand. Absent (None) si la zone n'a pas de régime ou
+    si le régime est désactivé — le Core cesse alors de surveiller ce poste.
+    """
+    id: int
+    name: str
+    timezone: str
+    segments: Dict[str, List[List[str]]]
+    absence_tolerance_s: int
+
+
 class ZoneRead(BaseModel):
     id: int
     camera_id: int
@@ -90,6 +108,9 @@ class ZoneRead(BaseModel):
     threshold: Optional[int] = None
     # None = la zone suit le défaut Core (ZONE_MIN_PRESENCE_SECONDS).
     min_presence_s: Optional[float] = None
+    work_schedule_id: Optional[int] = None
+    # Résolu côté backend pour le Core (cf. ZoneScheduleInline).
+    schedule: Optional[ZoneScheduleInline] = None
     is_active: bool
     created_at: datetime
 

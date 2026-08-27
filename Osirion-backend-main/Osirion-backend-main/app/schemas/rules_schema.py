@@ -10,12 +10,20 @@ class RuleCreate(BaseModel):
     name: str
     trigger: str
     zone_id: Optional[int] = None
+    work_schedule_id: Optional[int] = None
     conditions: Optional[Dict[str, Any]] = None
     schedule: Optional[Dict[str, Any]] = None
     kind: str = "custom"
     severity: str = "warning"
     cooldown_s: int = 0
     notify_channels: Optional[List[str]] = None
+
+    @field_validator("work_schedule_id")
+    @classmethod
+    def _check_work_schedule_id(cls, v):
+        if v is not None and int(v) < 1:
+            raise ValueError("work_schedule_id doit être un identifiant positif")
+        return v
 
     @field_validator("severity")
     @classmethod
@@ -29,6 +37,7 @@ class RuleUpdate(BaseModel):
     name: Optional[str] = None
     trigger: Optional[str] = None
     zone_id: Optional[int] = None
+    work_schedule_id: Optional[int] = None
     conditions: Optional[Dict[str, Any]] = None
     schedule: Optional[Dict[str, Any]] = None
     kind: Optional[str] = None
@@ -36,6 +45,13 @@ class RuleUpdate(BaseModel):
     cooldown_s: Optional[int] = None
     notify_channels: Optional[List[str]] = None
     is_active: Optional[bool] = None
+
+    @field_validator("work_schedule_id")
+    @classmethod
+    def _check_work_schedule_id(cls, v):
+        if v is not None and int(v) < 1:
+            raise ValueError("work_schedule_id doit être un identifiant positif")
+        return v
 
     @field_validator("severity")
     @classmethod
@@ -50,6 +66,7 @@ class RuleRead(BaseModel):
     name: str
     trigger: str
     zone_id: Optional[int] = None
+    work_schedule_id: Optional[int] = None
     conditions: Optional[Dict[str, Any]] = None
     schedule: Optional[Dict[str, Any]] = None
     kind: str

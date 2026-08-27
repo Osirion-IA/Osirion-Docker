@@ -55,9 +55,17 @@ class TrackingProcessor:
         # charge GPU (nombre de caméras actives), donc une vitesse en px/FRAME
         # n'est comparable ni entre caméras ni dans le temps. On publie des px/s.
         self._last_foot: Dict[int, tuple] = {}
+        self._presence_scales = tuple(
+            int(v) for v in getattr(config, "PRESENCE_YOLO_SCALES", ()) if int(v) > 0
+        )
+        self._presence_scale_block = max(
+            1, int(getattr(config, "PRESENCE_YOLO_SCALE_BLOCK_FRAMES", 4))
+        )
 
-        # Event Engine : occupation / attroupement / franchissement de ligne (Phase C).
-        self.event_engine = EventEngine(self.cam_id, config)
+        # Event Engine : occupation / attroupement / franchissement / effectif.
+        self.event_engine = EventEngine(
+            self.cam_id, config, staffing_policy=self._staffing_policy(cam)
+        )
 
         # ── Mesure (chapitre 4) : latence par frame TRAITÉE ──────────────────
         # detect_ms = coût de la passe YOLO (GPU) ; frame_ms = coût total (détection
@@ -66,6 +74,36 @@ class TrackingProcessor:
         self._lat_lock = threading.Lock()
         self._detect_ms: deque = deque(maxlen=4000)
         self._frame_ms: deque = deque(maxlen=4000)
+
+    @staticmethod
+    def _staffing_policy(cam: Dict) -> Optional[Dict]:
+        """Adapte le payload caméra backend au contrat interne EventEngine."""
+        if cam.get("staffing_min_agents") is None:
+            return None
+        return {
+            "camera_name": cam.get("cam_name"),
+            "min_agents": cam.get("staffing_min_agents"),
+            "max_agents": cam.get("staffing_max_agents"),
+            "tolerance_s": cam.get("staffing_tolerance_s"),
+            "schedule": cam.get("staffing_schedule"),
+        }
+
+    def update_camera_config(self, cam: Dict) -> bool:
+        """Met à jour à chaud le nom/emplacement et la politique d'effectif."""
+        self.cam_name = cam.get("cam_name", self.cam_name)
+        self.location = cam.get("location")
+        return self.event_engine.update_staffing_policy(self._staffing_policy(cam))
+
+    def update_camera_health(self, state: str, now: Optional[float] = None) -> None:
+        """Propage la santé du flux à la machine de décision métier."""
+        self.event_engine.update_camera_health(state, now=now)
+
+    def presence_status_snapshot(self) -> Dict:
+        """Instantané thread-safe destiné à l'API de supervision globale."""
+        return {
+            "staffing": self.event_engine.staffing_snapshot(),
+            "presence_zones": self.event_engine.presence_snapshot(),
+        }
 
     # ──────────────────────────────────────────────────────────────────────
     # Qualité d'image
@@ -124,6 +162,17 @@ class TrackingProcessor:
             return np.empty((0, 5), dtype=float)
         return np.asarray(boxes, dtype=float)
 
+    @staticmethod
+    def _select_inference_imgsz(
+        frame_no: int, has_presence_zones: bool,
+        presence_scales: tuple, default_imgsz: Optional[int], block_frames: int = 4,
+    ) -> Optional[int]:
+        """Une échelle par frame, en blocs assez longs pour confirmer un track."""
+        if has_presence_zones and presence_scales:
+            block = (max(1, frame_no) - 1) // max(1, int(block_frames))
+            return presence_scales[block % len(presence_scales)]
+        return default_imgsz
+
     # ──────────────────────────────────────────────────────────────────────
     # Boucle principale
     # ──────────────────────────────────────────────────────────────────────
@@ -152,6 +201,14 @@ class TrackingProcessor:
                 detections: List[Dict] = []
                 detect_ms: Optional[float] = None
                 _t_frame = time.perf_counter()
+                has_presence_zones = self.event_engine.has_presence_zones()
+                inference_imgsz = self._select_inference_imgsz(
+                    frame_idx,
+                    has_presence_zones,
+                    self._presence_scales,
+                    getattr(self.config, "PERSON_YOLO_IMGSZ", None),
+                    self._presence_scale_block,
+                )
 
                 # ── Gate anti-flou (frame entière) : on saute l'inférence sur une
                 #    frame trop floue ; l'overlay précédent reste affiché. ─────────
@@ -171,7 +228,11 @@ class TrackingProcessor:
                 if not skip:
                     # ── Détection de personnes (unique passe GPU) ────────────────
                     _t = time.perf_counter()
-                    boxes = detect_persons(frame, confidence_threshold=det_floor)
+                    boxes = detect_persons(
+                        frame,
+                        confidence_threshold=det_floor,
+                        imgsz_override=inference_imgsz,
+                    )
                     detect_ms = (time.perf_counter() - _t) * 1000.0
 
                     # ── Zones d'exclusion : on jette les détections du décor
@@ -183,8 +244,25 @@ class TrackingProcessor:
                     # ── Tracking (OC-SORT) → identifiants anonymes persistants ───
                     img_info = [fh, fw]
                     tracks = self.tracker.update(
-                        self._to_output_results(boxes), img_info, img_info
+                        self._to_output_results(boxes), img_info, img_info,
+                        # Dans une zone de poste, une personne assise touche souvent
+                        # le bas de l'image. Elle doit pouvoir traverser un bloc
+                        # d'échelle moins favorable en position maintenue.
+                        allow_border_coast=has_presence_zones,
                     )
+
+                    raw_person_detections = [
+                        {
+                            "bbox": [
+                                float(box[0]) / fw if fw else 0.0,
+                                float(box[1]) / fh if fh else 0.0,
+                                float(box[2]) / fw if fw else 0.0,
+                                float(box[3]) / fh if fh else 0.0,
+                            ],
+                            "confidence": float(box[4]),
+                        }
+                        for box in boxes
+                    ]
 
                     tracks_norm = []   # points au sol NORMALISÉS [0,1] pour l'Event Engine
                     t_now = time.monotonic()
@@ -207,8 +285,21 @@ class TrackingProcessor:
                         # Coordonnées normalisées (repère indépendant de la résolution).
                         nx = foot[0] / fw if fw else 0.0
                         ny = foot[1] / fh if fh else 0.0
-                        tracks_norm.append({"track_id": tid, "x": nx, "y": ny,
-                                            "predicted": predicted})
+                        bbox_norm = [
+                            x / fw if fw else 0.0,
+                            y / fh if fh else 0.0,
+                            (x + w) / fw if fw else 0.0,
+                            (y + h) / fh if fh else 0.0,
+                        ]
+                        track_confidence = float(getattr(track, "score", 0.0) or 0.0)
+                        tracks_norm.append({
+                            "track_id": tid,
+                            "x": nx,
+                            "y": ny,
+                            "bbox": bbox_norm,
+                            "confidence": track_confidence,
+                            "predicted": predicted,
+                        })
                         detections.append({
                             "type": "person",
                             "track_id": tid,
@@ -216,13 +307,28 @@ class TrackingProcessor:
                             "foot": [round(foot[0], 1), round(foot[1], 1)],
                             "velocity": [round(vx, 1), round(vy, 1)],   # pixels/seconde
                             "predicted": predicted,
+                            "confidence": round(track_confidence, 4),
                             # Zones (ids) contenant le point au sol → Scene Model enrichi.
                             "zones": self.event_engine.zones_for_point(nx, ny),
                         })
 
                     # ── Event Engine : occupation / attroupement / franchissement ─
                     # Géométrie CPU légère + émission fire-and-forget (aucun réseau ici).
-                    self.event_engine.process(tracks_norm, frame)
+                    self.event_engine.process(
+                        tracks_norm,
+                        frame,
+                        detection_context={
+                            "inference_imgsz": inference_imgsz,
+                            "person_detection_count": len(boxes),
+                            "max_detection_confidence": round(
+                                max((float(b[4]) for b in boxes), default=0.0), 4
+                            ),
+                            # Les boîtes brutes ne comptent jamais comme présence
+                            # confirmée. Elles servent seulement à différer une
+                            # alerte pendant que le tracker confirme le candidat.
+                            "person_detections": raw_person_detections,
+                        },
+                    )
 
                     # Purge périodique de l'historique des tracks disparus (mémoire).
                     if self.frame_counter % 300 == 0 and self._last_foot:
@@ -236,11 +342,15 @@ class TrackingProcessor:
                 # bbox dans le repère de la frame traitée (width×height) ; le
                 # frontend les met à l'échelle vers la taille d'affichage réelle.
                 fh, fw = frame.shape[:2]
+                presence_zones = self.event_engine.presence_snapshot()
                 payload = {
                     "camera_id": self.cam_id,
                     "width": fw,
                     "height": fh,
                     "detections": detections,
+                    "inference_imgsz": inference_imgsz,
+                    "staffing": self.event_engine.staffing_snapshot(),
+                    "presence_zones": presence_zones,
                 }
                 with self.result_lock:
                     self.result_metadata[self.cam_id] = {"seq": frame_idx, "payload": payload}

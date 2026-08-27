@@ -14,6 +14,25 @@ EVENT_ZONE_OCCUPANCY_CHANGED = "ZONE_OCCUPANCY_CHANGED"
 EVENT_CROWD_DETECTED = "CROWD_DETECTED"
 EVENT_LINE_CROSSED = "LINE_CROSSED"
 EVENT_ZONE_DWELL = "ZONE_DWELL"
+# ── Présence aux postes (zones `presence` + régime horaire) ──────────────────
+# Deux événements complémentaires, émis UNIQUEMENT pendant les créneaux
+# travaillés du régime (pas de bruit la nuit ni le week-end) :
+#   POST_VACANT  : signal TEMPS RÉEL — le poste est vide depuis la tolérance.
+#                  C'est lui qu'une règle d'alerte doit écouter.
+#   POST_ABSENCE : épisode CLOS, avec sa durée totale (`absence_s`). C'est lui
+#                  qui sert à cumuler le temps d'absence d'une journée.
+# Un épisode se clôt au retour de l'agent OU à la fin du créneau de travail.
+EVENT_POST_VACANT = "POST_VACANT"
+EVENT_POST_ABSENCE = "POST_ABSENCE"
+PRESENCE_SCHEMA_VERSION = 2
+PRESENCE_DATA_RELIABLE = "reliable"
+PRESENCE_DATA_ARCHIVED = "archived"
+# ── Effectif global d'agents par caméra ─────────────────────────────────────
+# STAFFING_LOW est le signal temps réel (règles/alertes), après maintien sous le
+# minimum pendant la tolérance. STAFFING_RECOVERED clôt l'épisode et porte sa
+# durée totale pour l'analytique.
+EVENT_STAFFING_LOW = "STAFFING_LOW"
+EVENT_STAFFING_RECOVERED = "STAFFING_RECOVERED"
 
 class Event(SQLModel, table=True):
     # Deux profils d'accès distincts sur `event` :

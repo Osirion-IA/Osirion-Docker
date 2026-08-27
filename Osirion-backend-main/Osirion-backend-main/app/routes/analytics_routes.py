@@ -9,6 +9,8 @@ Endpoints (VIEWER+) :
   - /analytics/footfall  : entrées / sorties / net par jour (LINE_CROSSED)
   - /analytics/occupancy : occupation par zone (ZONE_OCCUPANCY_CHANGED)
   - /analytics/queue-affluence / queue-performance : affluence & attente des FILES
+  - /analytics/post-absence : épisodes et durées d'absence aux postes
+  - /analytics/staffing     : épisodes de sous-effectif par caméra
   - /analytics/summary   : KPIs du jour (dashboard opérationnel)
 """
 from fastapi import APIRouter, Depends, Query
@@ -16,6 +18,7 @@ from sqlmodel import Session, select
 from typing import Optional
 from datetime import datetime, timedelta
 from collections import defaultdict
+import math
 
 from sqlalchemy.orm import selectinload
 
@@ -26,9 +29,14 @@ from app.models.events import (
     EVENT_ZONE_OCCUPANCY_CHANGED,
     EVENT_ZONE_DWELL,
     EVENT_CROWD_DETECTED,
+    EVENT_POST_VACANT,
+    EVENT_POST_ABSENCE,
+    EVENT_STAFFING_LOW,
+    EVENT_STAFFING_RECOVERED,
 )
 from app.models.zones import Zone, ZONE_QUEUE
 from app.models.cameras import Camera
+from app.models.work_schedule import WorkSchedule
 from app.models.alerts import Alert
 from app.models.users import User
 from app.middleware.auth_middleware import require_viewer
@@ -36,6 +44,15 @@ from app.services.response_cache import cache_get_or_set, cached_endpoint
 from app.routes.camera_status_routes import stats as camera_status_stats
 
 router = APIRouter()
+
+
+def _seconds(value) -> float:
+    """Normalise une durée issue d'un JSON historique sans casser l'endpoint."""
+    try:
+        result = float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, result) if math.isfinite(result) else 0.0
 
 
 def _events(session: Session, event_type: str, since: datetime,
@@ -61,6 +78,47 @@ def _scope_camera_ids(session: Session, group_id: Optional[int], camera_id: Opti
         cams = session.exec(select(Camera).options(selectinload(Camera.groups))).all()
         return {c.id for c in cams if any(g.id == group_id for g in c.groups)}
     return None
+
+
+def _filter_work_schedule(events, work_schedule_id: Optional[int]):
+    """Filtre un historique par régime porté par l'événement.
+
+    On ne relit pas l'affectation ACTUELLE de la zone/caméra : si elle change de
+    groupe, ses anciens épisodes doivent rester attribués à l'ancien régime.
+    """
+    if work_schedule_id is None:
+        return list(events)
+    return [
+        event for event in events
+        if (event.meta or {}).get("schedule_id") == work_schedule_id
+    ]
+
+
+def _presence_event_is_reliable(event) -> bool:
+    """Compatibilité qualité : marqueur v2, ou preuves de la bascule initiale.
+
+    Le repli permet de ne pas perdre les deux premiers événements fiables créés
+    juste avant la migration qui a matérialisé le statut dans leur JSON.
+    """
+    meta = event.meta or {}
+    quality = meta.get("presence_data_quality")
+    if quality == "archived":
+        return False
+    try:
+        schema_version = int(meta.get("presence_schema_version") or 0)
+    except (TypeError, ValueError):
+        schema_version = 0
+    if quality == "reliable" or schema_version >= 2:
+        return True
+    if event.event_type == EVENT_POST_VACANT:
+        return isinstance(meta.get("decision"), dict)
+    if event.event_type == EVENT_POST_ABSENCE:
+        return bool(meta.get("resolution_reason"))
+    return False
+
+
+def _work_schedule_names(session: Session) -> dict:
+    return {item.id: item.name for item in session.exec(select(WorkSchedule)).all()}
 
 
 @router.get("/footfall")
@@ -355,6 +413,361 @@ def incidents(
         "by_status": {k: by_status.get(k, 0) for k in ("new", "acknowledged", "resolved")},
         "resolution_rate": round(100 * resolved / total) if total else None,
         "by_camera": by_camera,
+    }
+
+
+@router.get("/post-absence")
+@cached_endpoint("analytics:post-absence", 60)
+def post_absence(
+    days: int = Query(30, ge=1, le=180),
+    camera_id: Optional[int] = None,
+    group_id: Optional[int] = None,
+    work_schedule_id: Optional[int] = Query(None, ge=1),
+    _user: User = Depends(require_viewer),
+    session: Session = Depends(get_session),
+):
+    """Absences aux postes : signal temps réel + épisodes clôturés.
+
+    ``POST_VACANT`` répond à « quels postes sont vacants maintenant ? ».
+    ``POST_ABSENCE`` porte la durée finale et alimente les cumuls, moyennes et
+    classements. Les deux sont rapprochés par ``meta.episode_id``.
+    """
+    scope = _scope_camera_ids(session, group_id, camera_id)
+    since_date = datetime.utcnow().date() - timedelta(days=days - 1)
+    since_dt = datetime.combine(since_date, datetime.min.time())
+    raw_vacant = _filter_work_schedule(
+        _events(session, EVENT_POST_VACANT, since_dt, camera_ids=scope),
+        work_schedule_id,
+    )
+    raw_closed = _filter_work_schedule(
+        _events(session, EVENT_POST_ABSENCE, since_dt, camera_ids=scope),
+        work_schedule_id,
+    )
+    vacant = [event for event in raw_vacant if _presence_event_is_reliable(event)]
+    closed = [event for event in raw_closed if _presence_event_is_reliable(event)]
+    reliable_events = vacant + closed
+    reliable_since = min(
+        (event.timestamp for event in reliable_events), default=None
+    )
+
+    def episode_id(event):
+        return (event.meta or {}).get("episode_id")
+
+    closed_ids = {episode_id(e) for e in closed if episode_id(e)}
+    current = [e for e in vacant if episode_id(e) and episode_id(e) not in closed_ids]
+    # Compatibilité avec d'éventuels anciens signaux sans episode_id : ils restent
+    # comptés dans le volume de signaux, mais ne sont pas déclarés « encore ouverts ».
+
+    per_day = defaultdict(lambda: {"episodes": 0, "absence_s": 0.0})
+    per_zone = defaultdict(lambda: {
+        "episodes": 0, "total_absence_s": 0.0, "max_absence_s": 0.0,
+        "zone_name": None, "camera_id": None, "schedule_id": None,
+        "schedule_name": None,
+    })
+    per_schedule = defaultdict(lambda: {
+        "episodes": 0, "total_s": 0.0, "max_s": 0.0, "name": None,
+    })
+    durations = []
+    for event in closed:
+        meta = event.meta or {}
+        duration = _seconds(meta.get("absence_s"))
+        durations.append(duration)
+        day = event.timestamp.date().isoformat()
+        per_day[day]["episodes"] += 1
+        per_day[day]["absence_s"] += duration
+        zid = meta.get("zone_id")
+        sid = meta.get("schedule_id")
+        if sid is not None:
+            schedule_row = per_schedule[sid]
+            schedule_row["episodes"] += 1
+            schedule_row["total_s"] += duration
+            schedule_row["max_s"] = max(schedule_row["max_s"], duration)
+            schedule_row["name"] = meta.get("schedule_name") or schedule_row["name"]
+        if zid is not None:
+            row = per_zone[(zid, sid)]
+            row["episodes"] += 1
+            row["total_absence_s"] += duration
+            row["max_absence_s"] = max(row["max_absence_s"], duration)
+            row["zone_name"] = meta.get("zone_name") or row["zone_name"]
+            row["camera_id"] = event.camera_id
+            row["schedule_id"] = sid
+            row["schedule_name"] = meta.get("schedule_name") or row["schedule_name"]
+
+    cameras = session.exec(select(Camera).options(selectinload(Camera.groups))).all()
+    camera_meta = {
+        c.id: {
+            "camera_name": c.cam_name,
+            "site": c.groups[0].name if c.groups else None,
+        }
+        for c in cameras
+    }
+    zones = []
+    for (zid, _sid), row in per_zone.items():
+        meta = camera_meta.get(row["camera_id"], {})
+        episodes = row["episodes"]
+        zones.append({
+            "zone_id": zid,
+            "zone_name": row["zone_name"] or f"Poste {zid}",
+            "camera_id": row["camera_id"],
+            "camera_name": meta.get("camera_name") or f"Caméra {row['camera_id']}",
+            "site": meta.get("site"),
+            "work_schedule_id": row["schedule_id"],
+            "work_schedule_name": row["schedule_name"],
+            "episodes": episodes,
+            "total_absence_s": round(row["total_absence_s"], 1),
+            "avg_absence_s": round(row["total_absence_s"] / episodes, 1) if episodes else 0,
+            "max_absence_s": round(row["max_absence_s"], 1),
+        })
+    zones.sort(key=lambda row: row["total_absence_s"], reverse=True)
+
+    current_posts = []
+    for event in current:
+        meta = event.meta or {}
+        cam = camera_meta.get(event.camera_id, {})
+        vacant_s = _seconds(meta.get("vacant_s"))
+        current_posts.append({
+            "episode_id": meta.get("episode_id"),
+            "zone_id": meta.get("zone_id"),
+            "zone_name": meta.get("zone_name") or "Poste",
+            "camera_id": event.camera_id,
+            "camera_name": cam.get("camera_name") or f"Caméra {event.camera_id}",
+            "site": cam.get("site"),
+            "work_schedule_id": meta.get("schedule_id"),
+            "work_schedule_name": meta.get("schedule_name"),
+            # POST_VACANT est envoyé APRÈS la tolérance : reconstruire le vrai
+            # début, sans quoi l'UI le décalerait de 5/10/30 minutes.
+            "vacant_since": (event.timestamp - timedelta(seconds=vacant_s)).isoformat(),
+            "vacant_s_at_signal": vacant_s,
+        })
+
+    series = []
+    for i in range(days):
+        day = (since_date + timedelta(days=i)).isoformat()
+        row = per_day[day]
+        series.append({
+            "date": day,
+            "episodes": row["episodes"],
+            "absence_s": round(row["absence_s"], 1),
+            "absence_minutes": round(row["absence_s"] / 60.0, 1),
+        })
+
+    total_s = sum(durations)
+    schedule_names = _work_schedule_names(session)
+    open_by_schedule = defaultdict(int)
+    for event in current:
+        sid = (event.meta or {}).get("schedule_id")
+        if sid is not None:
+            open_by_schedule[sid] += 1
+    schedule_rows = []
+    for sid in set(per_schedule) | set(open_by_schedule):
+        row = per_schedule[sid]
+        episodes = row["episodes"]
+        schedule_rows.append({
+            "work_schedule_id": sid,
+            "work_schedule_name": schedule_names.get(sid) or row["name"] or f"Groupe {sid}",
+            "episodes": episodes,
+            "current_vacant": open_by_schedule[sid],
+            "total_absence_s": round(row["total_s"], 1),
+            "avg_absence_s": round(row["total_s"] / episodes, 1) if episodes else 0,
+            "max_absence_s": round(row["max_s"], 1),
+        })
+    schedule_rows.sort(key=lambda row: row["total_absence_s"], reverse=True)
+    return {
+        "days": days,
+        "vacant_signals": len(vacant),
+        "closed_episodes": len(closed),
+        "current_vacant": len(current_posts),
+        "affected_posts": len(per_zone),
+        "total_absence_s": round(total_s, 1),
+        "avg_absence_s": round(total_s / len(durations), 1) if durations else 0,
+        "max_absence_s": round(max(durations), 1) if durations else 0,
+        "series": series,
+        "zones": zones,
+        "schedules": schedule_rows,
+        "current_posts": current_posts,
+        "data_quality": {
+            "scope": "reliable_only",
+            "reliable_since": reliable_since.isoformat() if reliable_since else None,
+            "archived_vacant_signals": len(raw_vacant) - len(vacant),
+            "archived_closed_episodes": len(raw_closed) - len(closed),
+            "archived_total": (
+                len(raw_vacant) + len(raw_closed) - len(vacant) - len(closed)
+            ),
+        },
+    }
+
+
+@router.get("/staffing")
+@cached_endpoint("analytics:staffing", 60)
+def staffing(
+    days: int = Query(30, ge=1, le=180),
+    camera_id: Optional[int] = None,
+    group_id: Optional[int] = None,
+    work_schedule_id: Optional[int] = Query(None, ge=1),
+    _user: User = Depends(require_viewer),
+    session: Session = Depends(get_session),
+):
+    """Sous-effectif caméra : signaux ouverts, durées et classement.
+
+    Le Core compte l'union des personnes confirmées dans les zones `presence` :
+    un client hors de ces zones n'augmente donc pas artificiellement l'effectif.
+    """
+    scope = _scope_camera_ids(session, group_id, camera_id)
+    since_date = datetime.utcnow().date() - timedelta(days=days - 1)
+    since_dt = datetime.combine(since_date, datetime.min.time())
+    low_events = _filter_work_schedule(
+        _events(session, EVENT_STAFFING_LOW, since_dt, camera_ids=scope),
+        work_schedule_id,
+    )
+    recovered = _filter_work_schedule(
+        _events(session, EVENT_STAFFING_RECOVERED, since_dt, camera_ids=scope),
+        work_schedule_id,
+    )
+
+    def episode_id(event):
+        return (event.meta or {}).get("episode_id")
+
+    recovered_ids = {episode_id(event) for event in recovered if episode_id(event)}
+    current = [
+        event for event in low_events
+        if episode_id(event) and episode_id(event) not in recovered_ids
+    ]
+
+    cameras = session.exec(select(Camera).options(selectinload(Camera.groups))).all()
+    camera_meta = {
+        camera.id: {
+            "camera_name": camera.cam_name,
+            "site": camera.groups[0].name if camera.groups else None,
+            "minimum": camera.staffing_min_agents,
+            "maximum": camera.staffing_max_agents,
+            "configured": (
+                camera.staffing_min_agents is not None
+                and camera.staffing_max_agents is not None
+            ),
+            "work_schedule_id": camera.staffing_work_schedule_id,
+        }
+        for camera in cameras
+        if scope is None or camera.id in scope
+    }
+
+    per_day = defaultdict(lambda: {"episodes": 0, "shortage_s": 0.0})
+    per_camera = defaultdict(
+        lambda: {"episodes": 0, "total_shortage_s": 0.0, "max_shortage_s": 0.0}
+    )
+    per_schedule = defaultdict(lambda: {
+        "episodes": 0, "total_s": 0.0, "max_s": 0.0, "name": None,
+    })
+    durations = []
+    for event in recovered:
+        event_meta = event.meta or {}
+        duration = _seconds(event_meta.get("shortage_s"))
+        durations.append(duration)
+        day = event.timestamp.date().isoformat()
+        per_day[day]["episodes"] += 1
+        per_day[day]["shortage_s"] += duration
+        sid = event_meta.get("schedule_id")
+        row = per_camera[(event.camera_id, sid)]
+        row["episodes"] += 1
+        row["total_shortage_s"] += duration
+        row["max_shortage_s"] = max(row["max_shortage_s"], duration)
+        if sid is not None:
+            schedule_row = per_schedule[sid]
+            schedule_row["episodes"] += 1
+            schedule_row["total_s"] += duration
+            schedule_row["max_s"] = max(schedule_row["max_s"], duration)
+            schedule_row["name"] = event_meta.get("schedule_name") or schedule_row["name"]
+
+    schedule_names = _work_schedule_names(session)
+    camera_rows = []
+    for (cid, sid), row in per_camera.items():
+        meta = camera_meta.get(cid, {})
+        episodes = row["episodes"]
+        camera_rows.append({
+            "camera_id": cid,
+            "camera_name": meta.get("camera_name") or f"Caméra {cid}",
+            "site": meta.get("site"),
+            "work_schedule_id": sid,
+            "work_schedule_name": schedule_names.get(sid) if sid is not None else None,
+            "minimum": meta.get("minimum"),
+            "maximum": meta.get("maximum"),
+            "episodes": episodes,
+            "total_shortage_s": round(row["total_shortage_s"], 1),
+            "avg_shortage_s": round(row["total_shortage_s"] / episodes, 1)
+            if episodes else 0,
+            "max_shortage_s": round(row["max_shortage_s"], 1),
+        })
+    camera_rows.sort(key=lambda row: row["total_shortage_s"], reverse=True)
+
+    current_cameras = []
+    for event in current:
+        event_meta = event.meta or {}
+        meta = camera_meta.get(event.camera_id, {})
+        low_s = _seconds(event_meta.get("low_s"))
+        current_cameras.append({
+            "episode_id": event_meta.get("episode_id"),
+            "camera_id": event.camera_id,
+            "camera_name": meta.get("camera_name") or f"Caméra {event.camera_id}",
+            "site": meta.get("site"),
+            "work_schedule_id": event_meta.get("schedule_id"),
+            "work_schedule_name": event_meta.get("schedule_name"),
+            "count": event_meta.get("count"),
+            "minimum": event_meta.get("minimum"),
+            "maximum": event_meta.get("maximum"),
+            "missing": event_meta.get("missing"),
+            "low_since": (event.timestamp - timedelta(seconds=low_s)).isoformat(),
+        })
+
+    series = []
+    for offset in range(days):
+        day = (since_date + timedelta(days=offset)).isoformat()
+        row = per_day[day]
+        series.append({
+            "date": day,
+            "episodes": row["episodes"],
+            "shortage_s": round(row["shortage_s"], 1),
+            "shortage_minutes": round(row["shortage_s"] / 60.0, 1),
+        })
+
+    total_s = sum(durations)
+    open_by_schedule = defaultdict(int)
+    for event in current:
+        sid = (event.meta or {}).get("schedule_id")
+        if sid is not None:
+            open_by_schedule[sid] += 1
+    schedule_rows = []
+    for sid in set(per_schedule) | set(open_by_schedule):
+        row = per_schedule[sid]
+        episodes = row["episodes"]
+        schedule_rows.append({
+            "work_schedule_id": sid,
+            "work_schedule_name": schedule_names.get(sid) or row["name"] or f"Groupe {sid}",
+            "episodes": episodes,
+            "current_shortages": open_by_schedule[sid],
+            "total_shortage_s": round(row["total_s"], 1),
+            "avg_shortage_s": round(row["total_s"] / episodes, 1) if episodes else 0,
+            "max_shortage_s": round(row["max_s"], 1),
+        })
+    schedule_rows.sort(key=lambda row: row["total_shortage_s"], reverse=True)
+    return {
+        "days": days,
+        "configured_cameras": sum(
+            1 for meta in camera_meta.values()
+            if meta["configured"] and (
+                work_schedule_id is None
+                or meta["work_schedule_id"] == work_schedule_id
+            )
+        ),
+        "low_signals": len(low_events),
+        "closed_episodes": len(recovered),
+        "current_shortages": len(current_cameras),
+        "affected_cameras": len(per_camera),
+        "total_shortage_s": round(total_s, 1),
+        "avg_shortage_s": round(total_s / len(durations), 1) if durations else 0,
+        "max_shortage_s": round(max(durations), 1) if durations else 0,
+        "series": series,
+        "cameras": camera_rows,
+        "schedules": schedule_rows,
+        "current_cameras": current_cameras,
     }
 
 

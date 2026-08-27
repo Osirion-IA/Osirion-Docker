@@ -23,6 +23,11 @@ FRAME_HEIGHT = int(os.getenv('FRAME_HEIGHT', '720'))
 FRAME_SIZE = (FRAME_WIDTH, FRAME_HEIGHT)
 FRAME_QUEUE_MAXSIZE = 4           # Buffer pour absorber les pics GPU
 FRAME_QUEUE_TIMEOUT = 0.1         # Timeout de récupération d'une frame (secondes)
+# Fréquence de propagation de la santé vidéo vers les décisions métier. Elle est
+# volontairement plus courte que le rafraîchissement de configuration caméra.
+CAMERA_HEALTH_DECISION_INTERVAL = max(
+    0.5, float(os.getenv('CAMERA_HEALTH_DECISION_INTERVAL', '2.0'))
+)
 
 # ----------------------
 # Configuration du tracker — OC-SORT (Observation-Centric SORT)
@@ -74,6 +79,46 @@ PERSON_TRACK_MIN_CONFIDENCE = float(os.getenv('PERSON_TRACK_MIN_CONFIDENCE', '0.
 # en la résolution. À arbitrer selon le budget GPU (↔ nombre de caméras actives).
 PERSON_YOLO_IMGSZ = int(os.getenv('PERSON_YOLO_IMGSZ', '0')) or None
 
+
+def _parse_imgsz_sequence(raw: str):
+    """Liste d'échelles YOLO positives, ex. ``"640,960"``."""
+    values = []
+    for item in str(raw or "").split(","):
+        try:
+            value = int(item.strip())
+        except (TypeError, ValueError):
+            continue
+        if value > 0 and value not in values:
+            values.append(value)
+    return tuple(values)
+
+
+# Les postures assises/penchées ne réagissent pas toujours de façon monotone à
+# la résolution YOLO : sur les faux vacants du 26/08, une silhouette valait 0,64
+# à 640 mais 0,04 à 960. Les caméras portant une zone `presence` alternent donc
+# ces échelles, une seule inférence par frame (aucun double passage GPU).
+PRESENCE_YOLO_SCALES = _parse_imgsz_sequence(
+    os.getenv('PRESENCE_YOLO_SCALES', '640,960')
+)
+# Une détection initiale + trois associations sont nécessaires pour confirmer un
+# nouveau track OC-SORT en régime établi. Les échelles sont donc jouées par blocs.
+PRESENCE_YOLO_SCALE_BLOCK_FRAMES = max(
+    1, int(os.getenv('PRESENCE_YOLO_SCALE_BLOCK_FRAMES', '4'))
+)
+
+# Pour un poste, les pieds sont souvent masqués/coupés. Une boîte est membre de
+# la zone si son point au sol est dedans OU si cette part de son corps recouvre
+# le polygone. Sans effet sur les autres types de zones et sur les lignes.
+PRESENCE_BBOX_OVERLAP_MIN = max(
+    0.0, min(1.0, float(os.getenv('PRESENCE_BBOX_OVERLAP_MIN', '0.50')))
+)
+# Une détection encore en phase de confirmation peut manquer pendant le bloc
+# d'échelle suivant. Pendant ce court délai, elle ne remet pas le chrono de
+# vacance à zéro mais interdit de photographier la scène comme « poste vacant ».
+PRESENCE_CANDIDATE_GRACE_SECONDS = max(
+    0.0, float(os.getenv('PRESENCE_CANDIDATE_GRACE_SECONDS', '5.0'))
+)
+
 # Filtre qualité frame : variance de la transformée de Laplace sur la luminance.
 # Une frame trop floue (< seuil) est sautée (pas d'inférence, overlay conservé).
 #   < 40 très flou · 40-80 flou modéré · > 80 acceptable · > 200 net.
@@ -102,6 +147,12 @@ DWELL_MIN_SECONDS = float(os.getenv('DWELL_MIN_SECONDS', '1.0'))
 # Défaut de repli quand la zone ne fixe pas son propre `min_presence_s` ;
 # 0 = comptage immédiat (comportement d'avant).
 ZONE_MIN_PRESENCE_SECONDS = float(os.getenv('ZONE_MIN_PRESENCE_SECONDS', '5.0'))
+# Surveillance de PRÉSENCE AUX POSTES (zones `presence`) : durée pendant laquelle
+# un poste doit rester inoccupé, DANS un créneau travaillé, avant d'être signalé.
+# Valeur de REPLI uniquement — la vraie tolérance vient du régime horaire de la
+# zone. 10 min : marge volontairement large, un agent assis derrière un comptoir
+# est un cas de détection difficile et une fausse absence met en cause quelqu'un.
+POST_ABSENCE_TOLERANCE_SECONDS = float(os.getenv('POST_ABSENCE_TOLERANCE_SECONDS', '600'))
 # Fenêtre (s) de LISSAGE de l'occupation : la valeur publiée est la médiane des
 # comptages de la fenêtre. Un raté de détection isolé n'écrit donc plus un point
 # faux dans l'historique dont vivent toutes les stats. 0 = valeur instantanée.

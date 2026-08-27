@@ -54,17 +54,26 @@ def stop() -> None:
 
 def dispatch(camera_id: int, event_type: str,
              meta: Optional[Dict[str, Any]] = None,
-             frame=None, confidence: float = 0.0) -> None:
-    """Enfile un événement (non bloquant). Abandonné silencieusement si file pleine."""
+             frame=None, confidence: float = 0.0,
+             critical: bool = False) -> bool:
+    """Enfile un événement sans bloquer le thread caméra.
+
+    Renvoie ``True`` seulement si l'événement est bien entré dans la file. Les
+    machines à états critiques (présence aux postes) peuvent ainsi NE PAS avancer
+    leur état quand la file est pleine et réessayer à la frame suivante.
+    """
     if _queue_obj is None:
-        return
+        return False
     try:
         _queue_obj.put_nowait({
             "camera_id": camera_id, "event_type": event_type,
             "meta": meta, "frame": frame, "confidence": confidence,
+            "critical": critical,
         })
+        return True
     except _queue.Full:
         logger.warning("[event-dispatch] file pleine — événement abandonné.")
+        return False
 
 
 def _run() -> None:
@@ -75,10 +84,27 @@ def _run() -> None:
             continue
         if item is None:
             continue
-        try:
-            _send(item)
-        except Exception as e:
-            logger.debug(f"[event-dispatch] envoi échoué : {e}")
+        # Les événements critiques sont peu fréquents mais portent une décision
+        # opérationnelle : on leur accorde davantage de tentatives. Le backend
+        # déduplique `meta.event_uid`, ces retries ne créent donc pas de doublons.
+        max_attempts = 5 if item.get("critical") else 2
+        for attempt in range(1, max_attempts + 1):
+            try:
+                _send(item)
+                break
+            except Exception as e:
+                if attempt >= max_attempts:
+                    logger.warning(
+                        f"[event-dispatch] envoi définitivement échoué après "
+                        f"{attempt} tentative(s) : {e}"
+                    )
+                    break
+                delay = min(2 ** (attempt - 1), 5)
+                logger.warning(
+                    f"[event-dispatch] envoi échoué ({e}) — nouvel essai dans {delay}s"
+                )
+                if _stop.wait(delay):
+                    break
 
 
 def _send(item: Dict[str, Any]) -> None:
@@ -100,4 +126,9 @@ def _send(item: Dict[str, Any]) -> None:
     # request_with_auth ne pose QUE l'en-tête d'auth → requests ajoute lui-même le
     # Content-Type multipart (avec boundary) quand files est fourni. Ré-auth + retry
     # automatiques sur 401/coupure réseau.
-    request_with_auth("POST", "/events/add", data=data, files=files, timeout=5)
+    response = request_with_auth(
+        "POST", "/events/add", data=data, files=files, timeout=5, retries=1
+    )
+    # Une réponse 500/503 n'est pas une livraison réussie. Sans ceci, le worker
+    # retirait silencieusement l'événement de la file malgré l'échec du backend.
+    response.raise_for_status()
