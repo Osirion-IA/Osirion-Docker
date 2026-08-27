@@ -24,6 +24,9 @@ EVENT_ZONE_DWELL = "ZONE_DWELL"
 # Un épisode se clôt au retour de l'agent OU à la fin du créneau de travail.
 EVENT_POST_VACANT = "POST_VACANT"
 EVENT_POST_ABSENCE = "POST_ABSENCE"
+# Échantillon périodique de contrôle, actif uniquement pendant une campagne
+# d'observation. Il est exclu du journal métier par défaut mais reste exportable.
+EVENT_PRESENCE_AUDIT_SAMPLE = "PRESENCE_AUDIT_SAMPLE"
 PRESENCE_SCHEMA_VERSION = 2
 PRESENCE_DATA_RELIABLE = "reliable"
 PRESENCE_DATA_ARCHIVED = "archived"

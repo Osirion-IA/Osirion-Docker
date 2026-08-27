@@ -89,6 +89,10 @@ class EventEngine:
             0.0,
             float(getattr(config, "PRESENCE_CANDIDATE_GRACE_SECONDS", 5.0)),
         )
+        self._presence_audit_interval_s = max(
+            0.0,
+            float(getattr(config, "PRESENCE_AUDIT_INTERVAL_SECONDS", 0.0)),
+        )
         # Durée de survie (frames) de l'état par track après sa dernière apparition.
         self._state_ttl = int(getattr(config, "TRACK_STATE_TTL_FRAMES", 90))
         # Robustesse du comptage de ligne (anti-jitter / anti-ID-switch) :
@@ -117,6 +121,9 @@ class EventEngine:
         self._occ_window: Dict[int, deque] = {}
         # Présence aux postes, par zone : {"vacant_since", "reported", "in_work"}.
         self._post_state: Dict[int, Dict] = {}
+        # Dernier échantillon de contrôle par zone. Ce flux est séparé des alertes
+        # métier et n'est actif que durant une campagne explicite (intervalle > 0).
+        self._presence_audit_last: Dict[int, float] = {}
         # Le rafraîchisseur peut clôturer une zone supprimée/désactivée pendant
         # que le thread caméra traite une frame : sérialise ces rares mutations.
         self._post_lock = threading.Lock()
@@ -589,6 +596,9 @@ class EventEngine:
                     evidence=zone_evidence,
                     frame=frame,
                 )
+                self._maybe_emit_presence_audit(
+                    z, zid, now, zone_evidence, frame
+                )
                 continue
 
             prev_count = self._occ_last.get(zid)
@@ -682,6 +692,68 @@ class EventEngine:
             # (Aucune purge ici : elle se fait par TTL, cf. _purge_stale_tracks.)
 
     # ── Présence au poste ───────────────────────────────────────────────────
+    def _maybe_emit_presence_audit(
+        self, z: Dict, zid: int, now: float,
+        evidence: Optional[Dict], frame=None,
+    ) -> bool:
+        """Échantillonne l'état d'un poste pour l'évaluation hors-ligne.
+
+        Les seuls POST_VACANT ne permettent pas de mesurer les faux négatifs :
+        lorsque le moteur ne déclenche rien, il faut tout de même disposer de
+        quelques images de vérité terrain. L'échantillon reste peu fréquent,
+        limité aux horaires travaillés et désactivé par défaut.
+        """
+        interval = self._presence_audit_interval_s
+        sched = z.get("_sched")
+        if (
+            interval <= 0.0
+            or frame is None
+            or not sched
+            or not self._in_work_segment(sched, now)
+        ):
+            return False
+
+        last = self._presence_audit_last.get(zid)
+        if last is not None and (now - last) < interval:
+            return False
+
+        snapshot = next(
+            (item for item in self.presence_snapshot(now) if item.get("zone_id") == zid),
+            None,
+        ) or {}
+        decision = dict(evidence or {})
+        slot = int(now // interval)
+        queued = event_dispatch.dispatch(
+            self.camera_id,
+            "PRESENCE_AUDIT_SAMPLE",
+            meta={
+                "zone_id": zid,
+                "zone_name": z.get("name"),
+                "schedule_id": sched.get("id"),
+                "schedule_name": sched.get("name"),
+                "audit_schema_version": 1,
+                "presence_schema_version": 2,
+                "presence_data_quality": "audit",
+                "audit_interval_s": interval,
+                "event_uid": f"presence-audit:{self.camera_id}:{zid}:{slot}",
+                "state": snapshot.get("state"),
+                "in_work": snapshot.get("in_work"),
+                "monitoring_available": snapshot.get("monitoring_available"),
+                "confirmed_count": snapshot.get("confirmed_count", 0),
+                "candidate_count": snapshot.get("candidate_count", 0),
+                "vacant_for_s": snapshot.get("vacant_for_s"),
+                "alert_active": snapshot.get("alert_active", False),
+                "polygon": snapshot.get("polygon") or z.get("polygon") or [],
+                "decision": decision,
+            },
+            frame=frame,
+            confidence=float(decision.get("frame_max_confidence") or 0.0),
+        )
+        if queued is not False:
+            self._presence_audit_last[zid] = now
+            return True
+        return False
+
     def _process_post(
         self, z: Dict, zid: int, now: float, occupe: bool,
         provisional: bool = False, evidence: Optional[Dict] = None, frame=None,

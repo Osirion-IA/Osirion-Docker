@@ -94,6 +94,9 @@ async def get_all_events(
     ),
     camera_id: Optional[int] = Query(None, ge=1),
     with_snapshot: Optional[bool] = Query(None),
+    include_audit: bool = Query(
+        False, description="Inclure les échantillons techniques de campagne.",
+    ),
     _current_user=Depends(require_viewer)
 ):
     statement = select(Event)
@@ -101,6 +104,11 @@ async def get_all_events(
         types = {value.strip() for value in event_types.split(",") if value.strip()}
         if types:
             statement = statement.where(Event.event_type.in_(types))
+    elif not include_audit:
+        # Les échantillons sont nombreux et destinés à l'audit hors-ligne. Les
+        # masquer évite qu'ils chassent les événements métier des 500 dernières
+        # lignes affichées, tout en restant requêtables explicitement.
+        statement = statement.where(Event.event_type != "PRESENCE_AUDIT_SAMPLE")
     if camera_id is not None:
         statement = statement.where(Event.camera_id == camera_id)
     if with_snapshot is True:

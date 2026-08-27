@@ -26,6 +26,7 @@ def engine(staffing_policy=None):
         ZONE_MIN_PRESENCE_SECONDS=0,
         POST_ABSENCE_TOLERANCE_SECONDS=600,
         PRESENCE_CANDIDATE_GRACE_SECONDS=5,
+        PRESENCE_AUDIT_INTERVAL_SECONDS=0,
         TRACK_STATE_TTL_FRAMES=90,
         LINE_CROSS_MARGIN=0.02,
         LINE_CROSS_COOLDOWN_FRAMES=15,
@@ -54,6 +55,72 @@ def staffing_policy():
 
 
 class PresenceScheduleTests(unittest.TestCase):
+    def test_audit_presence_est_periodique_et_limite_aux_horaires(self):
+        eng = engine()
+        eng._presence_audit_interval_s = 120
+        zone = {
+            "id": 7,
+            "name": "Guichet 1",
+            "kind": "presence",
+            "polygon": [[.1, .1], [.9, .1], [.9, .9], [.1, .9]],
+            "_sched": eng._prepare_schedule(schedule()),
+        }
+        eng.zones = [zone]
+        eng.update_camera_health("online", now=ts(24, 8, 0))
+        eng._process_post(
+            zone, 7, ts(24, 8, 0), occupe=True,
+            evidence={"decision_state": "occupied", "confirmed_count": 1},
+        )
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+
+        with patch("core.event_engine.event_dispatch.dispatch", return_value=True) as dispatch:
+            self.assertTrue(eng._maybe_emit_presence_audit(
+                zone, 7, ts(24, 8, 0), {"decision_state": "occupied"}, frame
+            ))
+            self.assertFalse(eng._maybe_emit_presence_audit(
+                zone, 7, ts(24, 8, 1), {"decision_state": "occupied"}, frame
+            ))
+            self.assertTrue(eng._maybe_emit_presence_audit(
+                zone, 7, ts(24, 8, 2), {"decision_state": "occupied"}, frame
+            ))
+            self.assertFalse(eng._maybe_emit_presence_audit(
+                zone, 7, ts(24, 13, 0), {"decision_state": "occupied"}, frame
+            ))
+
+        self.assertEqual(dispatch.call_count, 2)
+        first = dispatch.call_args_list[0]
+        self.assertEqual(first.args[1], "PRESENCE_AUDIT_SAMPLE")
+        self.assertEqual(first.kwargs["meta"]["state"], "occupied")
+        self.assertEqual(first.kwargs["meta"]["polygon"], zone["polygon"])
+        self.assertIs(first.kwargs["frame"], frame)
+
+    def test_audit_presence_reessaie_si_file_pleine(self):
+        eng = engine()
+        eng._presence_audit_interval_s = 120
+        zone = {
+            "id": 7,
+            "name": "Guichet 1",
+            "kind": "presence",
+            "polygon": [[.1, .1], [.9, .1], [.9, .9], [.1, .9]],
+            "_sched": eng._prepare_schedule(schedule()),
+        }
+        eng.zones = [zone]
+        eng.update_camera_health("online", now=ts(24, 8, 0))
+        eng._process_post(zone, 7, ts(24, 8, 0), occupe=False)
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+
+        with patch(
+            "core.event_engine.event_dispatch.dispatch", side_effect=[False, True]
+        ) as dispatch:
+            self.assertFalse(eng._maybe_emit_presence_audit(
+                zone, 7, ts(24, 8, 0), {"decision_state": "vacant"}, frame
+            ))
+            self.assertTrue(eng._maybe_emit_presence_audit(
+                zone, 7, ts(24, 8, 0) + 1, {"decision_state": "vacant"}, frame
+            ))
+
+        self.assertEqual(dispatch.call_count, 2)
+
     def test_cloture_absence_transmet_image_fraiche(self):
         eng = engine()
         zone = {"name": "Guichet 1", "_sched": eng._prepare_schedule(schedule())}

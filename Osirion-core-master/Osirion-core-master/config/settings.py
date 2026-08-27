@@ -118,6 +118,13 @@ PRESENCE_BBOX_OVERLAP_MIN = max(
 PRESENCE_CANDIDATE_GRACE_SECONDS = max(
     0.0, float(os.getenv('PRESENCE_CANDIDATE_GRACE_SECONDS', '5.0'))
 )
+# Campagne d'observation : 0 désactive les échantillons. Une valeur positive
+# enregistre périodiquement, pendant les seuls créneaux travaillés, une frame et
+# l'état décisionnel de chaque zone de présence. Ce signal permet d'auditer aussi
+# les périodes SANS alerte (faux négatifs / vrais négatifs).
+PRESENCE_AUDIT_INTERVAL_SECONDS = max(
+    0.0, float(os.getenv('PRESENCE_AUDIT_INTERVAL_SECONDS', '0'))
+)
 
 # Filtre qualité frame : variance de la transformée de Laplace sur la luminance.
 # Une frame trop floue (< seuil) est sautée (pas d'inférence, overlay conservé).

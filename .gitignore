@@ -12,6 +12,7 @@
 # ─────────────────────────────────────────────
 measurements/*.jsonl
 !measurements/.gitkeep
+observation_runs/
 
 # ─────────────────────────────────────────────
 # Python

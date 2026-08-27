@@ -27,6 +27,14 @@
 #   dans core/ (donc bind-monté et hot-reloadable).
 # =============================================================================
 
+# Rotation des journaux stdout/stderr Docker. Sans limite explicite, le pilote
+# json-file grossit indéfiniment et peut remplir le disque pendant une campagne.
+x-osirion-logging: &osirion-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "10"
+
 networks:
   osirion:
     driver: bridge
@@ -40,6 +48,7 @@ services:
     image: pgvector/pgvector:pg15
     container_name: osirion-db
     restart: unless-stopped
+    logging: *osirion-logging
     networks:
       - osirion
     environment:
@@ -73,6 +82,7 @@ services:
         GPU: "0"
     container_name: osirion-backend
     restart: unless-stopped
+    logging: *osirion-logging
     networks:
       - osirion
     depends_on:
@@ -156,6 +166,7 @@ services:
         GPU: "1"
     container_name: osirion-core
     restart: unless-stopped
+    logging: *osirion-logging
     # MediaMTX étant en network_mode: host, le Core (sur le bridge) l'atteint via
     # la passerelle Docker → mappe host.docker.internal vers host-gateway.
     extra_hosts:
@@ -284,6 +295,7 @@ services:
     image: bluenviron/mediamtx:latest-ffmpeg
     container_name: osirion-mediamtx
     restart: unless-stopped
+    logging: *osirion-logging
     # network_mode: host → MediaMTX se lie DIRECTEMENT aux interfaces de l'hôte.
     # Indispensable pour le WebRTC : derrière le NAT bridge Docker, l'ICE UDP ne
     # s'établit pas pour les postes du LAN (« deadline exceeded while waiting
@@ -310,6 +322,7 @@ services:
       context: ./Osirion-front-end-main/Osirion-front-end-main
     container_name: osirion-frontend
     restart: unless-stopped
+    logging: *osirion-logging
     networks:
       - osirion
     depends_on:
