@@ -110,7 +110,10 @@ def _current_manifest() -> tuple[Path, dict]:
 def start(run_id: str) -> None:
     ROOT.mkdir(parents=True, exist_ok=True)
     run_dir = ROOT / run_id
-    if run_dir.exists() and any(run_dir.iterdir()):
+    # Le Core ouvre metrics.jsonl dès son démarrage et crée donc le dossier avant
+    # l'inscription du manifeste. Seul un manifeste existant signifie qu'une
+    # campagne du même nom a déjà réellement été initialisée.
+    if (run_dir / "manifest.json").exists():
         raise SystemExit(f"Le dossier de campagne existe déjà : {run_dir}")
     run_dir.mkdir(parents=True, exist_ok=True)
 
