@@ -61,6 +61,11 @@ dist/
 **/logs/*
 *.log
 
+# Planches d'audit contenant des images terrain : conserver localement, ne pas
+# publier dans Git. Les verdicts et scripts reproductibles restent versionnés.
+audit_vacances_*/**/*.jpg
+audit_vacances_*/*.jpg
+
 # ─────────────────────────────────────────────
 # OS / IDE
 # ─────────────────────────────────────────────
