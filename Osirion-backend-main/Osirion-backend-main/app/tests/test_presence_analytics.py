@@ -25,6 +25,28 @@ class PresenceAnalyticsTests(unittest.TestCase):
         )
         self.assertFalse(_presence_event_is_reliable(event))
 
+    def test_qualite_presence_tronquee_est_exclue_meme_en_schema_v2(self):
+        event = SimpleNamespace(
+            event_type=EVENT_POST_ABSENCE,
+            meta={
+                "presence_schema_version": 2,
+                "presence_data_quality": "truncated",
+                "resolution_reason": "camera_unavailable",
+            },
+        )
+        self.assertFalse(_presence_event_is_reliable(event))
+
+    def test_ancien_episode_camera_unavailable_marque_reliable_est_exclu(self):
+        event = SimpleNamespace(
+            event_type=EVENT_POST_ABSENCE,
+            meta={
+                "presence_schema_version": 2,
+                "presence_data_quality": "reliable",
+                "resolution_reason": "camera_unavailable",
+            },
+        )
+        self.assertFalse(_presence_event_is_reliable(event))
+
     def test_qualite_presence_v2_est_fiable(self):
         event = SimpleNamespace(
             event_type=EVENT_POST_VACANT,

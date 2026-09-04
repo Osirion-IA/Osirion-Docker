@@ -49,8 +49,22 @@ class Alert(SQLModel, table=True):
     acknowledged_at: Optional[datetime] = Field(default=None)
     acknowledged_by: Optional[int] = Field(default=None)   # user.id qui a acquitté
 
-    # Notification MANUELLE (jamais automatique).
+    # Notification : posée par le moteur de règles quand un canal aboutit, ou par
+    # l'envoi manuel (POST /alerts/{id}/notify).
     notified_at: Optional[datetime] = Field(default=None)
     notified_channel: Optional[str] = Field(default=None, max_length=40)
+
+    # ── Reprise des envois échoués ───────────────────────────────────────────
+    # Campagne d'août 2026 : 55 alertes sur 574 n'ont jamais été délivrées, à
+    # cause de coupures DNS passagères sur le serveur de messagerie. Sans
+    # nouvelle tentative, un hoquet réseau de quelques secondes perdait l'alerte
+    # DÉFINITIVEMENT — et rien ne le signalait. Ces trois champs permettent au
+    # thread de reprise de rejouer l'envoi et à l'interface d'afficher l'échec.
+    notify_attempts: int = Field(default=0)
+    notify_last_error: Optional[str] = Field(default=None, max_length=255)
+    notify_next_retry_at: Optional[datetime] = Field(default=None, index=True)
+    # Canaux demandés par la règle au moment du déclenchement. La reprise ne doit
+    # jamais élargir la diffusion à un canal ajouté ultérieurement.
+    notify_requested_channels: Optional[str] = Field(default=None, max_length=40)
 
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)

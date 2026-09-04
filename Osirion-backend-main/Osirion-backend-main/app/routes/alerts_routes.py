@@ -43,6 +43,10 @@ def _serialize(a: Alert, cam_name: Optional[str]) -> dict:
         "snapshot_url": a.snapshot_url, "status": a.status,
         "acknowledged_at": a.acknowledged_at, "acknowledged_by": a.acknowledged_by,
         "notified_at": a.notified_at, "notified_channel": a.notified_channel,
+        "notify_attempts": a.notify_attempts,
+        "notify_last_error": a.notify_last_error,
+        "notify_next_retry_at": a.notify_next_retry_at,
+        "notify_requested_channels": a.notify_requested_channels,
         "created_at": a.created_at,
     }
 

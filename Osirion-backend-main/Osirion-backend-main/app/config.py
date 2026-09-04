@@ -64,6 +64,21 @@ class Settings(BaseSettings):
     CAMERA_STATUS_POLL_SECONDS: int = 15
     CAMERA_STATUS_RECORDER_ENABLED: bool = True
 
+    # ── Rétention automatique des événements et captures ─────────────────────
+    # ~800 Mo de captures par jour observés en campagne : sans rotation, la
+    # partition sature en quelques semaines et l'enregistrement des preuves
+    # s'arrête sans prévenir. 0 = désactivée (purge manuelle seulement).
+    # Désactivée par défaut : une politique destructive doit être activée après
+    # archivage et validation explicite de la durée de conservation.
+    RETENTION_DAYS: int = 0
+    RETENTION_CHECK_HOURS: float = 24
+    RETENTION_MIN_FREE_GB: float = 10   # sous ce seuil : log ERROR à chaque cycle
+
+    # ── Reprise des notifications échouées ───────────────────────────────────
+    # 55 alertes sur 574 perdues en campagne sur des coupures DNS de quelques
+    # secondes, faute de nouvelle tentative. 0 = désactivée.
+    NOTIFY_RETRY_SECONDS: int = 60
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

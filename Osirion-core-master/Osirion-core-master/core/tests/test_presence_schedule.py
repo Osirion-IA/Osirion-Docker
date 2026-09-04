@@ -164,6 +164,39 @@ class PresenceScheduleTests(unittest.TestCase):
             closure["meta"]["snapshot_origin"], "vacancy_frame_fallback"
         )
 
+    def test_qualite_de_donnee_suit_le_motif_de_cloture(self):
+        """Un épisode clos par une panne vidéo n'est PAS une mesure métier fiable.
+
+        Campagne d'août 2026 : 44 des 74 épisodes (17,2 h sur 31,8 h) avaient été
+        tronqués par une perte de caméra tout en portant « reliable ». Agrégés tels
+        quels, ils font lire une panne technique comme un mauvais comportement
+        d'agent — une accusation implicite fondée sur un artefact.
+        """
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+
+        def joue(fin_par_retour: bool):
+            eng = engine()
+            zone = {"name": "Guichet 1", "_sched": eng._prepare_schedule(schedule())}
+            emitted = []
+            eng.update_camera_health("online", now=ts(24, 8, 0))
+            with patch("core.event_engine.event_dispatch.dispatch",
+                       side_effect=lambda _c, k, **kw: emitted.append((k, kw)) or True):
+                eng._process_post(zone, 7, ts(24, 8, 0), occupe=False, frame=frame)
+                eng._process_post(zone, 7, ts(24, 8, 10), occupe=False, frame=frame)
+                if fin_par_retour:
+                    eng._process_post(zone, 7, ts(24, 8, 17), occupe=True, frame=frame)
+                else:
+                    eng.update_camera_health("stalled", now=ts(24, 8, 12))
+            return next(kw for k, kw in emitted if k == "POST_ABSENCE")["meta"]
+
+        retour = joue(fin_par_retour=True)
+        self.assertEqual(retour["resolution_reason"], "presence_restored")
+        self.assertEqual(retour["presence_data_quality"], "reliable")
+
+        panne = joue(fin_par_retour=False)
+        self.assertEqual(panne["resolution_reason"], "camera_unavailable")
+        self.assertEqual(panne["presence_data_quality"], "truncated")
+
     def test_signal_immediat_puis_episode_cloture(self):
         eng = engine()
         zone = {"name": "Guichet 1", "_sched": eng._prepare_schedule(schedule())}

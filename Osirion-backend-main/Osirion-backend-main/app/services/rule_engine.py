@@ -253,7 +253,24 @@ def evaluate_event(session: Session, event: Event) -> None:
             _send_notifications(session, rule, alert, channels)
 
 
+# Reprise : délai croissant puis abandon. Plafonné à 30 min car une alerte de
+# terrain perd sa valeur si elle arrive des heures plus tard — mieux vaut renoncer
+# explicitement (et l'afficher comme non délivrée) que notifier trop tard.
+NOTIFY_MAX_ATTEMPTS = 5
+_NOTIFY_BACKOFF_MIN = (1, 5, 15, 30)
+
+
+def _prochain_essai(tentatives: int):
+    """Date de la prochaine reprise, ou None une fois les tentatives épuisées."""
+    if tentatives >= NOTIFY_MAX_ATTEMPTS:
+        return None
+    minutes = _NOTIFY_BACKOFF_MIN[min(tentatives - 1, len(_NOTIFY_BACKOFF_MIN) - 1)]
+    return datetime.utcnow() + timedelta(minutes=minutes)
+
+
 def _send_notifications(session: Session, rule: Rule, alert: Alert, channels) -> None:
+    requested = [c for c in ("email", "webhook") if c in channels]
+    alert.notify_requested_channels = ",".join(requested) or None
     snap_path = snapshot_local_path(alert.snapshot_url)
     subject = f"[Osirion] {alert.severity.upper()} · {alert.kind} — {alert.label}"
     body = (
@@ -266,22 +283,43 @@ def _send_notifications(session: Session, rule: Rule, alert: Alert, channels) ->
         f"Capture  : {'jointe à cet email' if snap_path else '—'}\n"
     )
     sent = []
+    erreur = None
     try:
-        if "email" in channels:
-            ok, _ = send_email(subject, body, attachment_path=snap_path)
+        if "email" in requested:
+            ok, detail = send_email(subject, body, attachment_path=snap_path)
             if ok:
                 sent.append("email")
-        if "webhook" in channels:
-            ok, _ = send_webhook({
+            else:
+                erreur = f"email: {detail}"
+        if "webhook" in requested:
+            ok, detail = send_webhook({
                 "kind": alert.kind, "severity": alert.severity, "label": alert.label,
                 "rule": rule.name, "camera_id": alert.camera_id, "alert_id": alert.id,
             })
             if ok:
                 sent.append("webhook")
-        if sent:
-            alert.notified_at = datetime.utcnow()
-            alert.notified_channel = ",".join(sent)
-            session.add(alert)
-            session.commit()
-    except Exception:
+            else:
+                erreur = f"{erreur + ' | ' if erreur else ''}webhook: {detail}"
+    except Exception as e:  # noqa: BLE001 — l'échec ne doit jamais perdre l'alerte
+        erreur = f"{type(e).__name__}: {e}"
         logger.warning("[rule] envoi de notification échoué", exc_info=True)
+
+    alert.notify_attempts = (alert.notify_attempts or 0) + 1
+    if sent:
+        alert.notified_at = datetime.utcnow()
+        alert.notified_channel = ",".join(sent)
+        alert.notify_next_retry_at = None
+        alert.notify_last_error = None
+    else:
+        # Aucun canal n'a abouti. On PROGRAMME une reprise au lieu d'abandonner :
+        # les 55 alertes perdues de la campagne d'août 2026 l'ont été sur des
+        # coupures DNS de quelques secondes, parfaitement rattrapables.
+        alert.notify_last_error = (erreur or "aucun canal n'a abouti")[:255]
+        alert.notify_next_retry_at = _prochain_essai(alert.notify_attempts)
+        logger.warning(
+            "[rule] alerte %s non notifiée (tentative %d) : %s — reprise prévue à %s",
+            alert.id, alert.notify_attempts, alert.notify_last_error,
+            alert.notify_next_retry_at,
+        )
+    session.add(alert)
+    session.commit()

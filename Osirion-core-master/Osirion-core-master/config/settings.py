@@ -225,7 +225,18 @@ MEDIAMTX_RTSP_BASE = os.getenv('MEDIAMTX_RTSP_BASE', 'mediamtx:8554')  # hôte:p
 MANAGE_MEDIAMTX_PATHS = os.getenv('MANAGE_MEDIAMTX_PATHS', 'true').lower() == 'true'
 MEDIAMTX_API_BASE = os.getenv('MEDIAMTX_API_BASE', 'http://mediamtx:9997')
 MEDIAMTX_RTSP_TRANSPORT = os.getenv('MEDIAMTX_RTSP_TRANSPORT', 'tcp')     # tcp = pas de perte RTP
-MEDIAMTX_ON_DEMAND_CLOSE_AFTER = os.getenv('MEDIAMTX_ON_DEMAND_CLOSE_AFTER', '30s')
+# Délai avant l'arrêt du relais quand plus aucun lecteur n'est présent.
+#
+# 180s et non 30s : la passerelle HikCentral échoue à l'ÉTABLISSEMENT de session
+# sous charge (mesuré : 100 % de réussite à 2 flux concurrents, ~83 % à 6 et 12).
+# Ce qui la met en difficulté, c'est donc le nombre de sessions OUVERTES, pas leur
+# durée. Or à 30 s le cycle était : le lecteur du Core décroche, le relais est tué,
+# le lecteur revient, une nouvelle session est redemandée. Mesuré en production le
+# 2026-09-04 : 190 arrêts « plus aucun lecteur » et 189 relances, dont 87 % en
+# moins de 3 minutes (médiane 54 s) — autant d'établissements de session inutiles.
+# Garder le relais tiède pendant 3 minutes absorbe ces décrochages brefs et
+# transforme un flot de connexions en un jeu de sessions stables.
+MEDIAMTX_ON_DEMAND_CLOSE_AFTER = os.getenv('MEDIAMTX_ON_DEMAND_CLOSE_AFTER', '180s')
 
 # ----------------------
 # Transcodage des sources HikCentral (HEVC/H.265 → H.264)

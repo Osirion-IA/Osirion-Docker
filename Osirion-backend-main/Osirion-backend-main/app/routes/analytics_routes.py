@@ -102,7 +102,15 @@ def _presence_event_is_reliable(event) -> bool:
     """
     meta = event.meta or {}
     quality = meta.get("presence_data_quality")
-    if quality == "archived":
+    # Compatibilité avec les épisodes déjà enregistrés avant la correction du
+    # Core : ils portaient tous `reliable`, même lorsque la caméra avait coupé.
+    if (
+        event.event_type == EVENT_POST_ABSENCE
+        and meta.get("resolution_reason")
+        and meta.get("resolution_reason") != "presence_restored"
+    ):
+        return False
+    if quality in ("archived", "truncated"):
         return False
     try:
         schema_version = int(meta.get("presence_schema_version") or 0)
@@ -423,6 +431,7 @@ def post_absence(
     camera_id: Optional[int] = None,
     group_id: Optional[int] = None,
     work_schedule_id: Optional[int] = Query(None, ge=1),
+    include_truncated: bool = False,
     _user: User = Depends(require_viewer),
     session: Session = Depends(get_session),
 ):
@@ -444,7 +453,14 @@ def post_absence(
         work_schedule_id,
     )
     vacant = [event for event in raw_vacant if _presence_event_is_reliable(event)]
-    closed = [event for event in raw_closed if _presence_event_is_reliable(event)]
+    closed = [
+        event for event in raw_closed
+        if _presence_event_is_reliable(event)
+        or (
+            include_truncated
+            and (event.meta or {}).get("presence_data_quality") == "truncated"
+        )
+    ]
     reliable_events = vacant + closed
     reliable_since = min(
         (event.timestamp for event in reliable_events), default=None
@@ -586,7 +602,7 @@ def post_absence(
         "schedules": schedule_rows,
         "current_posts": current_posts,
         "data_quality": {
-            "scope": "reliable_only",
+            "scope": "including_truncated" if include_truncated else "reliable_only",
             "reliable_since": reliable_since.isoformat() if reliable_since else None,
             "archived_vacant_signals": len(raw_vacant) - len(vacant),
             "archived_closed_episodes": len(raw_closed) - len(closed),

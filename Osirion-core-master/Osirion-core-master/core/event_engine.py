@@ -929,7 +929,17 @@ class EventEngine:
                     "schedule_id": st.get("schedule_id"),
                     "schedule_name": st.get("schedule_name"),
                     "presence_schema_version": 2,
-                    "presence_data_quality": "reliable",
+                    # La durée d'absence n'est exploitable en analyse métier que si
+                    # l'épisode s'est terminé par le RETOUR OBSERVÉ d'un agent. Clos
+                    # par une perte de caméra ou par la fin du créneau, il est
+                    # TRONQUÉ : sa durée mesure une coupure technique, pas un
+                    # comportement. Lors de la campagne d'août 2026, 44 des 74
+                    # épisodes (17,2 h sur 31,8 h) étaient dans ce cas et portaient
+                    # pourtant « reliable » — de quoi lire une panne vidéo comme un
+                    # mauvais comportement d'agent.
+                    "presence_data_quality": (
+                        "reliable" if reason == "presence_restored" else "truncated"
+                    ),
                     "absence_s": round(max(0.0, fin - st["vacant_since"]), 1),
                     "resolution_reason": reason,
                     "snapshot_origin": snapshot_origin,

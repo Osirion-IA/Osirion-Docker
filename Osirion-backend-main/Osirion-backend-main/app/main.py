@@ -49,6 +49,12 @@ def startup_event():
     # Enregistreur d'historique de connectivité caméra (poll santé Core → transitions).
     from app.services.camera_status_recorder import start as start_camera_status_recorder
     start_camera_status_recorder()
+    # Rétention automatique des événements/captures (no-op si RETENTION_DAYS=0).
+    from app.services.retention_scheduler import start_retention
+    start_retention()
+    # Reprise des notifications d'alerte échouées (no-op si NOTIFY_RETRY_SECONDS=0).
+    from app.services.notification_retry import start_notification_retry
+    start_notification_retry()
 
 
 @app.exception_handler(RateLimitExceeded)

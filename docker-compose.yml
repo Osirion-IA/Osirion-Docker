@@ -132,6 +132,12 @@ services:
       SMTP_USE_TLS: ${SMTP_USE_TLS:-true}
       ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-}
       ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      # Rétention destructive désactivée par défaut ; l'activer uniquement après
+      # validation de la politique d'archivage.
+      RETENTION_DAYS: ${RETENTION_DAYS:-0}
+      RETENTION_CHECK_HOURS: ${RETENTION_CHECK_HOURS:-24}
+      RETENTION_MIN_FREE_GB: ${RETENTION_MIN_FREE_GB:-10}
+      NOTIFY_RETRY_SECONDS: ${NOTIFY_RETRY_SECONDS:-60}
     volumes:
       # ── Bind mounts — code local écrase le code de l'image ──────────────────
       - ./Osirion-backend-main/Osirion-backend-main/app:/app/app
@@ -201,6 +207,10 @@ services:
       HIK_TRANSCODE_ENCODER: ${HIK_TRANSCODE_ENCODER:-libx264}
       HIK_TRANSCODE_FLAGS: ${HIK_TRANSCODE_FLAGS:--preset veryfast -tune zerolatency -crf 26 -g 20}
       HIK_ONDEMAND_START_TIMEOUT: ${HIK_ONDEMAND_START_TIMEOUT:-30s}
+      MEDIAMTX_ON_DEMAND_CLOSE_AFTER: ${MEDIAMTX_ON_DEMAND_CLOSE_AFTER:-180s}
+      HIK_RESOLVE_FAIL_THRESHOLD: ${HIK_RESOLVE_FAIL_THRESHOLD:-3}
+      HIK_RESOLVE_BACKOFF_BASE: ${HIK_RESOLVE_BACKOFF_BASE:-30}
+      HIK_RESOLVE_BACKOFF_MAX: ${HIK_RESOLVE_BACKOFF_MAX:-300}
       AUTH_EMAIL: ${AUTH_EMAIL}
       AUTH_PASSWORD: ${AUTH_PASSWORD}
       # Clé de service (auth M2M) : si définie, le Core l'utilise (X-API-Key) au lieu

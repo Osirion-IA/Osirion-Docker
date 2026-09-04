@@ -31,6 +31,13 @@ function relTime(ts) {
 }
 const clock = (ts) => { const d = new Date(ts && !String(ts).endsWith("Z") ? `${ts}Z` : ts); return isNaN(d) ? "—" : d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }); };
 const snap = (u) => (u ? (String(u).startsWith("http") ? u : `/api/images?path=${encodeURIComponent(u)}`) : null);
+function deliveryMeta(alert) {
+  if (alert.notified_at) return { label: `Envoyée · ${alert.notified_channel || "canal inconnu"}`, color: "var(--os-green)" };
+  if (alert.notify_next_retry_at) return { label: `Reprise prévue · essai ${Number(alert.notify_attempts || 0) + 1}`, color: "var(--os-amber)" };
+  if (Number(alert.notify_attempts || 0) >= 5) return { label: "Non délivrée · tentatives épuisées", color: "var(--os-red)" };
+  if (alert.notify_requested_channels) return { label: "En attente d’envoi", color: "var(--os-amber)" };
+  return { label: "Aucune notification demandée", color: "var(--os-t4)" };
+}
 
 export default function AlertsPage() {
   const [alerts, setAlerts] = useState([]);
@@ -145,6 +152,7 @@ export default function AlertsPage() {
             ) : (
               alerts.map((a) => {
                 const st = STATUS_META[a.status] || STATUS_META.new;
+                const delivery = deliveryMeta(a);
                 const active = selected && selected.id === a.id;
                 return (
                   <button key={a.id} onClick={() => setSelectedId(a.id)}
@@ -164,6 +172,7 @@ export default function AlertsPage() {
                         </div>
                         <p className="text-[13px] font-semibold text-os-t1 truncate mt-0.5">{a.label}</p>
                         {a.reason && <p className="text-[12px] text-os-t3 truncate">{a.reason}</p>}
+                        <p className="text-[11px] truncate mt-0.5" style={{ color: delivery.color }}>{delivery.label}</p>
                       </div>
                       <span className="os-num text-[11px] text-os-t4 shrink-0">{relTime(a.created_at)}</span>
                     </div>
@@ -232,7 +241,9 @@ export default function AlertsPage() {
                     <Meta label="Caméra" value={selected.camera_name || `Caméra ${selected.camera_id ?? "?"}`} />
                     <Meta label="Déclenchée à" value={clock(selected.created_at)} mono />
                     <Meta label="Traitée par" value={selected.acknowledged_by ? `#${selected.acknowledged_by}` : "—"} />
-                    <Meta label="Notification" value={selected.notified_channel || "—"} />
+                    <Meta label="Notification" value={deliveryMeta(selected).label} />
+                    {selected.notify_attempts > 0 && <Meta label="Tentatives" value={String(selected.notify_attempts)} mono />}
+                    {selected.notify_last_error && <Meta label="Dernière erreur" value={selected.notify_last_error} />}
                   </div>
 
                   <div className="flex items-center gap-2 mt-5">

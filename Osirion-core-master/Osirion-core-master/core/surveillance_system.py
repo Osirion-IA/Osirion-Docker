@@ -5,12 +5,14 @@ Système de surveillance multi-caméras avec reconnaissance faciale
 import threading
 import queue
 import time
-from typing import List, Dict
+import shutil
+from pathlib import Path
+from typing import List, Dict, Set
 
 from core.trackers.oc_sort import OCSortTrackerAdapter
 from services.camera_fetching_service import fetch_camera_list
-from services.mediamtx_path_service import sync_paths
-from services.hik_stream_resolver import resolve_stream_url
+from services.mediamtx_path_service import sync_paths, managed_paths_health
+from services.hik_stream_resolver import resolve_stream_url, resolver_health
 from core.camera_manager import CameraCapture
 from core.tracking_processor import TrackingProcessor
 from core import event_dispatch
@@ -232,9 +234,29 @@ class SurveillanceSystem:
                 transcode_encoder=getattr(self.config, 'HIK_TRANSCODE_ENCODER', 'h264_nvenc'),
                 transcode_flags=getattr(self.config, 'HIK_TRANSCODE_FLAGS', ''),
                 hik_start_timeout=getattr(self.config, 'HIK_ONDEMAND_START_TIMEOUT', '30s'),
+                healthy=self._healthy_camera_ids(),
             )
         except Exception:
             logger.error("Échec synchro des chemins MediaMTX", exc_info=True)
+
+    def _healthy_camera_ids(self) -> Set[int]:
+        """Caméras dont la capture est VIVANTE (flux ouvert, frames fraîches).
+
+        Sert à protéger un chemin MediaMTX qui diffuse encore alors que son URL
+        n'est plus résoluble : une URL rtsp_s déjà établie continue de fonctionner
+        tant que le relais tient sa session, et supprimer ce chemin couperait un
+        flux sain. Lecture best-effort, sans verrou (cf. camera_health).
+        """
+        healthy: Set[int] = set()
+        for cam_id, cap in list(self.camera_captures.items()):
+            try:
+                h = cap.health() or {}
+                age = h.get("last_frame_age_s")
+                if h.get("connected") and age is not None and age <= 5:
+                    healthy.add(cam_id)
+            except Exception:
+                continue
+        return healthy
 
     def _resolve_hik_urls(self, desired: Dict[int, Dict]) -> None:
         """Résout À LA DEMANDE l'URL RTSP des caméras HikCentral (source_type=
@@ -242,8 +264,14 @@ class SurveillanceSystem:
         cam_dict — consommée ensuite par le relais MediaMTX ET la capture.
 
         Best-effort : une caméra dont l'URL ne se résout pas (liaison agence
-        coupée) reste sans rtsp_url → son chemin MediaMTX est simplement ignoré ce
-        cycle-ci (sync_paths log + réessai au suivant). N'impacte pas les autres.
+        coupée, passerelle en 502) reste sans rtsp_url → `sync_paths` SUPPRIME alors
+        son chemin MediaMTX s'il existe et que la capture est morte, pour ne pas y
+        laisser un relais se relancer en boucle contre une passerelle qui ne répond
+        plus. N'impacte pas les autres.
+
+        Le rafraîchissement forcé demandé ici n'est qu'une INTENTION : le résolveur
+        la neutralise dès qu'il constate des échecs (cf. hik_stream_resolver), pour
+        ne pas contourner le cache backend au moment précis où la passerelle sature.
         """
         for cam in desired.values():
             if cam.get("source_type") != "hikcentral" or cam.get("rtsp_url"):
@@ -427,6 +455,10 @@ class SurveillanceSystem:
                         "n_processed": n_det,
                     })
                 cache = {}
+                disk_target = Path("/app/observation_runs")
+                if not disk_target.exists():
+                    disk_target = Path("/app")
+                total_b, used_b, free_b = shutil.disk_usage(disk_target)
                 measure.emit(
                     "system_sample",
                     interval_s=round(dt, 2),
@@ -434,6 +466,25 @@ class SurveillanceSystem:
                     cameras=cams_payload,
                     cache=cache,
                     gpu=get_gpu_stats(),
+                    # Santé de l'INGESTION (passerelle HikCentral + disjoncteur).
+                    # Sans ces compteurs, la campagne d'août 2026 a exigé de croiser
+                    # 363 Mo de journaux MediaMTX pour comprendre que la panne venait
+                    # de la passerelle et non des caméras. Ils rendent metrics.jsonl
+                    # auto-suffisant pour ce diagnostic.
+                    ingest={
+                        **resolver_health(),
+                        **managed_paths_health(
+                            getattr(self.config, 'MEDIAMTX_API_BASE',
+                                    'http://mediamtx:9997')
+                        ),
+                    },
+                    disk={
+                        "path": str(disk_target),
+                        "total_gb": round(total_b / 1024 ** 3, 2),
+                        "used_gb": round(used_b / 1024 ** 3, 2),
+                        "free_gb": round(free_b / 1024 ** 3, 2),
+                        "used_percent": round(100 * used_b / total_b, 1) if total_b else 0,
+                    },
                 )
             except Exception:
                 logger.error("[MESURE] erreur dans l'échantillonneur système", exc_info=True)
