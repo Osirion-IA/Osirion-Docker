@@ -2,13 +2,17 @@ import { NextResponse } from "next/server";
 
 const BACKEND = process.env.NEXT_PUBLIC_BASE_BACKEND_URL;
 
-// GET /api/alerts/stats → compteurs par statut + état des canaux de notification.
+// GET /api/alerts/stats?group_id=&camera_id= → compteurs par statut (scopés) +
+// état des canaux de notification.
 export async function GET(req) {
   const token = req.cookies.get("access_token")?.value;
   if (!token) return NextResponse.json({ message: "Non authentifié." }, { status: 401 });
 
   try {
-    const res = await fetch(`${BACKEND}/alerts/stats`, {
+    // Transmet la query (group_id / camera_id) : sans elle, le compte renvoyé
+    // ignorerait le filtre agence/caméra de l'écran appelant.
+    const { search } = new URL(req.url);
+    const res = await fetch(`${BACKEND}/alerts/stats${search || ""}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     const data = await res.json();

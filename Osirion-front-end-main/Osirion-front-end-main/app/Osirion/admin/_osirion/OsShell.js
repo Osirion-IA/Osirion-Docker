@@ -15,7 +15,7 @@ import { SECTIONS, findSection } from "./nav";
 import OsSidebar from "./OsSidebar";
 import OsCommandPalette from "./OsCommandPalette";
 
-export default function OsShell({ children, alertsCount = 0, camsOnline = 0, camsTotal = 0 }) {
+export default function OsShell({ children, alertsCount = 0 }) {
   const pathname = usePathname() || "";
   const user = useAuth();
   const section = findSection(pathname);

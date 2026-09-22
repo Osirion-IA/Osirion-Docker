@@ -7,8 +7,9 @@ Workflow : new → acknowledged → resolved (acquittement / résolution).
 ⚠️ Notifications (email/webhook) : envoyées UNIQUEMENT via POST /{id}/notify,
 c'est-à-dire sur action explicite d'un utilisateur. Aucun envoi automatique.
 """
-from fastapi import APIRouter, Depends, HTTPException
-from sqlmodel import Session, select
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlmodel import Session, select, func
+from sqlalchemy.orm import selectinload
 from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel
@@ -36,6 +37,18 @@ class ResolveAllRequest(BaseModel):
     status: Optional[str] = None
 
 
+def _scope_camera_ids(session: Session, group_id: Optional[int], camera_id: Optional[int]):
+    """Ensemble des camera_id ciblés par le filtre agence/caméra, ou None = toutes.
+    `camera_id` prime sur `group_id`. Le Cockpit filtrait jusqu'ici côté client sur
+    la page reçue : le compte affiché valait alors la taille de page, pas le total."""
+    if camera_id is not None:
+        return {camera_id}
+    if group_id is not None:
+        cams = session.exec(select(Camera).options(selectinload(Camera.groups))).all()
+        return {c.id for c in cams if any(g.id == group_id for g in c.groups)}
+    return None
+
+
 def _serialize(a: Alert, cam_name: Optional[str]) -> dict:
     return {
         "id": a.id, "kind": a.kind, "severity": a.severity, "label": a.label, "reason": a.reason,
@@ -54,14 +67,22 @@ def _serialize(a: Alert, cam_name: Optional[str]) -> dict:
 @router.get("/")
 def list_alerts(
     status: Optional[str] = None,
+    group_id: Optional[int] = None,
+    camera_id: Optional[int] = None,
     skip: int = 0,
-    limit: int = 200,
+    limit: int = Query(200, ge=1, le=500),
     _current_user=Depends(require_viewer),
     session: Session = Depends(get_session),
 ):
+    """Liste paginée. `group_id` / `camera_id` scopent CÔTÉ SERVEUR : un appelant
+    qui n'a besoin que des N dernières alertes d'une agence ne rapatrie plus la
+    page entière pour la filtrer lui-même. Pour un COMPTE, utiliser /stats."""
     stmt = select(Alert)
     if status and status not in ("all", "tous"):
         stmt = stmt.where(Alert.status == status)
+    scope = _scope_camera_ids(session, group_id, camera_id)
+    if scope is not None:
+        stmt = stmt.where(Alert.camera_id.in_(scope))
     stmt = stmt.order_by(Alert.id.desc()).offset(skip).limit(limit)
     alerts = session.exec(stmt).all()
 
@@ -76,15 +97,23 @@ def list_alerts(
 
 @router.get("/stats")
 def alert_stats(
+    group_id: Optional[int] = None,
+    camera_id: Optional[int] = None,
     _current_user=Depends(require_viewer),
     session: Session = Depends(get_session),
 ):
-    alerts = session.exec(select(Alert)).all()
-    by_status: dict = {}
-    for a in alerts:
-        by_status[a.status] = by_status.get(a.status, 0) + 1
+    """Compteurs par statut, scopés agence/caméra.
+
+    Agrégé EN BASE (GROUP BY) au lieu de charger toutes les alertes en mémoire :
+    la table dépasse le millier de lignes et cet endpoint est appelé à chaque
+    rafraîchissement du Centre d'alertes et du Cockpit."""
+    scope = _scope_camera_ids(session, group_id, camera_id)
+    stmt = select(Alert.status, func.count()).group_by(Alert.status)
+    if scope is not None:
+        stmt = stmt.where(Alert.camera_id.in_(scope))
+    by_status = {status: count for status, count in session.exec(stmt).all()}
     return {
-        "total": len(alerts),
+        "total": sum(by_status.values()),
         "new": by_status.get(ALERT_NEW, 0),
         "acknowledged": by_status.get(ALERT_ACKNOWLEDGED, 0),
         "resolved": by_status.get(ALERT_RESOLVED, 0),

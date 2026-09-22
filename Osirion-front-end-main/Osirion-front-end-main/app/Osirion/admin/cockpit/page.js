@@ -1,25 +1,49 @@
 "use client";
 
 /**
- * Cockpit — écran d'accueil de la section Surveiller (thème sombre).
+ * Cockpit — écran d'accueil de la section Surveiller.
  * Objectif produit : répondre en 3 s à « tout va bien ? », par site si besoin.
  *
- * 100 % anonyme. Filtres AGENCE / CAMÉRA qui scopent tout le tableau. Câblé aux
- * vraies données : summary/occupancy (analytics), queue-performance (files P90/SLA),
- * camera-status/stats (disponibilité), zones, alerts, cameras, rules.
+ * 100 % anonyme. Filtres AGENCE / CAMÉRA qui scopent tout le tableau.
+ *
+ * RÈGLE DE L'ÉCRAN : on n'affiche que des chiffres qui peuvent varier et dont la
+ * source est celle que le libellé annonce. Tout indicateur structurellement figé
+ * (faute de donnée en amont) ou branché sur un champ qui ne mesure pas ce qu'il
+ * prétend a été retiré plutôt que masqué — un « 0 » permanent se lit comme une
+ * mesure, pas comme une absence de mesure.
+ *
+ * Retirés pour cette raison (cf. nettoyage) :
+ *  - « Entrées » et l'estimation entrées−sorties : aucune ligne de comptage n'est
+ *    tracée, donc aucun LINE_CROSSED n'est jamais émis.
+ *  - « Occupation » (carte + %) : aucune zone de kind occupancy/generic, donc une
+ *    capacité totale nulle et un pourcentage figé à 0 %.
+ *  - « Présents » : valait la somme des longueurs de files, pas une présence — et
+ *    entrait en collision avec l'écran « Présence agents ».
+ *  - « x/y caméras » et les pastilles En ligne/Inactive : bâtis sur `is_active`,
+ *    qui signale une caméra TRAITÉE par le moteur, pas une caméra joignable.
+ *    La connectivité réelle vient de camera-status (`currently_offline`).
+ *  - « % trop longue » : part d'attente au-dessus du seuil, jamais atteint.
+ *
+ * Le compte d'alertes vient de /alerts/stats (agrégat serveur scopé) et non plus
+ * de la longueur de la page reçue, qui plafonnait à la taille de page.
  */
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { RefreshCw, Users, ArrowUp, Clock, X, ArrowRight, Wifi } from "lucide-react";
+import { RefreshCw, Clock, X, ArrowRight, Wifi, Activity } from "lucide-react";
 import OsShell from "../_osirion/OsShell";
 import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
 
 const ONB_KEY = "osirion-cockpit-onboarding";
-const POLL_MS = 8000;
+// Le live temps réel passe par Socket.IO ; cet écran est une synthèse, servie par
+// un cache serveur de 5 min. Repoller toutes les 8 s ne faisait que multiplier les
+// allers-retours sur une réponse identique.
+const POLL_MS = 60000;
+const STATIC_POLL_MS = 300000;
+// On n'affiche que 5 alertes : inutile d'en rapatrier 200 à chaque tour.
+const ALERTS_PREVIEW = 5;
 
 const j = async (r) => (r && r.ok ? r.json().catch(() => null) : null);
 const num = (n) => (typeof n === "number" && isFinite(n) ? n : 0);
-const pct = (n, d) => (d > 0 ? Math.round((100 * n) / d) : 0);
 function fmtWait(sec) {
   sec = Math.round(num(sec));
   const m = Math.floor(sec / 60), s = sec % 60;
@@ -56,21 +80,9 @@ function Kpi({ label, value, sub, icon: Icon, accent, color }) {
   );
 }
 
-function Donut({ frac }) {
-  const r = 26, C = 2 * Math.PI * r;
-  const f = Math.max(0, Math.min(1, frac || 0));
-  return (
-    <svg width="64" height="64" viewBox="0 0 64 64" className="shrink-0 -rotate-90">
-      <circle cx="32" cy="32" r={r} fill="none" stroke="var(--os-border-2)" strokeWidth="7" />
-      <circle cx="32" cy="32" r={r} fill="none" stroke={loadColor(f)} strokeWidth="7" strokeLinecap="round"
-        strokeDasharray={C} strokeDashoffset={C * (1 - f)} style={{ transition: "stroke-dashoffset .6s ease, stroke .3s" }} />
-    </svg>
-  );
-}
-
 export default function CockpitPage() {
   const [data, setData] = useState(null);
-  const [clock, setClock] = useState("");
+  const [updatedAt, setUpdatedAt] = useState(null);
   const [onbDismissed, setOnbDismissed] = useState(true);
   const [groupId, setGroupId] = useState("");
   const [camId, setCamId] = useState("");
@@ -81,8 +93,10 @@ export default function CockpitPage() {
     fetchWithRefresh("/api/groups").then(j).then((g) => setGroups(Array.isArray(g) ? g : []));
   }, []);
 
-  // Données de CONFIG (zones, caméras, règles) : quasi statiques → chargées au
-  // montage puis rafraîchies lentement. Inutile de les re-télécharger toutes les 8 s.
+  // Données de CONFIG (zones, caméras, règles) : quasi statiques. Elles ne servent
+  // plus qu'aux sélecteurs de filtre, aux seuils de files et à l'onboarding — donc
+  // un rafraîchissement lent suffit (une caméra ajoutée à chaud apparaît au tour
+  // suivant ou au clic sur Rafraîchir).
   const loadStatic = useCallback(async () => {
     const [zones, cams, rules] = await Promise.all([
       fetchWithRefresh("/api/zones").then(j),
@@ -97,28 +111,30 @@ export default function CockpitPage() {
     }));
   }, []);
 
-  // Données LIVE : 1 appel AGRÉGÉ (résumé + occupation + files + dispo) + alertes.
-  // Remplace 6 requêtes par 2 ; le backend sert le tout depuis un cache court.
+  // Données LIVE : 1 appel AGRÉGÉ (résumé + files + dispo) + l'aperçu des alertes
+  // + leur COMPTE réel. Le scope agence/caméra est appliqué CÔTÉ SERVEUR sur les
+  // trois appels : plus de filtrage sur une page tronquée.
   const loadLive = useCallback(async () => {
     const f = camId ? `camera_id=${camId}` : groupId ? `group_id=${groupId}` : "";
     const fq = f ? `?${f}` : "";
-    const [agg, alerts] = await Promise.all([
+    const [agg, alerts, alertStats] = await Promise.all([
       fetchWithRefresh(`/api/analytics/cockpit${fq}`).then(j),
-      fetchWithRefresh("/api/alerts?status=new").then(j),
+      fetchWithRefresh(`/api/alerts?status=new&limit=${ALERTS_PREVIEW}${f ? `&${f}` : ""}`).then(j),
+      fetchWithRefresh(`/api/alerts/stats${fq}`).then(j),
     ]);
     setData((d) => ({
       ...d,
-      summary: agg?.summary || {},
-      occByZone: Object.fromEntries((agg?.occupancy?.zones || []).map((z) => [z.zone_id, z.count])),
       camStats: agg?.camera_status || {},
       queues: agg?.queue_performance?.queues || [],
       alerts: Array.isArray(alerts) ? alerts : alerts?.alerts || [],
+      alertsNew: num(alertStats?.new),
     }));
+    setUpdatedAt(new Date());
   }, [groupId, camId]);
 
   useEffect(() => {
     loadStatic();
-    const t = setInterval(loadStatic, 60000);
+    const t = setInterval(loadStatic, STATIC_POLL_MS);
     return () => clearInterval(t);
   }, [loadStatic]);
 
@@ -128,48 +144,35 @@ export default function CockpitPage() {
     return () => clearInterval(t);
   }, [loadLive]);
 
-  useEffect(() => {
-    const tick = () => setClock(new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }));
-    tick();
-    const t = setInterval(tick, 15000);
-    return () => clearInterval(t);
-  }, []);
-
   const d = data;
-  const s = d?.summary || {};
-  const filtered = !!(groupId || camId);
-
-  // Scope AGENCE / CAMÉRA appliqué côté client aux caméras/zones/alertes.
   const camsAll = d?.cams || [];
-  const inScope = (c) => (camId ? c.id === Number(camId) : groupId ? (c.group_ids || []).includes(Number(groupId)) : true);
-  const cams = camsAll.filter(inScope);
-  const scopeIds = new Set(cams.map((c) => c.id));
-  const camsOnline = cams.filter((c) => c.is_active).length;
+  const alerts = d?.alerts || [];
+  const alertsCount = num(d?.alertsNew);
 
-  const alerts = filtered ? (d?.alerts || []).filter((a) => a.camera_id != null && scopeIds.has(a.camera_id)) : (d?.alerts || []);
-  const alertsCount = alerts.length;
+  const cs = d?.camStats?.summary || {};   // disponibilité réelle (camera-status)
+  const queues = d?.queues || [];          // files avec attente moyenne + P90
+  const offline = num(cs.currently_offline);
+  const monitored = num(cs.cameras);
+  // Seuil configuré de la zone : la barre de charge se mesure à lui, pas à une
+  // borne inventée à la volée.
+  const zoneThreshold = Object.fromEntries((d?.zones || []).map((z) => [z.id, z.threshold || 0]));
+  const slowest = queues[0] || null;
 
-  const cs = d?.camStats?.summary || {};                 // disponibilité (Phase 1)
-  const queues = d?.queues || [];                         // files avec P90 (Phase 2)
-  const occZones = (d?.zones || []).filter((z) => (z.kind === "occupancy" || z.kind === "generic") && scopeIds.has(z.camera_id));
-  const totalCap = occZones.reduce((a, z) => a + (z.threshold || 0), 0);
-  const occTotalPct = pct(num(s.current_occupancy), totalCap);
-
-  const ok = alertsCount === 0 && !(cs.currently_offline > 0);
+  const ok = alertsCount === 0 && offline === 0;
   const dismissOnb = () => { try { localStorage.setItem(ONB_KEY, "1"); } catch { /* */ } setOnbDismissed(true); };
 
   const onbSteps = [
     { n: 1, title: "Ajouter une caméra", desc: "Connectez un flux à votre site.", done: camsAll.length > 0 },
     { n: 2, title: "Dessiner une zone", desc: "Tracez zones et lignes de comptage.", done: (d?.zones?.length || 0) > 0 },
     { n: 3, title: "Créer une règle", desc: "Définissez seuils et plages horaires.", done: (d?.rulesCount || 0) > 0 },
-    { n: 4, title: "Recevoir des alertes", desc: "Email / webhook sur événement.", done: (d?.alerts?.length || 0) > 0 },
+    { n: 4, title: "Recevoir des alertes", desc: "Email / webhook sur événement.", done: alertsCount > 0 },
   ];
 
   const camOptions = camsAll.filter((c) => !groupId || (c.group_ids || []).includes(Number(groupId)));
   const sel = "rounded-os border border-os-border bg-os-card px-3 py-1.5 text-[12px] text-os-t2 outline-none";
 
   return (
-    <OsShell alertsCount={alertsCount} camsOnline={camsOnline} camsTotal={cams.length}>
+    <OsShell alertsCount={alertsCount}>
       <div className="p-6 space-y-6 max-w-[1600px]">
         {!onbDismissed && (
           <div className="rounded-os-lg border border-os-border bg-os-card p-5">
@@ -209,17 +212,19 @@ export default function CockpitPage() {
               <option value="">Toutes les caméras</option>
               {camOptions.map((c) => <option key={c.id} value={c.id}>{c.cam_name || `Caméra ${c.id}`}</option>)}
             </select>
+            {/* Pas de badge « LIVE » : la synthèse est servie par un cache de 5 min.
+                On annonce l'heure du dernier chargement, pas une fausse temps-réel. */}
             <span className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-os border border-os-border bg-os-card">
-              <span className="h-2 w-2 rounded-full bg-os-red os-anim-blink" />
-              <span className="text-[12px] font-semibold text-os-t2">LIVE</span>
-              <span className="os-num text-[12px] text-os-t3">{clock}</span>
+              <span className="text-[12px] text-os-t3">
+                Actualisé {updatedAt ? updatedAt.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) : "…"}
+              </span>
             </span>
             <button onClick={() => { loadStatic(); loadLive(); }} className="h-9 w-9 grid place-items-center rounded-os border border-os-border bg-os-card text-os-t3 hover:text-os-t1" aria-label="Rafraîchir"><RefreshCw className="h-4 w-4" /></button>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 xl:grid-cols-5 gap-4">
-          <div className="xl:col-span-1 rounded-os-lg border p-5"
+        <div className="grid grid-cols-1 xl:grid-cols-4 gap-4">
+          <div className="rounded-os-lg border p-5"
             style={ok ? { borderColor: "rgba(31,170,89,.4)", background: "rgba(31,170,89,.05)" } : { borderColor: "rgba(245,166,35,.4)", background: "rgba(245,166,35,.06)" }}>
             <div className="flex items-center gap-2">
               <span className={`h-2.5 w-2.5 rounded-full ${ok ? "bg-os-green" : "bg-os-amber"}`} />
@@ -227,48 +232,33 @@ export default function CockpitPage() {
             </div>
             <p className={`mt-3 text-[26px] leading-tight font-bold ${ok ? "text-os-green" : "text-os-amber"}`}>{ok ? "Tout va bien" : "Attention requise"}</p>
             <p className="text-[13px] text-os-t3 mt-1">
-              {alertsCount > 0 ? `${alertsCount} alerte${alertsCount > 1 ? "s" : ""} à traiter` : cs.currently_offline > 0 ? `${cs.currently_offline} caméra(s) hors ligne` : "Aucune alerte active"}
+              {alertsCount > 0
+                ? `${alertsCount} alerte${alertsCount > 1 ? "s" : ""} à traiter`
+                : offline > 0
+                  ? `${offline} caméra${offline > 1 ? "s" : ""} hors ligne`
+                  : "Aucune alerte active"}
             </p>
-            <div className="mt-4 flex flex-wrap items-end gap-x-5 gap-y-2">
-              <div><p className="os-num text-[18px] font-bold text-os-t1">{camsOnline}/{cams.length}</p><p className="text-[11px] text-os-t3">caméras</p></div>
-              <div><p className="os-num text-[18px] font-bold" style={{ color: upColor(cs.avg_uptime_pct) }}>{cs.avg_uptime_pct != null ? `${cs.avg_uptime_pct}%` : "—"}</p><p className="text-[11px] text-os-t3">dispo. 24 h</p></div>
-              <div><p className="os-num text-[18px] font-bold text-os-t1">{occTotalPct}%</p><p className="text-[11px] text-os-t3">occupation</p></div>
-              <div><p className="os-num text-[18px] font-bold text-os-t1">{alertsCount}</p><p className="text-[11px] text-os-t3">alertes</p></div>
-            </div>
           </div>
-          <Kpi label="Présents" icon={Users} value={num(s.present_now_estimate)} sub={s.present_source === "occupancy" ? "dans les zones suivies" : "estimation (entrées − sorties)"} />
-          <Kpi label="Entrées" icon={ArrowUp} value={num(s.entries_today)} sub="aujourd'hui" accent="text-os-green" />
-          <Kpi label="Caméras hors ligne" icon={Wifi} value={num(cs.currently_offline)} color={cs.currently_offline > 0 ? "var(--os-red)" : "var(--os-green)"} sub={`/ ${cs.cameras ?? cams.length} suivie(s)`} />
-          <Kpi label="Attente des clients" icon={Clock} value={queues.length ? fmtWait(queues[0]?.wait_avg_s) : "—"} sub={queues.length ? `9 clients sur 10 sous ${fmtWait(queues[0]?.wait_p90_s)}` : "aucune file"} />
+
+          <Kpi
+            label="Caméras hors ligne" icon={Wifi} value={offline}
+            color={offline > 0 ? "var(--os-red)" : "var(--os-green)"}
+            sub={monitored ? `sur ${monitored} caméra${monitored > 1 ? "s" : ""} supervisée${monitored > 1 ? "s" : ""}` : "aucune caméra supervisée"}
+          />
+          <Kpi
+            label="Disponibilité 24 h" icon={Activity}
+            value={cs.avg_uptime_pct != null ? `${cs.avg_uptime_pct}%` : "—"}
+            color={upColor(cs.avg_uptime_pct)}
+            sub="moyenne des caméras supervisées"
+          />
+          <Kpi
+            label="Attente la plus longue" icon={Clock}
+            value={slowest ? fmtWait(slowest.wait_avg_s) : "—"}
+            sub={slowest ? `${slowest.name} · 9 clients sur 10 sous ${fmtWait(slowest.wait_p90_s)}` : "aucune file"}
+          />
         </div>
 
-        <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-          <div className="rounded-os-lg border border-os-border bg-os-card p-5">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-[15px] font-semibold text-os-t1">Occupation des zones</h3>
-              <Link href="/Osirion/admin/zones" className="text-[12px] text-os-t3 hover:text-os-t1 inline-flex items-center gap-1">Gérer <ArrowRight className="h-3.5 w-3.5" /></Link>
-            </div>
-            {occZones.length === 0 ? (
-              <p className="text-[13px] text-os-t3 py-6 text-center">Aucune zone d&apos;occupation sur ce périmètre.</p>
-            ) : (
-              <div className="space-y-4">
-                {occZones.slice(0, 4).map((z) => {
-                  const count = num(d.occByZone?.[z.id]); const cap = z.threshold || 0; const frac = cap > 0 ? count / cap : 0;
-                  return (
-                    <div key={z.id} className="flex items-center gap-4">
-                      <Donut frac={frac} />
-                      <div className="min-w-0 flex-1">
-                        <p className="text-[14px] font-semibold text-os-t1 truncate">{z.name}</p>
-                        <p className="os-num text-[12px] text-os-t3">{count}{cap ? ` / ${cap} places` : ""}</p>
-                      </div>
-                      {cap > 0 && <span className="os-num text-[20px] font-bold" style={{ color: loadColor(frac) }}>{pct(count, cap)}%</span>}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
           <div className="rounded-os-lg border border-os-border bg-os-card p-5">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-[15px] font-semibold text-os-t1">Files d&apos;attente</h3>
@@ -278,21 +268,27 @@ export default function CockpitPage() {
               <p className="text-[13px] text-os-t3 py-6 text-center">Aucune file sur ce périmètre.</p>
             ) : (
               <div className="space-y-5">
-                {queues.slice(0, 3).map((q) => {
-                  const over = q.over_threshold_pct > 0;
-                  const frac = Math.min(1, q.length > 0 ? q.length / Math.max(q.length, 8) : 0);
+                {queues.slice(0, 4).map((q) => {
+                  const cap = zoneThreshold[q.zone_id] || 0;
+                  const len = num(q.length);
+                  const frac = cap > 0 ? Math.min(1, len / cap) : 0;
+                  const over = cap > 0 && len >= cap;
                   return (
                     <div key={q.zone_id}>
-                      <div className="flex items-baseline justify-between">
+                      <div className="flex items-baseline justify-between gap-2">
                         <p className="text-[14px] font-semibold text-os-t1 truncate">{q.name}{q.site ? <span className="text-os-t4 font-normal"> · {q.site}</span> : null}</p>
-                        <span className={`os-num text-[20px] font-bold ${over ? "text-os-red" : "text-os-t1"}`}>{num(q.length)}</span>
+                        <span className={`os-num text-[20px] font-bold shrink-0 ${over ? "text-os-red" : "text-os-t1"}`}>
+                          {len}{cap ? <span className="text-[13px] font-normal text-os-t3"> / {cap}</span> : null}
+                        </span>
                       </div>
-                      <div className="mt-2 h-2 rounded-full bg-os-border-2 overflow-hidden">
-                        <div className="h-full rounded-full" style={{ width: `${frac * 100}%`, background: over ? "var(--os-red)" : "var(--os-green)", transition: "width .5s ease" }} />
-                      </div>
-                      <div className="mt-1.5 flex justify-between os-num text-[11px] text-os-t3">
-                        <span>Attente {fmtWait(q.wait_avg_s)} · 9/10 sous {fmtWait(q.wait_p90_s)}</span>
-                        {q.over_threshold_pct != null && <span style={{ color: over ? "var(--os-amber)" : undefined }}>{q.over_threshold_pct}% trop longue</span>}
+                      {cap > 0 && (
+                        <div className="mt-2 h-2 rounded-full bg-os-border-2 overflow-hidden">
+                          <div className="h-full rounded-full" style={{ width: `${frac * 100}%`, background: loadColor(frac), transition: "width .5s ease" }} />
+                        </div>
+                      )}
+                      <div className="mt-1.5 os-num text-[11px] text-os-t3">
+                        Attente {fmtWait(q.wait_avg_s)} · 9 clients sur 10 sous {fmtWait(q.wait_p90_s)}
+                        {q.samples ? <span className="text-os-t4"> · {q.samples} passage{q.samples > 1 ? "s" : ""} mesuré{q.samples > 1 ? "s" : ""}</span> : null}
                       </div>
                     </div>
                   );
@@ -303,14 +299,17 @@ export default function CockpitPage() {
 
           <div className="rounded-os-lg border border-os-border bg-os-card p-5">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-[15px] font-semibold text-os-t1">Alertes en cours</h3>
+              <h3 className="text-[15px] font-semibold text-os-t1">
+                Alertes en cours
+                {alertsCount > ALERTS_PREVIEW && <span className="ml-2 os-num text-[12px] font-normal text-os-t3">{ALERTS_PREVIEW} plus récentes sur {alertsCount}</span>}
+              </h3>
               <Link href="/Osirion/admin/alerts" className="text-[12px] text-os-t3 hover:text-os-t1 inline-flex items-center gap-1">Centre <ArrowRight className="h-3.5 w-3.5" /></Link>
             </div>
-            {alertsCount === 0 ? (
+            {alerts.length === 0 ? (
               <p className="text-[13px] text-os-t3 py-6 text-center">Aucune alerte active. Tout va bien.</p>
             ) : (
               <ul className="space-y-2.5">
-                {alerts.slice(0, 5).map((a) => (
+                {alerts.slice(0, ALERTS_PREVIEW).map((a) => (
                   <li key={a.id} className="rounded-os border border-os-border pl-3 pr-3 py-2.5 relative overflow-hidden">
                     <span className="absolute left-0 top-0 bottom-0 w-[3px]" style={{ background: SEV_COLOR[a.severity] || "var(--os-red)" }} />
                     <div className="flex items-center justify-between gap-2">
@@ -324,29 +323,6 @@ export default function CockpitPage() {
               </ul>
             )}
           </div>
-        </div>
-
-        <div className="rounded-os-lg border border-os-border bg-os-card p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-[15px] font-semibold text-os-t1">Parc caméras{filtered ? " (filtré)" : ""}</h3>
-            <Link href="/Osirion/admin/camera-history" className="text-[12px] text-os-t3 hover:text-os-t1 inline-flex items-center gap-1">Historique <ArrowRight className="h-3.5 w-3.5" /></Link>
-          </div>
-          {cams.length === 0 ? (
-            <p className="text-[13px] text-os-t3 py-4 text-center">Aucune caméra sur ce périmètre.</p>
-          ) : (
-            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
-              {cams.slice(0, 6).map((c) => (
-                <div key={c.id} className="rounded-os border border-os-border-2 p-3">
-                  <div className="flex items-center gap-1.5">
-                    <span className={`h-2 w-2 rounded-full ${c.is_active ? "bg-os-green" : "bg-os-t4"}`} />
-                    <span className="text-[12px] text-os-t3">{c.is_active ? "En ligne" : "Inactive"}</span>
-                  </div>
-                  <p className="text-[13px] font-semibold text-os-t1 mt-1.5 truncate">{c.cam_name || `Caméra ${c.id}`}</p>
-                  <p className="os-num text-[11px] text-os-t4 truncate">{c.location || "—"}</p>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       </div>
     </OsShell>
