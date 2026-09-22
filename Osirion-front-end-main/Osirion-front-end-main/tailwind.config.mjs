@@ -43,9 +43,9 @@ export default {
         },
       },
       fontFamily: {
-        // Marque Qwiper : Jost partout, Plex Mono pour les chiffres/métriques
+        // Marque Qwiper : Sora partout, Plex Mono pour les chiffres/métriques
         // (chasse fixe → compteurs alignés, cf. app/fonts.js).
-        sans: ["var(--font-jost)", "system-ui", "sans-serif"],
+        sans: ["var(--font-sora)", "system-ui", "sans-serif"],
         mono: ["var(--font-plex-mono)", "ui-monospace", "monospace"],
       },
       borderRadius: {

@@ -1,8 +1,8 @@
 import "./globals.css";
 import { ThemeProvider } from "./ThemeProvider";
-import { jost, plexMono } from "./fonts";
+import { sora, plexMono } from "./fonts";
 
-// Polices Jost (marque Qwiper) + IBM Plex Mono (chiffres) AUTO-HÉBERGÉES via
+// Polices Sora (marque Qwiper) + IBM Plex Mono (chiffres) AUTO-HÉBERGÉES via
 // next/font/local (fichiers .woff2 dans app/fonts/). On n'utilise PAS
 // next/font/google : Google Fonts imposait un téléchargement réseau AU BUILD
 // (`npm run build`) qui cassait la construction de l'image dès que
@@ -15,7 +15,7 @@ export const metadata = {
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="fr" suppressHydrationWarning className={`${jost.variable} ${plexMono.variable}`}>
+    <html lang="fr" suppressHydrationWarning className={`${sora.variable} ${plexMono.variable}`}>
       <head>
         <script
           dangerouslySetInnerHTML={{

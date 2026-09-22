@@ -149,8 +149,8 @@
 body {
   color: var(--foreground);
   background: var(--background);
-  /* Marque Qwiper : Jost (variable exposée par next/font/local), repli système. */
-  font-family: var(--font-jost), system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  /* Marque Qwiper : Sora (variable exposée par next/font/local), repli système. */
+  font-family: var(--font-sora), system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
 }
 
 /* ── Osirion — keyframes (LIVE, alertes, toast, reconnexion, scanlines) ────── */

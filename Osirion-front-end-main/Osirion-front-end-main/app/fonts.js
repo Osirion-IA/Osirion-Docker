@@ -1,24 +1,26 @@
 // app/fonts.js
-// Jost (police de marque Qwiper) + IBM Plex Mono, AUTO-HÉBERGÉES (.woff2 dans
+// Sora (police de marque Qwiper) + IBM Plex Mono, AUTO-HÉBERGÉES (.woff2 dans
 // app/fonts/). On utilise next/font/local — PAS next/font/google — pour que le
 // build Docker reste HORS-LIGNE (cf. note dans layout.js : Google Fonts cassait
 // la build). Les variables exposées sont câblées dans tailwind.config + globals.css.
 //
-// Jost est une police VARIABLE : Google sert UN SEUL fichier par sous-ensemble
-// Unicode, couvrant toutes les graisses. D'où `weight: "100 900"` et deux fichiers
-// (latin + latin-ext) au lieu d'un fichier par graisse.
+// Sora est une police VARIABLE : Google sert UN SEUL fichier par sous-ensemble
+// Unicode, couvrant toutes les graisses. D'où `weight: "100 800"` et deux fichiers
+// (latin + latin-ext) au lieu d'un fichier par graisse. L'axe s'arrête à 800 (et
+// non 900 comme Jost) — l'interface ne dépasse pas 700 (font-bold), donc aucune
+// graisse n'est synthétisée.
 //
-// Les CHIFFRES restent en IBM Plex Mono (classe .os-num) : Jost est une géométrique
-// à chasse proportionnelle, ses chiffres sauteraient en largeur dans les compteurs
-// rafraîchis en direct. Le mono garantit des colonnes stables.
+// Les CHIFFRES restent en IBM Plex Mono (classe .os-num) : Sora est une grotesque
+// géométrique à chasse proportionnelle, ses chiffres sauteraient en largeur dans
+// les compteurs rafraîchis en direct. Le mono garantit des colonnes stables.
 import localFont from "next/font/local";
 
-export const jost = localFont({
+export const sora = localFont({
   src: [
-    { path: "./fonts/jost-latin.woff2", weight: "100 900", style: "normal" },
-    { path: "./fonts/jost-latin-ext.woff2", weight: "100 900", style: "normal" },
+    { path: "./fonts/sora-latin.woff2", weight: "100 800", style: "normal" },
+    { path: "./fonts/sora-latin-ext.woff2", weight: "100 800", style: "normal" },
   ],
-  variable: "--font-jost",
+  variable: "--font-sora",
   display: "swap",
 });
 

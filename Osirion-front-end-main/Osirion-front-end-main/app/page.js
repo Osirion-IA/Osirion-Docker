@@ -39,7 +39,7 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex" style={{ fontFamily: "var(--font-jost), system-ui, sans-serif" }}>
+    <div className="min-h-screen flex" style={{ fontFamily: "var(--font-sora), system-ui, sans-serif" }}>
       <div className="hidden lg:flex lg:flex-1 relative overflow-hidden bg-[#0d1315] items-center justify-center">
         <div className="absolute inset-0 opacity-[0.5]" style={{
           backgroundImage: "linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px)",
