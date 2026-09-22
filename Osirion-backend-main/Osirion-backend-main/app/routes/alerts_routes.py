@@ -38,9 +38,8 @@ class ResolveAllRequest(BaseModel):
 
 
 def _scope_camera_ids(session: Session, group_id: Optional[int], camera_id: Optional[int]):
-    """Ensemble des camera_id ciblés par le filtre agence/caméra, ou None = toutes.
-    `camera_id` prime sur `group_id`. Le Cockpit filtrait jusqu'ici côté client sur
-    la page reçue : le compte affiché valait alors la taille de page, pas le total."""
+    """camera_id ciblés par le filtre agence/caméra, ou None = toutes.
+    `camera_id` prime sur `group_id`."""
     if camera_id is not None:
         return {camera_id}
     if group_id is not None:
@@ -74,9 +73,8 @@ def list_alerts(
     _current_user=Depends(require_viewer),
     session: Session = Depends(get_session),
 ):
-    """Liste paginée. `group_id` / `camera_id` scopent CÔTÉ SERVEUR : un appelant
-    qui n'a besoin que des N dernières alertes d'une agence ne rapatrie plus la
-    page entière pour la filtrer lui-même. Pour un COMPTE, utiliser /stats."""
+    """Liste paginée, scopée agence/caméra. Pour un COMPTE, utiliser /stats :
+    la longueur de cette liste vaut la taille de page, pas le total."""
     stmt = select(Alert)
     if status and status not in ("all", "tous"):
         stmt = stmt.where(Alert.status == status)
@@ -102,11 +100,8 @@ def alert_stats(
     _current_user=Depends(require_viewer),
     session: Session = Depends(get_session),
 ):
-    """Compteurs par statut, scopés agence/caméra.
-
-    Agrégé EN BASE (GROUP BY) au lieu de charger toutes les alertes en mémoire :
-    la table dépasse le millier de lignes et cet endpoint est appelé à chaque
-    rafraîchissement du Centre d'alertes et du Cockpit."""
+    """Compteurs par statut, scopés agence/caméra. Agrégé en base (GROUP BY) :
+    la table dépasse le millier de lignes et l'endpoint est appelé en boucle."""
     scope = _scope_camera_ids(session, group_id, camera_id)
     stmt = select(Alert.status, func.count()).group_by(Alert.status)
     if scope is not None:

@@ -4,28 +4,7 @@
  * Cockpit — écran d'accueil de la section Surveiller.
  * Objectif produit : répondre en 3 s à « tout va bien ? », par site si besoin.
  *
- * 100 % anonyme. Filtres AGENCE / CAMÉRA qui scopent tout le tableau.
- *
- * RÈGLE DE L'ÉCRAN : on n'affiche que des chiffres qui peuvent varier et dont la
- * source est celle que le libellé annonce. Tout indicateur structurellement figé
- * (faute de donnée en amont) ou branché sur un champ qui ne mesure pas ce qu'il
- * prétend a été retiré plutôt que masqué — un « 0 » permanent se lit comme une
- * mesure, pas comme une absence de mesure.
- *
- * Retirés pour cette raison (cf. nettoyage) :
- *  - « Entrées » et l'estimation entrées−sorties : aucune ligne de comptage n'est
- *    tracée, donc aucun LINE_CROSSED n'est jamais émis.
- *  - « Occupation » (carte + %) : aucune zone de kind occupancy/generic, donc une
- *    capacité totale nulle et un pourcentage figé à 0 %.
- *  - « Présents » : valait la somme des longueurs de files, pas une présence — et
- *    entrait en collision avec l'écran « Présence agents ».
- *  - « x/y caméras » et les pastilles En ligne/Inactive : bâtis sur `is_active`,
- *    qui signale une caméra TRAITÉE par le moteur, pas une caméra joignable.
- *    La connectivité réelle vient de camera-status (`currently_offline`).
- *  - « % trop longue » : part d'attente au-dessus du seuil, jamais atteint.
- *
- * Le compte d'alertes vient de /alerts/stats (agrégat serveur scopé) et non plus
- * de la longueur de la page reçue, qui plafonnait à la taille de page.
+ * 100 % anonyme. Filtres AGENCE / CAMÉRA appliqués côté serveur.
  */
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
@@ -34,12 +13,10 @@ import OsShell from "../_osirion/OsShell";
 import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
 
 const ONB_KEY = "osirion-cockpit-onboarding";
-// Le live temps réel passe par Socket.IO ; cet écran est une synthèse, servie par
-// un cache serveur de 5 min. Repoller toutes les 8 s ne faisait que multiplier les
-// allers-retours sur une réponse identique.
+// Synthèse servie par un cache serveur de 5 min — repoller plus vite ne rendrait
+// pas la réponse plus fraîche. Le temps réel passe par Socket.IO.
 const POLL_MS = 60000;
 const STATIC_POLL_MS = 300000;
-// On n'affiche que 5 alertes : inutile d'en rapatrier 200 à chaque tour.
 const ALERTS_PREVIEW = 5;
 
 const j = async (r) => (r && r.ok ? r.json().catch(() => null) : null);
@@ -93,10 +70,8 @@ export default function CockpitPage() {
     fetchWithRefresh("/api/groups").then(j).then((g) => setGroups(Array.isArray(g) ? g : []));
   }, []);
 
-  // Données de CONFIG (zones, caméras, règles) : quasi statiques. Elles ne servent
-  // plus qu'aux sélecteurs de filtre, aux seuils de files et à l'onboarding — donc
-  // un rafraîchissement lent suffit (une caméra ajoutée à chaud apparaît au tour
-  // suivant ou au clic sur Rafraîchir).
+  // Config quasi statique : sélecteurs de filtre, seuils de files, onboarding.
+  // Une caméra ajoutée à chaud apparaît au tour suivant ou au clic sur Rafraîchir.
   const loadStatic = useCallback(async () => {
     const [zones, cams, rules] = await Promise.all([
       fetchWithRefresh("/api/zones").then(j),
@@ -111,9 +86,8 @@ export default function CockpitPage() {
     }));
   }, []);
 
-  // Données LIVE : 1 appel AGRÉGÉ (résumé + files + dispo) + l'aperçu des alertes
-  // + leur COMPTE réel. Le scope agence/caméra est appliqué CÔTÉ SERVEUR sur les
-  // trois appels : plus de filtrage sur une page tronquée.
+  // Le compte d'alertes vient de /stats, pas de la longueur de la liste : celle-ci
+  // est paginée et plafonnerait le chiffre à la taille de page.
   const loadLive = useCallback(async () => {
     const f = camId ? `camera_id=${camId}` : groupId ? `group_id=${groupId}` : "";
     const fq = f ? `?${f}` : "";
@@ -149,12 +123,10 @@ export default function CockpitPage() {
   const alerts = d?.alerts || [];
   const alertsCount = num(d?.alertsNew);
 
-  const cs = d?.camStats?.summary || {};   // disponibilité réelle (camera-status)
-  const queues = d?.queues || [];          // files avec attente moyenne + P90
+  const cs = d?.camStats?.summary || {};
+  const queues = d?.queues || [];
   const offline = num(cs.currently_offline);
   const monitored = num(cs.cameras);
-  // Seuil configuré de la zone : la barre de charge se mesure à lui, pas à une
-  // borne inventée à la volée.
   const zoneThreshold = Object.fromEntries((d?.zones || []).map((z) => [z.id, z.threshold || 0]));
   const slowest = queues[0] || null;
 
@@ -212,8 +184,6 @@ export default function CockpitPage() {
               <option value="">Toutes les caméras</option>
               {camOptions.map((c) => <option key={c.id} value={c.id}>{c.cam_name || `Caméra ${c.id}`}</option>)}
             </select>
-            {/* Pas de badge « LIVE » : la synthèse est servie par un cache de 5 min.
-                On annonce l'heure du dernier chargement, pas une fausse temps-réel. */}
             <span className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-os border border-os-border bg-os-card">
               <span className="text-[12px] text-os-t3">
                 Actualisé {updatedAt ? updatedAt.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) : "…"}

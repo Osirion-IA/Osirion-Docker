@@ -9,8 +9,7 @@ export async function GET(req) {
   if (!token) return NextResponse.json({ message: "Non authentifié." }, { status: 401 });
 
   try {
-    // Transmet la query (group_id / camera_id) : sans elle, le compte renvoyé
-    // ignorerait le filtre agence/caméra de l'écran appelant.
+    // Transmet group_id / camera_id : sinon le compte ignore le filtre de l'écran.
     const { search } = new URL(req.url);
     const res = await fetch(`${BACKEND}/alerts/stats${search || ""}`, {
       headers: { Authorization: `Bearer ${token}` },

@@ -1,18 +1,14 @@
 // app/fonts.js
-// Sora (police de marque Qwiper) + IBM Plex Mono, AUTO-HÉBERGÉES (.woff2 dans
-// app/fonts/). On utilise next/font/local — PAS next/font/google — pour que le
-// build Docker reste HORS-LIGNE (cf. note dans layout.js : Google Fonts cassait
-// la build). Les variables exposées sont câblées dans tailwind.config + globals.css.
+// Sora (marque Qwiper) + IBM Plex Mono, AUTO-HÉBERGÉES (.woff2 dans app/fonts/)
+// via next/font/local — PAS next/font/google : le build Docker doit rester
+// HORS-LIGNE (Google Fonts au build cassait la construction de l'image).
 //
-// Sora est une police VARIABLE : Google sert UN SEUL fichier par sous-ensemble
-// Unicode, couvrant toutes les graisses. D'où `weight: "100 800"` et deux fichiers
-// (latin + latin-ext) au lieu d'un fichier par graisse. L'axe s'arrête à 800 (et
-// non 900 comme Jost) — l'interface ne dépasse pas 700 (font-bold), donc aucune
-// graisse n'est synthétisée.
+// Sora est VARIABLE : un seul fichier par sous-ensemble Unicode couvre toutes les
+// graisses, d'où `weight: "100 800"` et deux fichiers (latin + latin-ext).
 //
-// Les CHIFFRES restent en IBM Plex Mono (classe .os-num) : Sora est une grotesque
-// géométrique à chasse proportionnelle, ses chiffres sauteraient en largeur dans
-// les compteurs rafraîchis en direct. Le mono garantit des colonnes stables.
+// Les CHIFFRES restent en IBM Plex Mono (classe .os-num) : Sora est à chasse
+// proportionnelle, ses chiffres sauteraient en largeur dans les compteurs live.
+
 import localFont from "next/font/local";
 
 export const sora = localFont({
