@@ -3,9 +3,8 @@
 import Link from "next/link";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import {
-  ArrowLeft, BriefcaseBusiness, CalendarDays, Camera, CheckCircle2,
-  ChevronLeft, ChevronRight, Clock3, Image as ImageIcon, Search,
-  ShieldAlert, UserMinus, UsersRound,
+  ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, Clock3,
+  Image as ImageIcon, Search, ShieldAlert, UserMinus, UsersRound,
 } from "lucide-react";
 import OsShell from "../../_osirion/OsShell";
 import { Card, EmptyState, PageHeader, RefreshButton, Segmented } from "../../_osirion/ui";
@@ -113,11 +112,12 @@ function Evidence({ event }) {
           {decision.confirmed_count != null && <div><dt className="text-[9px] text-os-t4">Présences confirmées</dt><dd className="os-num mt-0.5 text-[11px] font-semibold text-os-t2">{decision.confirmed_count}</dd></div>}
           {decision.candidate_count != null && <div><dt className="text-[9px] text-os-t4">Candidats observés</dt><dd className="os-num mt-0.5 text-[11px] font-semibold text-os-t2">{decision.candidate_count}</dd></div>}
         </dl>
-        <p className="mt-4 border-t border-os-border pt-3 text-[9px] text-os-t4">
-          {event.snapshot_fallback === "vacancy_event" || meta.snapshot_origin === "vacancy_frame_fallback"
+        {(() => {
+          const caption = event.snapshot_fallback === "vacancy_event" || meta.snapshot_origin === "vacancy_frame_fallback"
             ? "Capture du début de l’absence, utilisée comme preuve de secours."
-            : image ? "Capture prise au moment de l’événement." : "Aucune capture disponible pour cet événement."}
-        </p>
+            : image ? "" : "Aucune capture disponible pour cet événement.";
+          return caption ? <p className="mt-4 border-t border-os-border pt-3 text-[9px] text-os-t4">{caption}</p> : null;
+        })()}
       </div>
     </Card>
   );
@@ -205,7 +205,7 @@ function HistoryContent() {
             <select value={type} onChange={(event) => setType(event.target.value)} className={`${selectClass} xl:min-w-44`}><option value="all">Tous les événements</option>{Object.entries(TYPES).map(([value, meta]) => <option key={value} value={value}>{meta.label}</option>)}</select>
             <form onSubmit={(event) => { event.preventDefault(); setAppliedSearch(search.trim()); }} className="flex min-w-0 flex-1 gap-2"><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Poste, caméra, agence…" className={`${selectClass} min-w-0 flex-1`} /><button className="h-10 w-10 shrink-0 rounded-os bg-os-cta text-white grid place-items-center" aria-label="Rechercher"><Search className="h-4 w-4" /></button></form>
           </div>
-          <div className="mt-3 flex flex-wrap items-center gap-4 border-t border-os-border pt-3 text-[10px] text-os-t4"><span className="inline-flex items-center gap-1"><CalendarDays className="h-3.5 w-3.5" /> Période réellement appliquée au journal</span><span className="inline-flex items-center gap-1"><BriefcaseBusiness className="h-3.5 w-3.5" /> Données limitées au module Présence</span><span className="inline-flex items-center gap-1"><Camera className="h-3.5 w-3.5" /> Preuves visuelles contextualisées</span><label className="ml-auto inline-flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} className="accent-os-primary" /> Inclure les archives non fiables ({data.archived_total || 0})</label></div>
+          <div className="mt-3 flex flex-wrap items-center gap-4 border-t border-os-border pt-3 text-[10px] text-os-t4"><label className="ml-auto inline-flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} className="accent-os-primary" /> Inclure les archives non fiables ({data.archived_total || 0})</label></div>
         </Card>
 
         {error && <p className="mb-4 rounded-os border border-os-red/30 bg-os-red/5 px-4 py-3 text-[12px] text-os-red">{error}</p>}
