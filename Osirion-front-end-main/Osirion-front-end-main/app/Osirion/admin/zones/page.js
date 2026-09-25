@@ -70,7 +70,13 @@ export default function ZonesPage() {
       const cams = await r.json();
       const list = Array.isArray(cams) ? cams : [];
       setCameras(list);
-      setCamId((prev) => (prev == null && list.length ? list[0].id : prev));
+      setCamId((prev) => {
+        if (prev != null || !list.length) return prev;
+        const usable = list.find((c) => c.is_active && c.hik_status !== 2)
+          || list.find((c) => c.is_active)
+          || list.find((c) => c.hik_status === 1);
+        return (usable || list[0]).id;
+      });
     }
   }, []);
 

@@ -470,9 +470,32 @@ def post_absence(
         return (event.meta or {}).get("episode_id")
 
     closed_ids = {episode_id(e) for e in closed if episode_id(e)}
-    current = [e for e in vacant if episode_id(e) and episode_id(e) not in closed_ids]
+    open_events = [e for e in vacant if episode_id(e) and episode_id(e) not in closed_ids]
     # Compatibilité avec d'éventuels anciens signaux sans episode_id : ils restent
     # comptés dans le volume de signaux, mais ne sont pas déclarés « encore ouverts ».
+
+    # « ACTUELLEMENT vacant » se compte en POSTES, pas en épisodes ouverts.
+    #
+    # POST_VACANT est un signal ponctuel, sans battement de cœur : un épisode
+    # reste « ouvert » pour toujours si sa clôture n'est jamais arrivée (caméra
+    # tombée, Core redémarré en plein épisode). Sur 30 jours, ces orphelins
+    # s'accumulaient et l'on comptait 64 postes vacants pour 9 postes existants
+    # — un total supérieur au parc, donc impossible à lire comme un instantané.
+    #
+    # Deux garde-fous : un poste ne peut être vacant qu'UNE fois (on ne garde
+    # que l'épisode ouvert le plus récent par zone), et un signal qui date de
+    # plus de CURRENT_VACANT_TTL_H heures ne décrit plus le présent.
+    CURRENT_VACANT_TTL_H = 24
+    fresh_after = datetime.utcnow() - timedelta(hours=CURRENT_VACANT_TTL_H)
+    latest_open_by_zone = {}
+    for event in open_events:
+        zid = (event.meta or {}).get("zone_id")
+        if zid is None or event.timestamp < fresh_after:
+            continue
+        kept = latest_open_by_zone.get(zid)
+        if kept is None or event.timestamp > kept.timestamp:
+            latest_open_by_zone[zid] = event
+    current = sorted(latest_open_by_zone.values(), key=lambda e: e.timestamp, reverse=True)
 
     per_day = defaultdict(lambda: {"episodes": 0, "absence_s": 0.0})
     per_zone = defaultdict(lambda: {

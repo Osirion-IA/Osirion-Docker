@@ -148,12 +148,25 @@ def stats(
                              -r["disconnections"]))
 
     ups = [r["uptime_pct"] for r in rows if r["uptime_pct"] is not None]
+
+    # « ACTUELLEMENT hors ligne » ne doit pas dépendre de la fenêtre d'analyse.
+    # Il était déduit des lignes de la période : l'Historique (7 j) annonçait 10
+    # caméras, les Rapports (30 j) 15, pour le même instant. On lit donc le
+    # dernier statut connu de chaque caméra, sans borne de temps.
+    latest_rows = session.exec(text(
+        "SELECT DISTINCT ON (camera_id) camera_id, status FROM camera_status_event "
+        "ORDER BY camera_id, timestamp DESC"
+    )).all()
+    latest_status = {row[0]: row[1] for row in latest_rows}
+    if target is not None:
+        latest_status = {cid: st for cid, st in latest_status.items() if cid in target}
+
     summary = {
         "cameras": len(rows),
         "avg_uptime_pct": round(sum(ups) / len(ups), 1) if ups else None,
         "total_disconnections": sum(r["disconnections"] for r in rows),
         "total_offline_seconds": sum(r["offline_seconds"] for r in rows),
-        "currently_offline": sum(1 for r in rows if r["current_status"] not in (None, "online")),
+        "currently_offline": sum(1 for st in latest_status.values() if st not in (None, "online")),
     }
 
     # Série journalière : déconnexions (→ non-online) et reconnexions (→ online).

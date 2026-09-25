@@ -20,6 +20,29 @@ const KIND_LABEL = { queue: "File", crowd: "Attroupement", intrusion: "Intrusion
 const SEV_COLOR = { info: "var(--os-blue)", warning: "var(--os-amber)", critical: "var(--os-red)" };
 const PAGE_SIZE = 12;
 
+// `reason` répète souvent `label` mot pour mot (« Saturation de file d'attente »
+// sous « Saturation de file d'attente — FA (14 pers.) »). On ne l'affiche que
+// s'il apporte autre chose.
+const distinctReason = (alert) => {
+  const reason = (alert?.reason || "").trim();
+  const label = (alert?.label || "").trim();
+  if (!reason || !label) return reason || "";
+  const norm = (t) => t.toLowerCase().replace(/\s+/g, " ");
+  return norm(label).includes(norm(reason)) ? "" : reason;
+};
+
+// L'exception de la librairie d'envoi s'affichait telle quelle à l'opérateur.
+// On la traduit, en gardant le texte d'origine en infobulle pour le diagnostic.
+const deliveryError = (raw) => {
+  const t = String(raw || "");
+  if (/timed out|timeout/i.test(t)) return "Serveur de messagerie injoignable (délai dépassé)";
+  if (/authentication|auth|credential|password/i.test(t)) return "Identifiants du serveur de messagerie refusés";
+  if (/name or service not known|getaddrinfo|dns/i.test(t)) return "Nom du serveur introuvable";
+  if (/connection refused/i.test(t)) return "Connexion refusée par le serveur";
+  if (/certificate|ssl|tls/i.test(t)) return "Échec de la négociation TLS";
+  return "Échec de l'envoi";
+};
+
 function relTime(ts) {
   const d = new Date(ts && !String(ts).endsWith("Z") ? `${ts}Z` : ts);
   if (isNaN(d)) return "—";
@@ -171,7 +194,7 @@ export default function AlertsPage() {
                           <span className="text-[11px] font-semibold" style={{ color: st.color }}>· {st.label}</span>
                         </div>
                         <p className="text-[13px] font-semibold text-os-t1 truncate mt-0.5">{a.label}</p>
-                        {a.reason && <p className="text-[12px] text-os-t3 truncate">{a.reason}</p>}
+                        {distinctReason(a) && <p className="text-[12px] text-os-t3 truncate">{distinctReason(a)}</p>}
                         <p className="text-[11px] truncate mt-0.5" style={{ color: delivery.color }}>{delivery.label}</p>
                       </div>
                       <span className="os-num text-[11px] text-os-t4 shrink-0">{relTime(a.created_at)}</span>
@@ -242,8 +265,8 @@ export default function AlertsPage() {
                     <Meta label="Déclenchée à" value={clock(selected.created_at)} mono />
                     <Meta label="Traitée par" value={selected.acknowledged_by ? `#${selected.acknowledged_by}` : "—"} />
                     <Meta label="Notification" value={deliveryMeta(selected).label} />
-                    {selected.notify_attempts > 0 && <Meta label="Tentatives" value={String(selected.notify_attempts)} mono />}
-                    {selected.notify_last_error && <Meta label="Dernière erreur" value={selected.notify_last_error} />}
+                    {selected.notify_attempts > 0 && <Meta label="Tentatives effectuées" value={String(selected.notify_attempts)} mono />}
+                    {selected.notify_last_error && <Meta label="Dernière erreur" value={deliveryError(selected.notify_last_error)} title={selected.notify_last_error} />}
                   </div>
 
                   <div className="flex items-center gap-2 mt-5">
@@ -277,11 +300,12 @@ export default function AlertsPage() {
   );
 }
 
-function Meta({ label, value, mono }) {
+function Meta({ label, value, mono, title }) {
   return (
     <div>
       <p className="text-[11px] font-semibold tracking-wide uppercase text-os-t4">{label}</p>
-      <p className={`text-[13px] text-os-t1 mt-0.5 ${mono ? "os-num" : ""}`}>{value}</p>
+      {/* `title` porte le texte technique d'origine quand la valeur est reformulée. */}
+      <p className={`text-[13px] text-os-t1 mt-0.5 ${mono ? "os-num" : ""}`} title={title || undefined}>{value}</p>
     </div>
   );
 }

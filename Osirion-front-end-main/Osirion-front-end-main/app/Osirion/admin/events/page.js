@@ -32,7 +32,6 @@ function fmtTime(ts) {
   if (isNaN(d)) return "—";
   return d.toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
-const dirFr = (dir) => (dir === "in" ? "Entrée" : dir === "out" ? "Sortie" : "—");
 
 export default function EventsPage() {
   const [events, setEvents] = useState([]);
@@ -91,7 +90,7 @@ export default function EventsPage() {
       <div className="p-6">
         <PageHeader
           title="Événements"
-          subtitle={`${filtered.length} événement(s) · journal de comptage anonyme`}
+          subtitle="Journal d\u2019activité anonyme"
           actions={<RefreshButton onClick={load} spinning={loading} />}
         />
 
@@ -136,7 +135,6 @@ export default function EventsPage() {
                     <th className="px-4 py-3 font-semibold">Type</th>
                     <th className="px-4 py-3 font-semibold">Caméra</th>
                     <th className="px-4 py-3 font-semibold">Zone / Ligne</th>
-                    <th className="px-4 py-3 font-semibold">Sens</th>
                     <th className="px-4 py-3 font-semibold text-right">Valeur</th>
                   </tr>
                 </thead>
@@ -160,7 +158,6 @@ export default function EventsPage() {
                         </td>
                         <td className="px-4 py-3 text-os-t2 whitespace-nowrap">{e.camera_nom || `Caméra ${e.camera_id}`}</td>
                         <td className="px-4 py-3 text-os-t2">{m.zone_name || m.line_name || "—"}</td>
-                        <td className="px-4 py-3 text-os-t2">{dirFr(m.direction)}</td>
                         <td className="px-4 py-3 os-num text-os-t1 text-right whitespace-nowrap">{value}</td>
                       </tr>
                     );

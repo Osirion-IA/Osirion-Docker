@@ -17,9 +17,24 @@ const fmtWait = (s) => (!s ? "0 s" : s < 60 ? `${Math.round(s)} s` : `${Math.flo
 const fmtDuration = (s) => {
   s = Math.max(0, Math.round(Number(s) || 0));
   if (s < 3600) return fmtWait(s);
-  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
-  return `${h} h${m ? ` ${m} min` : ""}`;
+  if (s < 86400) {
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+    return `${h} h${m ? ` ${m} min` : ""}`;
+  }
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600);
+  return `${d} j${h ? ` ${h} h` : ""}`;
 };
+
+// Un bloc dont AUCUNE ligne ne porte de valeur décrit un module non configuré,
+// pas une activité nulle : aligner cinq zéros se lit comme une mesure. On le
+// replie, et il revient de lui-même dès que la donnée existe (lignes de comptage
+// tracées, effectifs min/max renseignés…).
+const isBlank = (v) => {
+  if (v == null) return true;
+  const t = String(v).trim();
+  return t === "" || t === "—" || /^0([ .,]|$)/.test(t) || t === "0%";
+};
+const hasData = (section) => section.rows.some(([, value]) => !isBlank(value));
 
 // PDF de synthèse (résumé décisionnel).
 function printSynthesis(sections, meta) {
@@ -89,9 +104,9 @@ export default function ReportsPage() {
         ["Entrées (période)", foot?.total_entries ?? 0],
         ["Sorties (période)", foot?.total_exits ?? 0],
         ["Évolution vs période précédente", foot?.delta_entries_pct != null ? `${foot.delta_entries_pct >= 0 ? "+" : ""}${foot.delta_entries_pct}%` : "—"],
-        ["Heure la plus chargée", qa?.peak_hour != null ? `${qa.peak_hour}h–${qa.peak_hour + 1}h (en moyenne ${qa.peak_avg_occupancy} pers.)` : "—"],
       ] },
       { title: "Files & attente", rows: [
+        ["Heure la plus chargée", qa?.peak_hour != null ? `${qa.peak_hour}h–${qa.peak_hour + 1}h (en moyenne ${qa.peak_avg_occupancy} pers.)` : "—"],
         ["Files suivies", qp?.queues?.length ?? 0],
         ["File la plus lente", topQ ? `${topQ.name}${topQ.site ? ` (${topQ.site})` : ""}` : "—"],
         ["Attente moyenne (file la plus lente)", topQ ? fmtWait(topQ.wait_avg_s) : "—"],
@@ -112,7 +127,7 @@ export default function ReportsPage() {
         ["Temps de sous-effectif cumulé", fmtDuration(staffing?.total_shortage_s || 0)],
         ["Durée moyenne", fmtDuration(staffing?.avg_shortage_s || 0)],
       ] },
-      { title: "Incidents (global)", rows: [
+      { title: "Incidents · tout le parc", rows: [
         ["Alertes", inc?.alerts_total ?? 0],
         ["Attroupements détectés", inc?.crowd_total ?? 0],
         ["Critiques", inc?.by_severity?.critical ?? 0],
@@ -121,13 +136,13 @@ export default function ReportsPage() {
       { title: "Disponibilité caméras", rows: [
         ["Disponibilité moyenne", cs?.summary?.avg_uptime_pct != null ? `${cs.summary.avg_uptime_pct}%` : "—"],
         ["Déconnexions", cs?.summary?.total_disconnections ?? 0],
-        ["Temps hors-ligne cumulé", fmtWait(cs?.summary?.total_offline_seconds || 0)],
+        ["Temps hors-ligne cumulé", fmtDuration(cs?.summary?.total_offline_seconds || 0)],
         ["Hors ligne actuellement", cs?.summary?.currently_offline ?? 0],
       ] },
     ];
   }, [syn]);
 
-  const doPrint = () => printSynthesis(sections, {
+  const doPrint = () => printSynthesis(sections.filter(hasData), {
     period: `${period} derniers jours`, scope: scopeLabel, generatedAt: new Date().toLocaleString("fr-FR"),
   });
 
@@ -173,7 +188,7 @@ export default function ReportsPage() {
           <EmptyState icon={BarChart3}>Calcul de la synthèse…</EmptyState>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {sections.map((sec) => (
+            {sections.filter(hasData).map((sec) => (
               <Card key={sec.title} className="p-5">
                 <h3 className="text-[15px] font-semibold text-os-t1 mb-3">{sec.title}</h3>
                 <table className="w-full text-[13px]">

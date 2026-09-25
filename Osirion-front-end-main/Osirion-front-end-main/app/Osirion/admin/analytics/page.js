@@ -323,21 +323,25 @@ export default function AnalyticsPage() {
         {/* On met en tête ce qui déclenche une décision : l'attente ressentie par
             les clients et la tendance RELATIVE (robustes au sous-comptage). Le total
             absolu de fréquentation est relégué en dernier, cadré par son évolution. */}
-        <div className="grid grid-cols-2 xl:grid-cols-4 gap-4 mb-5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-5">
           <Insight label="Attente des clients" icon={Clock}
             value={loading ? "—" : agencies.length ? fmtWaitShort(agencies[0].wait_avg_s) : "—"}
             hint={agencies.length ? `${agencies[0].site} · 9 clients sur 10 attendent moins de ${fmtWaitShort(agencies[0].wait_p90_s)}` : "aucune file"} />
-          <Insight label="Par rapport à d'habitude" icon={TrendingUp}
-            value={loading ? "—" : (today.vs_avg_pct != null ? `${today.vs_avg_pct >= 0 ? "+" : ""}${today.vs_avg_pct}%` : (today.so_far ?? 0))}
-            hint={hasData && today.projected_eod ? `${today.so_far ?? 0} aujourd'hui · fin de journée estimée ~${today.projected_eod}` : "fréquentation du jour"}
-            trend={today.vs_avg_pct} />
+          {hasData && (
+            <Insight label="Par rapport à d'habitude" icon={TrendingUp}
+              value={loading ? "—" : (today.vs_avg_pct != null ? `${today.vs_avg_pct >= 0 ? "+" : ""}${today.vs_avg_pct}%` : (today.so_far ?? 0))}
+              hint={today.projected_eod ? `${today.so_far ?? 0} aujourd'hui · fin de journée estimée ~${today.projected_eod}` : "fréquentation du jour"}
+              trend={today.vs_avg_pct} />
+          )}
           <Insight label="Heure la plus chargée" icon={CalendarDays}
             value={loading ? "—" : qPeak != null ? `${qPeak}h–${qPeak + 1}h` : "—"}
             hint={qPeak != null ? `en moyenne ${qa.peak_avg_occupancy} pers. en file` : hasQueues ? "pas encore de pic" : "aucune file"} />
-          <Insight label={`Fréquentation · ${period} j`} icon={TrendingUp}
-            value={loading ? "—" : (foot?.total_entries ?? 0)}
-            hint={deltaEntries != null ? `${deltaEntries >= 0 ? "+" : ""}${deltaEntries}% vs période précédente` : "entrées comptées"}
-            trend={deltaEntries} />
+          {hasData && (
+            <Insight label={`Fréquentation · ${period} j`} icon={TrendingUp}
+              value={loading ? "—" : (foot?.total_entries ?? 0)}
+              hint={deltaEntries != null ? `${deltaEntries >= 0 ? "+" : ""}${deltaEntries}% vs période précédente` : "entrées comptées"}
+              trend={deltaEntries} />
+          )}
         </div>
 
         <div className="mb-4"><Segmented value={tab} onChange={setTab} options={TABS} /></div>
@@ -347,18 +351,20 @@ export default function AnalyticsPage() {
             <Card className="p-5"><p className="text-[13px] text-os-t3 py-12 text-center">Aucune donnée. Dessinez une <b>zone « file d&apos;attente »</b> (pour l&apos;affluence des files) ou une <b>ligne de comptage</b> dans « Zones », et activez une caméra.</p></Card>
           ) : (
             <div className="space-y-4">
-              <Card className="p-5">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-[15px] font-semibold text-os-t1">Tendance journalière</h3>
-                  <Legend items={[{ label: "Entrées", color: "var(--os-cta)" }, { label: "Sorties", color: "var(--os-t3)" }]} />
-                </div>
-                {foot?.series?.length ? (
-                  <TrendChart series={foot.series} keys={[
-                    { k: "entries", label: "Entrées", color: "var(--os-cta)", fill: true },
-                    { k: "exits", label: "Sorties", color: "var(--os-t3)" },
-                  ]} />
-                ) : <p className="text-[13px] text-os-t3 py-8 text-center">Pas encore de série journalière.</p>}
-              </Card>
+              {hasData && (
+                <Card className="p-5">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-[15px] font-semibold text-os-t1">Tendance journalière</h3>
+                    <Legend items={[{ label: "Entrées", color: "var(--os-cta)" }, { label: "Sorties", color: "var(--os-t3)" }]} />
+                  </div>
+                  {foot?.series?.length ? (
+                    <TrendChart series={foot.series} keys={[
+                      { k: "entries", label: "Entrées", color: "var(--os-cta)", fill: true },
+                      { k: "exits", label: "Sorties", color: "var(--os-t3)" },
+                    ]} />
+                  ) : <p className="text-[13px] text-os-t3 py-8 text-center">Pas encore de série journalière.</p>}
+                </Card>
+              )}
 
               <div className="grid grid-cols-1 xl:grid-cols-[1.5fr_1fr] gap-4">
                 <Card className="p-5">
@@ -371,26 +377,28 @@ export default function AnalyticsPage() {
                   ) : <p className="text-[13px] text-os-t3 py-10 text-center">Aucune file configurée (zone « file d&apos;attente »).</p>}
                 </Card>
 
-                <Card className="p-5">
-                  <h3 className="text-[15px] font-semibold text-os-t1 mb-1">Prévision — prochaines heures</h3>
-                  <p className="text-[12px] text-os-t3 mb-3">Attendu d&apos;après un {WD_LONG[new Date().getDay() === 0 ? 6 : new Date().getDay() - 1]} habituel.</p>
-                  {d.forecast?.length ? (
-                    <div className="flex items-end gap-3">
-                      {d.forecast.map((f) => {
-                        const fmax = Math.max(1, ...d.forecast.map((x) => x.expected));
-                        return (
-                          <div key={f.hour} className="flex-1 flex flex-col items-center gap-1.5">
-                            <span className="os-num text-[13px] font-bold text-os-t1">~{f.expected}</span>
-                            <div className="w-full flex items-end justify-center h-20">
-                              <div className="w-8 rounded-t-os" style={{ height: `${Math.max(6, (f.expected / fmax) * 100)}%`, background: "var(--os-blue)", opacity: 0.55 }} />
+                {hasData && (
+                  <Card className="p-5">
+                    <h3 className="text-[15px] font-semibold text-os-t1 mb-1">Prévision — prochaines heures</h3>
+                    <p className="text-[12px] text-os-t3 mb-3">Attendu d&apos;après un {WD_LONG[new Date().getDay() === 0 ? 6 : new Date().getDay() - 1]} habituel.</p>
+                    {d.forecast?.length ? (
+                      <div className="flex items-end gap-3">
+                        {d.forecast.map((f) => {
+                          const fmax = Math.max(1, ...d.forecast.map((x) => x.expected));
+                          return (
+                            <div key={f.hour} className="flex-1 flex flex-col items-center gap-1.5">
+                              <span className="os-num text-[13px] font-bold text-os-t1">~{f.expected}</span>
+                              <div className="w-full flex items-end justify-center h-20">
+                                <div className="w-8 rounded-t-os" style={{ height: `${Math.max(6, (f.expected / fmax) * 100)}%`, background: "var(--os-blue)", opacity: 0.55 }} />
+                              </div>
+                              <span className="os-num text-[11px] text-os-t3">{f.hour}h</span>
                             </div>
-                            <span className="os-num text-[11px] text-os-t3">{f.hour}h</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : <p className="text-[13px] text-os-t3 py-6 text-center">Hors plage horaire de fréquentation.</p>}
-                </Card>
+                          );
+                        })}
+                      </div>
+                    ) : <p className="text-[13px] text-os-t3 py-6 text-center">Hors plage horaire de fréquentation.</p>}
+                  </Card>
+                )}
               </div>
 
               {recos.length > 0 && (

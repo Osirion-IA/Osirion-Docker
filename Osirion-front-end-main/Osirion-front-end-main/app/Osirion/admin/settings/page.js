@@ -187,7 +187,7 @@ export default function SettingsPage() {
           <Card className="p-6 max-w-2xl">
             <div className="flex items-center gap-3 mb-5">
               <span className="h-10 w-10 grid place-items-center rounded-os bg-os-card-2 border border-os-border-2 text-os-t2"><Cog className="h-5 w-5" /></span>
-              <div><h3 className="text-[15px] font-semibold text-os-t1">Paramètres généraux</h3><p className="text-[13px] text-os-t3">Configuration de base</p></div>
+              <div><h3 className="text-[15px] font-semibold text-os-t1">Paramètres généraux</h3></div>
             </div>
             <label className={lbl}>Nom du site</label>
             <input type="text" value={settings.siteName} onChange={(e) => change("siteName", e.target.value)} className={inp} />

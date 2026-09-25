@@ -41,6 +41,17 @@ function loadColor(frac) {
   return "var(--os-red)";
 }
 const upColor = (p) => (p == null ? "var(--os-t4)" : p >= 95 ? "var(--os-green)" : p >= 70 ? "var(--os-amber)" : "var(--os-red)");
+// `reason` répète souvent `label` (« Saturation de file d'attente » sous
+// « Saturation de file d'attente — FA (14 pers.) ») : on ne l'affiche que s'il
+// apporte autre chose.
+const distinctReason = (alert) => {
+  const reason = (alert?.reason || "").trim();
+  const label = (alert?.label || "").trim();
+  if (!reason || !label) return reason || "";
+  const norm = (t) => t.toLowerCase().replace(/\s+/g, " ");
+  return norm(label).includes(norm(reason)) ? "" : reason;
+};
+
 const SEV_COLOR = { info: "var(--os-blue)", warning: "var(--os-amber)", critical: "var(--os-red)" };
 const dateFr = () => new Date().toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
 
@@ -140,13 +151,17 @@ export default function CockpitPage() {
     { n: 4, title: "Recevoir des alertes", desc: "Email / webhook sur événement.", done: alertsCount > 0 },
   ];
 
+  // Une fois les 4 étapes faites, le bloc n'a plus rien à apprendre : il
+  // disparaît sans attendre un clic sur la croix.
+  const onbComplete = onbSteps.every((st) => st.done);
+
   const camOptions = camsAll.filter((c) => !groupId || (c.group_ids || []).includes(Number(groupId)));
   const sel = "rounded-os border border-os-border bg-os-card px-3 py-1.5 text-[12px] text-os-t2 outline-none";
 
   return (
     <OsShell alertsCount={alertsCount}>
       <div className="p-6 space-y-6 max-w-[1600px]">
-        {!onbDismissed && (
+        {!onbDismissed && !onbComplete && (
           <div className="rounded-os-lg border border-os-border bg-os-card p-5">
             <div className="flex items-start justify-between gap-4">
               <div>
@@ -286,7 +301,7 @@ export default function CockpitPage() {
                       <span className="os-num text-[11px] text-os-t4">{ago(a.created_at)}</span>
                     </div>
                     <p className="text-[13px] font-semibold text-os-t1 mt-0.5 truncate">{a.label || a.kind}</p>
-                    {a.reason && <p className="text-[12px] text-os-t3 truncate">{a.reason}</p>}
+                    {distinctReason(a) && <p className="text-[12px] text-os-t3 truncate">{distinctReason(a)}</p>}
                   </li>
                 ))}
               </ul>
