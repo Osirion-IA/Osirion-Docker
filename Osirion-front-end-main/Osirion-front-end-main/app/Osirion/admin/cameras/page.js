@@ -5,6 +5,7 @@ import { useAuth } from "../AuthContext";
 import OsShell from "../_osirion/OsShell";
 import { PageHeader } from "../_osirion/ui";
 import HikSyncButton from "../_osirion/HikSyncButton";
+import { fleetCounts, reachability, REACH_LABEL, REACH_COLOR, REACH_ONLINE, REACH_OFFLINE } from "../../../lib/cameraState";
 
 // Liste dynamique des caméras
 const BASE_BACKEND_URL = process.env.NEXT_PUBLIC_BASE_BACKEND_URL;
@@ -133,7 +134,9 @@ export default function CamerasPage() {
     });
   }, [cameras, searchQuery, statusFilter]);
 
-  // Compter les caméras par statut
+  // Deux comptages DISTINCTS : ce qu'Osirion traite (is_active, un choix de
+  // configuration) et ce que le VMS parvient à joindre (hik_status). Les
+  // confondre faisait annoncer 113 caméras tombées pour 41 réellement injoignables.
   const statusCounts = useMemo(() => {
     return {
       tous: cameras.length,
@@ -142,6 +145,8 @@ export default function CamerasPage() {
       maintenance: 0, // Adapter si besoin
     };
   }, [cameras]);
+
+  const fleet = useMemo(() => fleetCounts(cameras), [cameras]);
 
   const handleSelectAll = (e) => {
     if (e.target.checked) {
@@ -339,8 +344,8 @@ export default function CamerasPage() {
     };
 
     const labels = {
-      active: "En ligne",
-      inactive: "Hors ligne",
+      active: "Traitée",
+      inactive: "Non traitée",
       maintenance: "Maintenance",
     };
 
@@ -359,7 +364,7 @@ export default function CamerasPage() {
               : "bg-os-t4"
           }`}
         />
-        {labels[status] || "Hors ligne"}
+        {labels[status] || "Non traitée"}
       </span>
     );
   };
@@ -636,12 +641,12 @@ export default function CamerasPage() {
                 </div>
               </div>
 
-              {/* En ligne */}
+              {/* Traitées par le moteur (is_active) */}
               <div className="group relative overflow-hidden rounded-os-lg bg-os-card p-5 border border-os-border transition-all duration-300">
                 <div className="flex items-start justify-between">
                   <div>
                     <div className="text-xs font-semibold text-os-green mb-2">
-                      En ligne
+                      Traitées
                     </div>
                     <div className="os-num text-[26px] leading-none font-bold text-os-green">
                       {statusCounts.active}
@@ -660,22 +665,21 @@ export default function CamerasPage() {
                     </svg>
                   </div>
                 </div>
-                <div className="mt-3 text-xs text-os-green font-medium">
-                  {statusCounts.tous > 0
-                    ? Math.round((statusCounts.active / statusCounts.tous) * 100) + "% du total"
-                    : "0%"}
+                <div className="mt-3 text-xs text-os-t3">
+                  Flux analysés par Osirion
                 </div>
               </div>
 
-              {/* Hors ligne */}
+              {/* Injoignables selon HikCentral (hik_status) */}
               <div className="group relative overflow-hidden rounded-os-lg bg-os-card p-5 border border-os-border transition-all duration-300">
                 <div className="flex items-start justify-between">
                   <div>
                     <div className="text-xs font-semibold text-os-t3 mb-2">
-                      Hors ligne
+                      Injoignables
                     </div>
-                    <div className="os-num text-[26px] leading-none font-bold text-os-t2">
-                      {statusCounts.inactive}
+                    <div className="os-num text-[26px] leading-none font-bold"
+                      style={{ color: fleet.offline > 0 ? "var(--os-red)" : "var(--os-green)" }}>
+                      {fleet.offline}
                     </div>
                   </div>
                   <div className="h-12 w-12 rounded-os bg-os-card-2 border border-os-border-2 flex items-center justify-center">
@@ -692,7 +696,7 @@ export default function CamerasPage() {
                   </div>
                 </div>
                 <div className="mt-3 text-xs text-os-t3">
-                  Nécessite attention
+                  Non vues par HikCentral
                 </div>
               </div>
 
@@ -797,8 +801,8 @@ export default function CamerasPage() {
               <div className="flex gap-2 overflow-x-auto pb-1">
                 {[
                   { value: "tous", label: "Tous", count: statusCounts.tous },
-                  { value: "active", label: "En ligne", count: statusCounts.active },
-                  { value: "inactive", label: "Hors ligne", count: statusCounts.inactive },
+                  { value: "active", label: "Traitées", count: statusCounts.active },
+                  { value: "inactive", label: "Non traitées", count: statusCounts.inactive },
                 ].map((filter) => (
                   <button
                     key={filter.value}
@@ -995,7 +999,7 @@ export default function CamerasPage() {
                               {camera.cam_name || "Sans nom"}
                             </h3>
                             <p className="text-xs text-os-t3 font-mono mt-0.5">
-                              {camera.id}
+                              #{camera.id}
                             </p>
                           </div>
                         </div>
@@ -1025,25 +1029,18 @@ export default function CamerasPage() {
                           </div>
                         )}
 
-                        <div className="grid grid-cols-3 gap-2 pt-3 border-t border-os-border">
+                        <div className="grid grid-cols-2 gap-2 pt-3 border-t border-os-border">
                           <div className="text-center">
-                            <div className="text-xs text-os-t3">RTSP</div>
-                            <div className="text-xs font-mono text-os-t2 truncate">
-                              {camera.rtsp_url || "—"}
+                            <div className="text-xs text-os-t3">Liaison</div>
+                            <div className="text-xs font-semibold truncate"
+                              style={{ color: REACH_COLOR[reachability(camera)] }}>
+                              {REACH_LABEL[reachability(camera)]}
                             </div>
                           </div>
                           <div className="text-center">
-                            <div className="text-xs text-os-t3">Créée</div>
+                            <div className="text-xs text-os-t3">Source</div>
                             <div className="text-xs font-mono text-os-t2 truncate">
-                              {camera.created_at
-                                ? new Date(camera.created_at).toLocaleString()
-                                : "—"}
-                            </div>
-                          </div>
-                          <div className="text-center">
-                            <div className="text-xs text-os-t3">Statut</div>
-                            <div className="text-xs font-mono text-os-t2 truncate">
-                              {camera.is_active ? "Active" : "Inactive"}
+                              {camera.source_type === "hikcentral" ? "HikCentral" : "RTSP"}
                             </div>
                           </div>
                         </div>
@@ -1143,7 +1140,7 @@ export default function CamerasPage() {
                                     {camera.cam_name || "—"}
                                   </div>
                                   <div className="text-xs text-os-t3 font-mono mt-0.5">
-                                    {camera.id}
+                                    #{camera.id}
                                   </div>
                                 </div>
                               </div>

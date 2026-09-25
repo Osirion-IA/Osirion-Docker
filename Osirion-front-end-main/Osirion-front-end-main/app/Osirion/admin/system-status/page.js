@@ -8,7 +8,7 @@
  */
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { ShieldCheck, Cpu, MemoryStick, HardDrive } from "lucide-react";
+import { Cpu, MemoryStick, HardDrive } from "lucide-react";
 import OsShell from "../_osirion/OsShell";
 import { PageHeader, Card } from "../_osirion/ui";
 import { useAuth } from "../AuthContext";
@@ -78,20 +78,23 @@ export default function SystemAccessPage() {
   }
 
   const disk = sys?.disks?.[0];
-  const cpuPct = Math.round(sys?.cpu?.percent ?? sys?.cpu ?? 0);
+  const cpuPct = Math.round(sys?.cpu?.total_usage_percent ?? sys?.cpu?.percent ?? 0);
   const ramPct = Math.round(sys?.ram?.percent ?? 0);
   const diskPct = Math.round(disk?.percent ?? 0);
+  // `used`/`total` arrivent DÉJÀ formatés en chaînes ("15.2GB") ; les repasser
+  // dans fmtBytes rendait « — / — ». Les octets bruts sont sous `raw_bytes`.
+  const ramBytes = sys?.ram?.raw_bytes;
+  const diskBytes = disk?.raw_bytes;
 
   return (
     <OsShell>
       <div className="p-6">
-        <PageHeader title="Système & accès" subtitle={`Utilisateurs, journal d'audit et état du système${sys?.general?.hostname ? ` · ${sys.general.hostname}` : ""}`} />
+        <PageHeader title="Système & accès" subtitle="Utilisateurs, journal d'audit et état du système" />
 
-        <div className="grid grid-cols-2 xl:grid-cols-4 gap-4 mb-5">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">
           <Tile label="Processeur" value={`${cpuPct} %`} hint="charge CPU" icon={Cpu} color={cpuPct >= 85 ? "var(--os-red)" : "var(--os-t1)"} />
-          <Tile label="Mémoire" value={`${ramPct} %`} hint={sys?.ram ? `${fmtBytes(sys.ram.used)} / ${fmtBytes(sys.ram.total)}` : "—"} icon={MemoryStick} color={ramPct >= 85 ? "var(--os-red)" : "var(--os-t1)"} />
-          <Tile label="Stockage flux" value={disk ? `${diskPct} %` : "—"} hint={disk ? `${fmtBytes(disk.used)} / ${fmtBytes(disk.total)} · métadonnées seules` : "—"} icon={HardDrive} color={diskPct >= 90 ? "var(--os-red)" : "var(--os-t1)"} />
-          <Tile label="Conformité" value="RGPD" hint="100 % anonyme · aucune identité" icon={ShieldCheck} color="var(--os-green)" />
+          <Tile label="Mémoire" value={`${ramPct} %`} hint={ramBytes ? `${fmtBytes(ramBytes.used)} / ${fmtBytes(ramBytes.total)}` : "—"} icon={MemoryStick} color={ramPct >= 85 ? "var(--os-red)" : "var(--os-t1)"} />
+          <Tile label="Stockage flux" value={disk ? `${diskPct} %` : "—"} hint={diskBytes ? `${fmtBytes(diskBytes.used)} / ${fmtBytes(diskBytes.total)}` : "—"} icon={HardDrive} color={diskPct >= 90 ? "var(--os-red)" : "var(--os-t1)"} />
         </div>
 
         <div className="grid grid-cols-1 xl:grid-cols-[1.3fr_0.7fr] gap-4">

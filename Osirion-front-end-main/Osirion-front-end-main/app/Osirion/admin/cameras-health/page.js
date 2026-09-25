@@ -165,17 +165,18 @@ export default function CamerasHealthPage() {
           </span>
         </div>
         <div className="flex items-end justify-between mb-1">
-          <div className="os-num text-[28px] font-bold leading-none" style={{ color: m.color }}>{(c.fps ?? 0).toFixed(1)}<span className="text-[13px] font-medium text-os-t4 ml-1">fps</span></div>
+          <div className="os-num text-[28px] font-bold leading-none" style={{ color: m.color }}>
+            {(c.fps ?? 0).toFixed(1)}
+            <span className="text-[13px] font-medium text-os-t4 ml-1">fps</span>
+            {c.state !== "online" && <span className="ml-2 text-[11px] font-medium text-os-t4">dernier relevé</span>}
+          </div>
           <div className="text-[11px] text-os-t4">{c.source_kind || (isHik ? "HikCentral" : "—")}</div>
         </div>
         <Sparkline data={hist} color={m.color} />
         <div className="mt-4 grid grid-cols-3 gap-x-4 gap-y-3">
-          <Metric label="Frames" value={(c.frames_captured ?? 0).toLocaleString("fr-FR")} />
+          <Metric label="Dernière frame" value={fmtAge(c.last_frame_age_s)} />
           <Metric label="Reconnexions" value={c.reconnections ?? 0} color={c.reconnections > 0 ? "var(--os-amber)" : undefined} />
-          <Metric label="Dernière" value={fmtAge(c.last_frame_age_s)} />
-          <Metric label="Spectateurs" value={c.viewers ?? 0} />
-          <Metric label="Uptime" value={fmtUptime(c.uptime_s)} />
-          <Metric label="Threads" value={c.threads_alive ? "actifs" : "arrêtés"} color={c.threads_alive ? "var(--os-green)" : "var(--os-red)"} />
+          <Metric label="Flux ouvert depuis" value={fmtUptime(c.uptime_s)} />
         </div>
         {degraded && <p className="mt-4 rounded-os border border-os-border bg-os-card-2 px-3 py-2 text-[12px] text-os-amber">Reconnexion — {c.reconnection_attempts} tentative(s).</p>}
         {isHik && (
@@ -185,7 +186,7 @@ export default function CamerasHealthPage() {
             ) : rt?.state === "err" ? (
               <span className="text-[12px] text-os-red truncate" title={rt.msg}>{rt.msg}</span>
             ) : (
-              <span className="text-[12px] text-os-t4">{attention ? "Liaison instable ?" : "Source HikCentral"}</span>
+              <span className="text-[12px] text-os-t4">"Source HikCentral"</span>
             )}
             <button
               onClick={() => doRetry(c.id)}
@@ -207,7 +208,7 @@ export default function CamerasHealthPage() {
       <div className="p-6">
         <PageHeader
           title="Santé des caméras traitées"
-          subtitle={status === "ok" ? `${summary.online}/${summary.count} en ligne · métriques Core temps réel` : "Métriques Core temps réel"}
+          subtitle={status === "ok" ? `${summary.online}/${summary.count} flux exploitables · métriques Core temps réel` : "Métriques Core temps réel"}
           actions={<label className="flex items-center gap-2 text-[13px] text-os-t2"><input type="checkbox" checked={autoRefresh} onChange={() => setAutoRefresh((v) => !v)} /> Auto (2s)</label>}
         />
 
@@ -241,7 +242,7 @@ export default function CamerasHealthPage() {
                 <div key={s.id}>
                   <div className="flex items-center gap-3 mb-3">
                     <h2 className="text-[13px] font-semibold uppercase tracking-wide text-os-t2">{s.name}</h2>
-                    <span className="os-num text-[12px] text-os-t4">{onlineN}/{s.cameras.length} en ligne</span>
+                    <span className="os-num text-[12px] text-os-t4">{onlineN}/{s.cameras.length} flux exploitables</span>
                     <div className="flex-1 h-px bg-os-border" />
                   </div>
                   <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
