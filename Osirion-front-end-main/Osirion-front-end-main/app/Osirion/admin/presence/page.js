@@ -278,10 +278,7 @@ function LivePostStates({ rows }) {
   return (
     <Card className="overflow-hidden mb-4">
       <div className="px-5 py-4 border-b border-os-border flex items-center justify-between gap-3">
-        <div>
-          <h2 className="text-[14px] font-semibold text-os-t1">État instantané des postes</h2>
-          <p className="text-[11px] text-os-t3">Une caméra indisponible suspend la décision et les chronomètres d’absence</p>
-        </div>
+        <h2 className="text-[14px] font-semibold text-os-t1">État instantané des postes</h2>
         <span className="os-num text-[10px] text-os-t4">{rows.length} caméra(s)</span>
       </div>
       <div className="divide-y divide-os-border max-h-96 overflow-y-auto">
@@ -409,7 +406,7 @@ function GroupAnalytics({ absence, staffing, schedules }) {
     <Card className="overflow-hidden mt-4">
       <div className="px-5 py-4 border-b border-os-border flex items-center gap-3">
         <span className="h-9 w-9 rounded-os bg-os-card-2 grid place-items-center text-os-t2"><Globe2 className="h-4 w-4" /></span>
-        <div><h2 className="text-[14px] font-semibold text-os-t1">Comparaison par groupe / pays</h2><p className="text-[11px] text-os-t3">Absences et sous-effectifs attribués au régime porté par chaque épisode</p></div>
+        <h2 className="text-[14px] font-semibold text-os-t1">Comparaison par groupe / pays</h2>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-left">
@@ -641,7 +638,6 @@ export default function PresencePage() {
         </div>
 
         {error && <p className="mb-4 rounded-os border border-os-red/30 bg-os-red/5 px-4 py-3 text-[12px] text-os-red">{error}</p>}
-        {(absence?.data_quality?.archived_total || 0) > 0 && <p className="mb-4 rounded-os border border-os-amber/25 bg-os-amber/5 px-4 py-2.5 text-[10px] text-os-t3"><b className="text-os-amber">Qualité des données :</b> {absence.data_quality.archived_total} ancien(s) événement(s) conservé(s) en archive mais exclu(s) des indicateurs fiables.</p>}
 
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-4">
           <Kpi icon={UsersRound} label="Agents observés" value={totalAgents} hint={`${liveCameras}/${rows.length} caméra(s) remontent des données`} />

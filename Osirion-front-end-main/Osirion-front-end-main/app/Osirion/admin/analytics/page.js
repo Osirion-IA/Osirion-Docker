@@ -318,7 +318,6 @@ export default function AnalyticsPage() {
             <option value="">Toutes les caméras</option>
             {cameras.filter((c) => !groupId || (c.group_ids || []).includes(Number(groupId))).map((c) => <option key={c.id} value={c.id}>{c.cam_name || `Caméra ${c.id}`}</option>)}
           </select>
-          <span className="text-[11px] text-os-t4">Filtres appliqués à l&apos;ensemble des statistiques de la page.</span>
         </div>
 
         {/* On met en tête ce qui déclenche une décision : l'attente ressentie par
@@ -568,10 +567,7 @@ export default function AnalyticsPage() {
 
               <Card className="p-5">
                 <div className="flex items-center justify-between mb-3">
-                  <div>
-                    <h3 className="text-[15px] font-semibold text-os-t1">Temps d&apos;absence par jour</h3>
-                    <p className="text-[12px] text-os-t3">Épisodes clôturés · durée réelle, pas seulement le dépassement de tolérance</p>
-                  </div>
+                  <h3 className="text-[15px] font-semibold text-os-t1">Temps d&apos;absence par jour</h3>
                   <Legend items={[{ label: "Minutes d'absence", color: "var(--os-amber)" }]} />
                 </div>
                 <TrendChart series={absence?.series || []} keys={[
@@ -612,7 +608,6 @@ export default function AnalyticsPage() {
 
               <div className="pt-2">
                 <h3 className="text-[17px] font-semibold text-os-t1">Effectif global par caméra</h3>
-                <p className="text-[12px] text-os-t3 mt-1">Agents uniques comptés dans l&apos;ensemble des zones « Poste d&apos;agent » de chaque caméra.</p>
               </div>
 
               <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">

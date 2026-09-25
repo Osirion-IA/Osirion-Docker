@@ -104,7 +104,6 @@ function Evidence({ event }) {
         <span className="absolute right-3 bottom-3 rounded-os bg-black/70 px-2 py-1 os-num text-[9px] text-white">{time(event.timestamp)}</span>
       </div>
       <div className="p-4">
-        {event.data_quality === "archived" && <p className="mb-3 rounded-os border border-os-amber/30 bg-os-amber/10 px-3 py-2 text-[10px] font-semibold text-os-amber">Archive historique non fiable · exclue des indicateurs</p>}
         <p className="text-[14px] font-semibold text-os-t1">{event.camera_nom}</p>
         <p className="text-[11px] text-os-t3">{event.camera_location || "Emplacement non renseigné"}</p>
         <p className="mt-3 text-[12px] font-medium text-os-t2">{eventDescription(event)}</p>

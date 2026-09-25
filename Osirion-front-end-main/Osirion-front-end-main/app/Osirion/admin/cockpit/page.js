@@ -258,7 +258,6 @@ export default function CockpitPage() {
                       )}
                       <div className="mt-1.5 os-num text-[11px] text-os-t3">
                         Attente {fmtWait(q.wait_avg_s)} · 9 clients sur 10 sous {fmtWait(q.wait_p90_s)}
-                        {q.samples ? <span className="text-os-t4"> · {q.samples} passage{q.samples > 1 ? "s" : ""} mesuré{q.samples > 1 ? "s" : ""}</span> : null}
                       </div>
                     </div>
                   );
