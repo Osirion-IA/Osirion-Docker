@@ -34,7 +34,17 @@ const distinctReason = (alert) => {
 // L'exception de la librairie d'envoi s'affichait telle quelle à l'opérateur.
 // On la traduit, en gardant le texte d'origine en infobulle pour le diagnostic.
 const deliveryError = (raw) => {
-  const t = String(raw || "");
+  const t = String(raw || "").trim();
+  if (!t) return "Échec de l'envoi";
+  // Le backend formule lui-même les causes courantes, et il en sait plus que nous
+  // (il distingue « identifiants refusés » d'« identifiant non renseigné »). On ne
+  // réécrit donc QUE ce qui ressemble encore à une erreur de librairie brute :
+  // code SMTP, octets Python, trace, nom d'exception — ou le préfixe générique
+  // « Échec envoi email : » dont le backend enrobe les exceptions non traitées.
+  // Ses messages formulés, eux, ne portent jamais ce préfixe.
+  const brut = /^Échec envoi email\s*:/.test(t)
+    || /\(\d{3},|\bb'|Traceback|Errno|[A-Za-z]+Error\b/.test(t);
+  if (!brut) return t;
   if (/timed out|timeout/i.test(t)) return "Serveur de messagerie injoignable (délai dépassé)";
   if (/authentication|auth|credential|password/i.test(t)) return "Identifiants du serveur de messagerie refusés";
   if (/name or service not known|getaddrinfo|dns/i.test(t)) return "Nom du serveur introuvable";

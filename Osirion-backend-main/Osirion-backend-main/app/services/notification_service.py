@@ -259,6 +259,10 @@ def send_email(subject: str, body: str, to: Optional[str] = None,
         except Exception as e:
             logger.warning(f"[notify] pièce jointe ignorée ({attachment_path}) : {e}")
 
+    if cfg["smtp_password"] and not (cfg["smtp_user"] or "").strip():
+        return False, ("Utilisateur SMTP manquant : un mot de passe est enregistré mais "
+                       "aucun identifiant, l'authentification ne peut pas être tentée.")
+
     try:
         with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"], timeout=_TIMEOUT) as server:
             if cfg["smtp_use_tls"]:
@@ -268,6 +272,18 @@ def send_email(subject: str, body: str, to: Optional[str] = None,
             server.send_message(msg)
         logger.info(f"[notify] email envoyé à {rcpt_list} (sujet={subject!r})")
         return True, f"Email envoyé à {len(rcpt_list)} destinataire(s)."
+    except smtplib.SMTPAuthenticationError as e:
+        logger.error(f"[notify] authentification SMTP refusée : {e}")
+        return False, ("Authentification refusée par le serveur. Pour Gmail, il faut la "
+                       "validation en 2 étapes et un MOT DE PASSE D'APPLICATION, "
+                       "pas le mot de passe du compte.")
+    except smtplib.SMTPSenderRefused as e:
+        # Gmail répond 530 ici quand la session n'est pas authentifiée du tout.
+        logger.error(f"[notify] expéditeur refusé : {e}")
+        if getattr(e, "smtp_code", None) == 530:
+            return False, ("Le serveur exige une authentification. Renseignez "
+                           "l'utilisateur SMTP et son mot de passe d'application.")
+        return False, f"Expéditeur refusé par le serveur : {getattr(e, 'smtp_error', e)}"
     except Exception as e:
         logger.error(f"[notify] échec envoi email : {e}")
         return False, f"Échec envoi email : {e}"

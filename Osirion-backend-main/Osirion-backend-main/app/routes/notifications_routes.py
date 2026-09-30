@@ -141,6 +141,12 @@ def put_notif_config(
     row.alert_webhook_url = (payload.alert_webhook_url or "").strip() or None
     if payload.smtp_password and payload.smtp_password.strip():
         row.smtp_password_enc = crypter(payload.smtp_password.strip())   # (re)chiffre
+    if row.smtp_password_enc and not (row.smtp_user or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Utilisateur SMTP requis dès qu'un mot de passe est renseigné "
+                   "(sans lui, l'authentification ne peut pas être tentée).",
+        )
     row.updated_at = datetime.utcnow()
     row.updated_by = getattr(admin, "email", None)
     session.add(row)
