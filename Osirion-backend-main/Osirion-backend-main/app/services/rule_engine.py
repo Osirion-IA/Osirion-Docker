@@ -27,7 +27,9 @@ from sqlmodel import Session, select
 from app.models.rules import Rule
 from app.models.alerts import Alert
 from app.models.events import Event
-from app.services.notification_service import send_email, send_webhook, snapshot_local_path
+from app.services.notification_service import (
+    send_email, send_webhook, snapshot_local_path, compose_alert_email,
+)
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -272,16 +274,7 @@ def _send_notifications(session: Session, rule: Rule, alert: Alert, channels) ->
     requested = [c for c in ("email", "webhook") if c in channels]
     alert.notify_requested_channels = ",".join(requested) or None
     snap_path = snapshot_local_path(alert.snapshot_url)
-    subject = f"[Osirion] {alert.severity.upper()} · {alert.kind} — {alert.label}"
-    body = (
-        f"Règle    : {rule.name}\n"
-        f"Sévérité : {alert.severity}\n"
-        f"Type     : {alert.kind}\n"
-        f"Détail   : {alert.label}\n"
-        f"Caméra   : {alert.camera_id}\n"
-        f"Date     : {alert.created_at}\n"
-        f"Capture  : {'jointe à cet email' if snap_path else '—'}\n"
-    )
+    subject, body = compose_alert_email(alert)
     sent = []
     erreur = None
     try:

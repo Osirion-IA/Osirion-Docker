@@ -21,6 +21,7 @@ from app.models.cameras import Camera
 from app.middleware.auth_middleware import require_viewer, require_user
 from app.services.notification_service import (
     send_email, send_webhook, email_configured, webhook_configured, snapshot_local_path,
+    compose_alert_email,
 )
 
 router = APIRouter()
@@ -190,17 +191,7 @@ def notify_alert(
         raise HTTPException(status_code=404, detail="Alerte non trouvée.")
 
     snap_path = snapshot_local_path(alert.snapshot_url)
-    subject = f"[Osirion] Alerte — {alert.kind} : {alert.label}"
-    body = (
-        "Alerte Osirion\n\n"
-        f"Type    : {alert.kind}\n"
-        f"Cible   : {alert.label}\n"
-        f"Motif   : {alert.reason or '—'}\n"
-        f"Caméra  : {alert.camera_id or '—'}\n"
-        f"Date    : {alert.created_at}\n"
-        f"Statut  : {alert.status}\n"
-        f"Capture : {'jointe à cet email' if snap_path else '—'}\n"
-    )
+    subject, body = compose_alert_email(alert)
     payload = {
         "source": "osirion", "alert_id": alert.id, "kind": alert.kind,
         "label": alert.label, "reason": alert.reason, "camera_id": alert.camera_id,

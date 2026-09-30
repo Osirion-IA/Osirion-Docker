@@ -31,6 +31,7 @@ from app.database import engine
 from app.models.alerts import Alert
 from app.services.notification_service import (
     email_configured, send_email, send_webhook, snapshot_local_path,
+    compose_alert_email,
     webhook_configured,
 )
 from app.services.rule_engine import NOTIFY_MAX_ATTEMPTS, _prochain_essai
@@ -66,16 +67,7 @@ def _canaux_alert(alert: Alert, disponibles: list) -> list:
 
 def _rejouer(session: Session, alert: Alert, canaux: list) -> bool:
     """Retente la livraison d'une alerte. Renvoie True si un canal a abouti."""
-    sujet = f"[Osirion] {alert.severity.upper()} · {alert.kind} — {alert.label}"
-    corps = (
-        f"Règle    : {alert.reason or '—'}\n"
-        f"Sévérité : {alert.severity}\n"
-        f"Type     : {alert.kind}\n"
-        f"Détail   : {alert.label}\n"
-        f"Caméra   : {alert.camera_id}\n"
-        f"Date     : {alert.created_at}\n"
-        f"Reprise  : tentative {(alert.notify_attempts or 0) + 1}\n"
-    )
+    sujet, corps = compose_alert_email(alert)
     envoyes, erreur = [], None
     try:
         if "email" in canaux:

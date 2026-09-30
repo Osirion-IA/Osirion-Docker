@@ -19,6 +19,7 @@ Chaque fonction est défensive : elle ne lève pas, et retourne (ok, message) af
 que l'API puisse répondre proprement (200 succès / 400 mal configuré / 502 échec).
 """
 import json
+import re
 import smtplib
 import ssl
 import urllib.request
@@ -122,6 +123,108 @@ def snapshot_local_path(snapshot_url: Optional[str]) -> Optional[str]:
         return str(p) if p.is_file() else None
     except Exception:
         return None
+
+
+# ─────────────────────────────────────────────
+# Composition du message d'alerte
+# ─────────────────────────────────────────────
+# Le mail s'adresse à un agent sur le terrain, pas à un intégrateur. Il ne porte
+# donc QUE : ce qui s'est passé, où, quand — et la capture en pièce jointe.
+#
+# Ont été retirés parce qu'ils n'aident aucune décision sur le terrain :
+#   - les décomptes de personnes (« (14 pers.) », « (vide depuis 902s) »), collés
+#     en fin de libellé par le moteur de règles ;
+#   - le type interne (`kind`), la sévérité, le statut, l'identifiant de caméra,
+#     le nom de la règle, le motif (qui répète le libellé) et le numéro de
+#     tentative de reprise.
+
+_TRAILING_PAREN = re.compile(r"\s*\([^()]*\)\s*$")
+
+
+def _plain_label(label: Optional[str]) -> str:
+    """Libellé sans sa parenthèse finale de comptage/durée.
+
+    « Saturation de file d'attente — FA (14 pers.) » → « … — FA »
+    « Poste d'agent vacant — PR - Diffa (vide depuis 902s) » → « … — PR - Diffa »
+    """
+    return _TRAILING_PAREN.sub("", (label or "Alerte").strip()) or "Alerte"
+
+
+def _alert_context(alert) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """(nom de caméra, site, fuseau) — défensif : jamais bloquant.
+
+    Le fuseau est cherché d'abord sur la ZONE d'où vient l'alerte (les postes
+    d'agent portent leur régime horaire, et c'est là que l'heure compte), puis
+    sur le régime de staffing de la caméra. Sans repère, l'appelant marquera UTC.
+    """
+    camera_id = getattr(alert, "camera_id", None)
+    if camera_id is None:
+        return None, None, None
+    try:
+        from sqlalchemy.orm import selectinload
+        from sqlmodel import select
+        from app.models.cameras import Camera
+        from app.models.events import Event
+        from app.models.zones import Zone
+        from app.models.work_schedule import WorkSchedule
+
+        with Session(engine) as s:
+            cam = s.exec(
+                select(Camera).where(Camera.id == camera_id).options(selectinload(Camera.groups))
+            ).first()
+            if cam is None:
+                return None, None, None
+            site = cam.groups[0].name if cam.groups else None
+
+            schedule_id = None
+            event_id = getattr(alert, "event_id", None)
+            if event_id:
+                event = s.get(Event, event_id)
+                zone_id = (getattr(event, "meta", None) or {}).get("zone_id") if event else None
+                if zone_id is not None:
+                    zone = s.get(Zone, zone_id)
+                    schedule_id = getattr(zone, "work_schedule_id", None) if zone else None
+            schedule_id = schedule_id or cam.staffing_work_schedule_id
+
+            tz = None
+            if schedule_id:
+                ws = s.get(WorkSchedule, schedule_id)
+                tz = getattr(ws, "timezone", None) if ws else None
+            return cam.cam_name, site, tz
+    except Exception:
+        logger.debug("[notify] contexte d'alerte indisponible", exc_info=True)
+        return None, None, None
+
+
+def _local_time(when, tz_name: Optional[str]) -> str:
+    """Horodatage lisible. Le parc est à cheval sur plusieurs fuseaux : on rend
+    l'heure du SITE quand on la connaît, sinon on marque explicitement l'UTC
+    plutôt que de laisser une heure sans repère."""
+    if when is None:
+        return "—"
+    if tz_name:
+        try:
+            from zoneinfo import ZoneInfo
+            from datetime import timezone
+            local = when.replace(tzinfo=timezone.utc).astimezone(ZoneInfo(tz_name))
+            return local.strftime("%d/%m/%Y à %H:%M")
+        except Exception:
+            logger.debug("[notify] fuseau %s inutilisable", tz_name, exc_info=True)
+    return when.strftime("%d/%m/%Y à %H:%M") + " UTC"
+
+
+def compose_alert_email(alert) -> Tuple[str, str]:
+    """(sujet, corps) épurés pour une alerte. La capture reste en pièce jointe."""
+    titre = _plain_label(alert.label)
+    cam_name, site, tz = _alert_context(alert)
+
+    lignes = []
+    if cam_name:
+        lignes.append(f"Caméra : {cam_name}")
+    if site:
+        lignes.append(f"Site   : {site}")
+    lignes.append(f"Heure  : {_local_time(getattr(alert, 'created_at', None), tz)}")
+    return f"Osirion — {titre}", "\n".join(lignes) + "\n"
 
 
 def send_email(subject: str, body: str, to: Optional[str] = None,
