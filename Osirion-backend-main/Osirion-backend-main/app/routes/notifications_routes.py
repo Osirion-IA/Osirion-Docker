@@ -9,6 +9,7 @@ Configuration des NOTIFICATIONS (email SMTP + webhook) depuis l'interface.
 Admin uniquement. Même pattern que hikcentral_routes (config effective + Fernet).
 """
 import logging
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -38,6 +39,57 @@ class NotifConfigIn(BaseModel):
     alert_email_to: Optional[str] = None
     alert_webhook_url: Optional[str] = None
     to: Optional[str] = None
+
+
+# ─────────────────────────────────────────────
+# Destinataires d'alerte : une LISTE, normalisée en amont du stockage
+# ─────────────────────────────────────────────
+# Le format de stockage reste une chaîne séparée par des virgules (c'est ce que
+# send_email découpe) : aucune migration, aucun changement de contrat. Mais la
+# saisie est normalisée ET validée ici, pas seulement dans l'UI — une adresse
+# fautive n'échouait qu'au moment de l'envoi, avec une erreur SMTP illisible,
+# et un point-virgule au lieu d'une virgule produisait UN destinataire bancal.
+_EMAIL_RE = re.compile(r"^[^@\s,;]+@[^@\s,;]+\.[A-Za-z]{2,}$")
+_SEPARATORS = re.compile(r"[,;\s]+")
+MAX_RECIPIENTS_LEN = 1024   # = longueur de la colonne alert_email_to
+
+
+def normalize_recipients(raw: Optional[str]) -> Optional[str]:
+    """« a@x.com; B@X.COM , a@x.com » → « a@x.com, B@X.COM ».
+
+    Accepte virgule, point-virgule, espace et retour à la ligne comme séparateurs.
+    Déduplique sans tenir compte de la casse, en gardant la première écriture.
+    Lève une 400 listant les entrées invalides plutôt que de stocker du bruit.
+    """
+    if raw is None:
+        return None
+    morceaux = [m for m in _SEPARATORS.split(raw.strip()) if m]
+    if not morceaux:
+        return None
+
+    valides, invalides, vus = [], [], set()
+    for m in morceaux:
+        if not _EMAIL_RE.match(m):
+            invalides.append(m)
+            continue
+        cle = m.lower()
+        if cle not in vus:
+            vus.add(cle)
+            valides.append(m)
+
+    if invalides:
+        raise HTTPException(
+            status_code=400,
+            detail=("Adresse invalide : " if len(invalides) == 1 else "Adresses invalides : ")
+                   + ", ".join(invalides),
+        )
+    joint = ", ".join(valides)
+    if len(joint) > MAX_RECIPIENTS_LEN:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Trop de destinataires ({len(valides)}) : la liste dépasse {MAX_RECIPIENTS_LEN} caractères.",
+        )
+    return joint or None
 
 
 @router.get("/config")
@@ -85,7 +137,7 @@ def put_notif_config(
     row.smtp_user = (payload.smtp_user or "").strip() or None
     row.smtp_from = (payload.smtp_from or "").strip() or None
     row.smtp_use_tls = payload.smtp_use_tls
-    row.alert_email_to = (payload.alert_email_to or "").strip() or None
+    row.alert_email_to = normalize_recipients(payload.alert_email_to)
     row.alert_webhook_url = (payload.alert_webhook_url or "").strip() or None
     if payload.smtp_password and payload.smtp_password.strip():
         row.smtp_password_enc = crypter(payload.smtp_password.strip())   # (re)chiffre
@@ -120,13 +172,13 @@ def test_notif_email(
         "smtp_password": (p.smtp_password if p and p.smtp_password else eff["smtp_password"]),
         "smtp_from": (p.smtp_from if p and p.smtp_from else eff["smtp_from"]),
         "smtp_use_tls": (p.smtp_use_tls if p and p.smtp_use_tls is not None else eff["smtp_use_tls"]),
-        "alert_email_to": (p.alert_email_to if p and p.alert_email_to else eff["alert_email_to"]),
+        "alert_email_to": (normalize_recipients(p.alert_email_to) if p and p.alert_email_to else eff["alert_email_to"]),
         "alert_webhook_url": eff["alert_webhook_url"],
         "source": eff["source"],
     }
     if not cfg["smtp_host"]:
         raise HTTPException(status_code=400, detail="Hôte SMTP requis.")
-    to = (p.to.strip() if p and p.to and p.to.strip() else None)
+    to = (normalize_recipients(p.to) if p and p.to and p.to.strip() else None)
     if not (to or (cfg["alert_email_to"] or "").strip()):
         raise HTTPException(status_code=400, detail="Aucun destinataire (renseignez « Destinataires » ou un email de test).")
 

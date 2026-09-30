@@ -6,7 +6,7 @@
  * système restent admin ; les opérateurs peuvent gérer les régimes horaires.
  */
 import { useState, useEffect, useCallback } from "react";
-import { Settings as Cog, Shield, Target, CheckCircle2, Save, RotateCcw, Cctv, Plug, Mail, Send } from "lucide-react";
+import { Settings as Cog, Shield, Target, CheckCircle2, Save, RotateCcw, Cctv, Plug, Mail, Send, X } from "lucide-react";
 import OsShell from "../_osirion/OsShell";
 import { PageHeader, Card, Segmented } from "../_osirion/ui";
 import WorkSchedules from "../_osirion/WorkSchedules";
@@ -15,6 +15,88 @@ import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
 
 const SETTINGS_STORAGE_KEY = "osirion-settings";
 const PERSIST_KEYS = ["siteName", "sessionTimeout", "passwordMinLength"];
+
+
+// ─────────────────────────────────────────────
+// Saisie d'une LISTE d'adresses (destinataires d'alerte)
+// ─────────────────────────────────────────────
+// La valeur reste une chaîne séparée par des virgules — c'est ce que le backend
+// stocke et ce que l'envoi découpe. Seule la SAISIE change : une adresse fautive
+// n'échouait qu'au moment de l'envoi, avec une erreur SMTP illisible, et rien
+// n'indiquait qu'on pouvait en mettre plusieurs.
+const EMAIL_RE = /^[^@\s,;]+@[^@\s,;]+\.[A-Za-z]{2,}$/;
+
+function RecipientsInput({ value, onChange, disabled }) {
+  const [draft, setDraft] = useState("");
+  const [error, setError] = useState("");
+  const list = (value || "").split(",").map((e) => e.trim()).filter(Boolean);
+
+  const commit = (raw) => {
+    // Virgule, point-virgule, espace et retour à la ligne séparent : un copier-
+    // coller depuis un carnet d'adresses passe d'un coup.
+    const morceaux = String(raw).split(/[,;\s]+/).map((m) => m.trim()).filter(Boolean);
+    if (!morceaux.length) return true;
+    const mauvais = morceaux.filter((m) => !EMAIL_RE.test(m));
+    if (mauvais.length) {
+      setError(`Adresse invalide : ${mauvais.join(", ")}`);
+      return false;
+    }
+    const connus = new Set(list.map((e) => e.toLowerCase()));
+    const ajouts = morceaux.filter((m) => !connus.has(m.toLowerCase()));
+    if (ajouts.length) onChange([...list, ...ajouts].join(", "));
+    setDraft("");
+    setError("");
+    return true;
+  };
+
+  const retirer = (adresse) => {
+    onChange(list.filter((e) => e !== adresse).join(", "));
+    setError("");
+  };
+
+  return (
+    <div>
+      <div className="w-full px-2 py-2 rounded-os border border-os-border bg-os-card flex flex-wrap items-center gap-1.5">
+        {list.map((adresse) => (
+          <span key={adresse}
+            className="inline-flex items-center gap-1.5 rounded-os bg-os-card-2 border border-os-border-2 pl-2.5 pr-1 py-1 text-[13px] text-os-t1">
+            {adresse}
+            <button type="button" onClick={() => retirer(adresse)} disabled={disabled}
+              aria-label={`Retirer ${adresse}`}
+              className="h-5 w-5 grid place-items-center rounded text-os-t4 hover:text-os-red disabled:opacity-40">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </span>
+        ))}
+        <input
+          type="text"
+          value={draft}
+          disabled={disabled}
+          onChange={(e) => { setDraft(e.target.value); if (error) setError(""); }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === "," || e.key === ";") { e.preventDefault(); commit(draft); }
+            else if (e.key === "Backspace" && !draft && list.length) retirer(list[list.length - 1]);
+          }}
+          // Quitter le champ vaut validation : sans cela une adresse tapée puis
+          // laissée telle quelle était perdue à l'enregistrement.
+          onBlur={() => commit(draft)}
+          onPaste={(e) => {
+            const colle = e.clipboardData.getData("text");
+            if (/[,;\s]/.test(colle)) { e.preventDefault(); commit(colle); }
+          }}
+          placeholder={list.length ? "Ajouter une adresse…" : "alerte@monsite.com"}
+          className="flex-1 min-w-[200px] px-1.5 py-1 bg-transparent text-[14px] text-os-t1 outline-none"
+        />
+      </div>
+      {error
+        ? <p className="text-[12px] text-os-red mt-1.5">{error}</p>
+        : <p className="text-[12px] text-os-t3 mt-1.5">
+            {list.length === 0 ? "Aucun destinataire." : `${list.length} destinataire${list.length > 1 ? "s" : ""}.`}
+            {" "}Entrée ou virgule pour ajouter.
+          </p>}
+    </div>
+  );
+}
 
 export default function SettingsPage() {
   const user = useAuth();
@@ -275,10 +357,10 @@ export default function SettingsPage() {
                   <label className={lbl}>Expéditeur (From)</label>
                   <input type="text" value={notif.smtp_from} onChange={(e) => notifField("smtp_from", e.target.value)} placeholder="alertes@monsite.com" className={inp} />
                 </div>
-                <div>
-                  <label className={lbl}>Destinataires</label>
-                  <input type="text" value={notif.alert_email_to} onChange={(e) => notifField("alert_email_to", e.target.value)} placeholder="a@x.com, b@y.com" className={inp} />
-                </div>
+              </div>
+              <div>
+                <label className={lbl}>Destinataires</label>
+                <RecipientsInput value={notif.alert_email_to} onChange={(v) => notifField("alert_email_to", v)} />
               </div>
               <label className="flex items-center gap-2.5 cursor-pointer select-none">
                 <input type="checkbox" checked={!!notif.smtp_use_tls} onChange={(e) => notifField("smtp_use_tls", e.target.checked)} className="h-4 w-4 accent-[var(--os-cta)]" />
