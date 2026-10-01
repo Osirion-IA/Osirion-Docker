@@ -95,7 +95,7 @@ export default function AuditPage() {
             : logs.length === 0 ? <EmptyState icon={ShieldCheck}>Aucune entrée d&apos;audit.</EmptyState>
             : (
               <div className="overflow-x-auto">
-                <table className="w-full text-[13px]">
+                <table className="w-full text-[13px] min-w-[640px]">
                   <thead>
                     <tr className="text-left text-[11px] uppercase tracking-wide text-os-t3 border-b border-os-border">
                       <th className="px-4 py-3 font-semibold">Date</th><th className="px-4 py-3 font-semibold">Action</th><th className="px-4 py-3 font-semibold">Utilisateur</th><th className="px-4 py-3 font-semibold">Cible</th><th className="px-4 py-3 font-semibold">Détail</th><th className="px-4 py-3 font-semibold">IP</th>

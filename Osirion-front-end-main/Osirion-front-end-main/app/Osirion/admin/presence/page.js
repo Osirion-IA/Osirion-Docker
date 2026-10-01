@@ -409,7 +409,7 @@ function GroupAnalytics({ absence, staffing, schedules }) {
         <h2 className="text-[14px] font-semibold text-os-t1">Comparaison par groupe / pays</h2>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full text-left">
+        <table className="w-full text-left min-w-[640px]">
           <thead><tr className="border-b border-os-border text-[10px] uppercase tracking-wide text-os-t4"><th className="px-5 py-2.5 font-semibold">Groupe</th><th className="px-3 py-2.5 font-semibold">Postes</th><th className="px-3 py-2.5 font-semibold">Absence</th><th className="px-3 py-2.5 font-semibold">Sous-effectif</th><th className="px-3 py-2.5 font-semibold">Épisodes</th><th className="px-5 py-2.5 font-semibold">Ouverts</th></tr></thead>
           <tbody className="divide-y divide-os-border">
             {rows.map((row) => <tr key={row.id} className="text-[11px]"><td className="px-5 py-3 font-semibold text-os-t1">{row.name}</td><td className="px-3 py-3 os-num text-os-t3">{row.posts}</td><td className="px-3 py-3 os-num text-os-t2">{duration(row.absence)}</td><td className="px-3 py-3 os-num text-os-t2">{duration(row.shortage)}</td><td className="px-3 py-3 os-num text-os-t3">{row.incidents}</td><td className={`px-5 py-3 os-num font-semibold ${row.open ? "text-os-red" : "text-os-green"}`}>{row.open}</td></tr>)}

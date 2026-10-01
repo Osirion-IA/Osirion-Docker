@@ -90,7 +90,7 @@ export default function EventsPage() {
       <div className="p-6">
         <PageHeader
           title="Événements"
-          subtitle="Journal d\u2019activité anonyme"
+          subtitle="Journal d’activité anonyme"
           actions={<RefreshButton onClick={load} spinning={loading} />}
         />
 
@@ -128,7 +128,7 @@ export default function EventsPage() {
             </EmptyState>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-[13px]">
+              <table className="w-full text-[13px] min-w-[640px]">
                 <thead>
                   <tr className="text-left text-[11px] font-semibold uppercase tracking-wide text-os-t3 border-b border-os-border">
                     <th className="px-4 py-3 font-semibold">Heure</th>

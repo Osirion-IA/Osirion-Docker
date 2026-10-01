@@ -1052,7 +1052,7 @@ export default function CamerasPage() {
             ) : (
               <div className="bg-os-card rounded-os-lg border border-os-border overflow-hidden shadow-sm">
                 <div className="overflow-x-auto">
-                  <table className="w-full">
+                  <table className="w-full min-w-[720px]">
                     <thead className="bg-os-card-2 border-b border-os-border">
                       <tr>
                         <th className="w-12 px-6 py-4">

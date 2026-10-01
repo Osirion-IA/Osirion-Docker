@@ -12,6 +12,11 @@
 // Le défilement est porté par le <nav> SEUL, pas par l'<aside> : sans ça, le
 // panneau du menu utilisateur (qui déborde vers le haut) serait rogné par le
 // conteneur de défilement.
+//
+// MOBILE (< lg) : la sidebar passe en TIROIR hors écran. Elle occupait 230 px
+// d'une largeur de 390, ne laissant que 160 px au contenu — tout était tronqué.
+// Au-dessus de lg, rien ne change : `lg:static lg:translate-x-0` rétablit la
+// colonne fixe d'origine.
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { ChevronDown } from "lucide-react";
@@ -19,7 +24,8 @@ import { activeScreenHref } from "./nav";
 import OsLogo from "./OsLogo";
 import OsUserMenu from "./OsUserMenu";
 
-export default function OsSidebar({ sections, activeKey, activePath, alertsCount = 0, user }) {
+export default function OsSidebar({ sections, activeKey, activePath, alertsCount = 0, user,
+                                   mobileOpen = false, onClose = () => {} }) {
   const [open, setOpen] = useState(() => new Set([activeKey]));
 
   // À la navigation vers une autre section, on ouvre son groupe (sans fermer les autres).
@@ -35,11 +41,17 @@ export default function OsSidebar({ sections, activeKey, activePath, alertsCount
     });
 
   return (
-    <aside className="shrink-0 w-[230px] bg-os-sidebar border-r border-os-sidebar-border sticky top-0 h-screen flex flex-col">
+    <aside
+      className={`shrink-0 w-[230px] bg-os-sidebar border-r border-os-sidebar-border h-screen flex flex-col
+        fixed inset-y-0 left-0 z-50 transition-transform duration-200 lg:sticky lg:top-0 lg:z-auto lg:translate-x-0
+        ${mobileOpen ? "translate-x-0" : "-translate-x-full"}`}
+      aria-hidden={undefined}
+    >
       <Link
         href="/Osirion/admin/cockpit"
         className="shrink-0 h-[52px] flex items-center px-4 border-b border-os-sidebar-border"
         aria-label="Accueil — Cockpit"
+        onClick={onClose}
       >
         {/* Sidebar BLANCHE → logotype en version COULEUR (la version blanche y
             serait invisible). */}
@@ -83,6 +95,7 @@ export default function OsSidebar({ sections, activeKey, activePath, alertsCount
                       <Link
                         key={sc.href}
                         href={sc.href}
+                        onClick={onClose}
                         className={`relative flex items-center gap-3 pl-6 pr-3 py-2 rounded-os text-[13px] transition-colors ${
                           active
                             ? "bg-os-sidebar-active text-os-sidebar-t1 font-medium"
