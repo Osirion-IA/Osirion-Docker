@@ -1,0 +1,34 @@
+# Surcharge CPU — déploiement sur une machine SANS GPU.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.cpu.yml up -d
+#
+# Le fichier de base réserve un périphérique NVIDIA pour le Core ; sans GPU,
+# Docker refuse de CRÉER le conteneur (« nvml error: driver not loaded ») — le
+# code n'est jamais atteint. Cette surcharge lève la réservation et bascule la
+# construction sur les wheels torch CPU (ARG GPU=0 du Dockerfile du Core).
+#
+# Le code lui-même ne demande rien de plus : person_detection.py ne conditionne
+# que la demi-précision à torch.cuda.is_available(), et YOLO retombe sur CPU.
+#
+# ⚠ Débit : l'inférence CPU est environ 13 fois plus lente qu'un RTX 4050 à
+# imgsz=960 (294 ms contre 22 ms par image, mesuré). Baisser PERSON_YOLO_IMGSZ
+# et limiter le nombre de caméras traitées est indispensable.
+services:
+  core:
+    image: osirion-core:cpu
+    build:
+      args:
+        GPU: "0"
+    environment:
+      # Sans CUDA, la demi-précision n'a pas de sens : on l'éteint explicitement
+      # plutôt que de compter sur le repli automatique.
+      PERSON_YOLO_HALF: "false"
+      # Aucun périphérique CUDA à désigner.
+      CUDA_VISIBLE_DEVICES: ""
+    deploy:
+      resources:
+        reservations:
+          # `!reset` (spec Compose) REMPLACE la liste du fichier de base au lieu
+          # de la compléter : une liste vide ordinaire était ignorée et la
+          # réservation NVIDIA survivait à la fusion.
+          devices: !reset []
