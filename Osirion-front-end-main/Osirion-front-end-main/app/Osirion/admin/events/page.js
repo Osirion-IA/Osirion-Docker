@@ -1,110 +1,60 @@
 "use client";
 
+/**
+ * Événements — journal de comptage ANONYME (section Analyser, thème clair).
+ * Aucune identité : type, sens, caméra, zone/ligne, valeur. Données /api/events.
+ */
 import { useState, useEffect, useMemo, useCallback } from "react";
-import AdminSidebar from "../AdminSidebar";
-import AdminTopBar from "../AdminTopBar";
+import { ListOrdered, FileSpreadsheet, FileText, FileType2 } from "lucide-react";
+import OsShell from "../_osirion/OsShell";
+import { PageHeader, Card, RefreshButton, EmptyState } from "../_osirion/ui";
 import { useAuth } from "../AuthContext";
-import { AccessDenied } from "../RoleGuard";
 import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
+import { exportEvents } from "../../../lib/eventExport";
 
-// ── Icônes SVG inline (auto-contenues) ──────────────────────────────────────
-const Svg = ({ className, children }) => (
-  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor"
-       strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">{children}</svg>
-);
-const IconRefresh = ({ className }) => (<Svg className={className}><path d="M21 12a9 9 0 1 1-2.64-6.36" /><path d="M21 3v5h-5" /></Svg>);
-const IconSearch = ({ className }) => (<Svg className={className}><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></Svg>);
-const IconInbox = ({ className }) => (<Svg className={className}><path d="M22 12h-6l-2 3h-4l-2-3H2" /><path d="M5 5h14l3 7v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1v-6z" /></Svg>);
-const IconUser = ({ className }) => (<Svg className={className}><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></Svg>);
-const IconX = ({ className }) => (<Svg className={className}><path d="M18 6 6 18M6 6l12 12" /></Svg>);
-
-// Type d'événement → libellé FR + badge (aligné backend).
+// Type d'événement → libellé FR + couleur du point (rouge = anomalie uniquement).
 const TYPE_META = {
-  RECOGNITION:       { label: "Reconnaissance", badge: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" },
-  UNKNOWN_FACE:      { label: "Visage inconnu",  badge: "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300" },
-  PLATE_RECOGNITION: { label: "Plaque",          badge: "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300" },
-  ENTRY:             { label: "Entrée",          badge: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" },
-  EXIT:              { label: "Sortie",          badge: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300" },
-  DETECTION:         { label: "Détection",       badge: "bg-gray-200 text-gray-700 dark:bg-gray-700/50 dark:text-gray-300" },
+  ZONE_OCCUPANCY_CHANGED: { label: "Occupation", color: "var(--os-blue)" },
+  CROWD_DETECTED: { label: "Attroupement", color: "var(--os-red)" },
+  LINE_CROSSED: { label: "Franchissement", color: "var(--os-amber)" },
+  ZONE_DWELL: { label: "Présence", color: "var(--os-blue)" },
+  POST_VACANT: { label: "Poste vacant", color: "var(--os-red)" },
+  POST_ABSENCE: { label: "Absence clôturée", color: "var(--os-amber)" },
+  STAFFING_LOW: { label: "Sous-effectif", color: "var(--os-red)" },
+  STAFFING_RECOVERED: { label: "Effectif rétabli", color: "var(--os-green)" },
+  ENTRY: { label: "Entrée", color: "var(--os-t4)" },
+  EXIT: { label: "Sortie", color: "var(--os-t4)" },
+  DETECTION: { label: "Détection", color: "var(--os-t4)" },
 };
 
-function snapSrc(url) {
-  if (!url) return null;
-  return String(url).startsWith("http") ? url : `/api/images?path=${encodeURIComponent(url)}`;
-}
 function fmtTime(ts) {
   const d = new Date(ts);
   if (isNaN(d)) return "—";
-  return d.toLocaleString("fr-FR", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
-}
-
-function Lightbox({ event, onClose }) {
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") onClose(); };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
-  const src = snapSrc(event.snapshot_url);
-  return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/85 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative flex flex-col items-center max-w-4xl w-full">
-        <button onClick={onClose} className="absolute -top-3 -right-3 z-10 h-9 w-9 rounded-full bg-white dark:bg-gray-800 shadow-lg flex items-center justify-center text-gray-600 dark:text-gray-300">
-          <IconX className="h-5 w-5" />
-        </button>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={src} alt={`Événement #${event.id}`} className="max-h-[72vh] max-w-full rounded-2xl object-contain shadow-2xl" />
-        <div className="mt-4 flex flex-wrap items-center justify-center gap-3 px-4 py-3 rounded-xl bg-white/10 backdrop-blur-sm border border-white/20 text-white/80 text-xs">
-          <span>#{event.id}</span><span className="text-white/30">·</span>
-          <span className="font-semibold text-white">{TYPE_META[event.event_type]?.label || event.event_type}</span>
-          <span className="text-white/30">·</span><span>{event.camera_nom}</span>
-          {event.person_nom && (<><span className="text-white/30">·</span><span className="font-semibold text-white">{event.person_nom}</span></>)}
-          {event.plate_text_detected && (<><span className="text-white/30">·</span><span className="font-mono text-white">{event.plate_text_detected}</span></>)}
-          <span className="text-white/30">·</span><span>{fmtTime(event.timestamp)}</span>
-        </div>
-      </div>
-    </div>
-  );
+  return d.toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
 export default function EventsPage() {
-  const [isCollapsed, setIsCollapsed] = useState(false);
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [fetchError, setFetchError] = useState("");
   const [typeFilter, setTypeFilter] = useState("tous");
   const [cameraFilter, setCameraFilter] = useState("tous");
   const [search, setSearch] = useState("");
-  const [lightbox, setLightbox] = useState(null);
 
-  const user = useAuth();
-  const currentRole = user?.role || "viewer";
-
-  const loadEvents = useCallback(async () => {
+  const load = useCallback(async () => {
     setLoading(true);
-    setFetchError("");
     try {
       const res = await fetchWithRefresh("/api/events?limit=500");
-      if (!res) return;
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({}));
-        setFetchError(d?.message || "Erreur de chargement.");
-        return;
-      }
-      const data = await res.json();
+      const data = res && res.ok ? await res.json() : [];
       setEvents(Array.isArray(data) ? data : []);
-    } catch {
-      setFetchError("Impossible de contacter le serveur.");
     } finally {
       setLoading(false);
     }
   }, []);
-
-  useEffect(() => { loadEvents(); }, [loadEvents]);
+  useEffect(() => { load(); }, [load]);
 
   const cameras = useMemo(() => {
     const m = new Map();
-    for (const e of events) if (!m.has(e.camera_id)) m.set(e.camera_id, e.camera_nom || `CAM-${e.camera_id}`);
+    for (const e of events) if (!m.has(e.camera_id)) m.set(e.camera_id, e.camera_nom || `Caméra ${e.camera_id}`);
     return Array.from(m, ([id, name]) => ({ id, name }));
   }, [events]);
 
@@ -114,140 +64,110 @@ export default function EventsPage() {
       if (typeFilter !== "tous" && e.event_type !== typeFilter) return false;
       if (cameraFilter !== "tous" && String(e.camera_id) !== String(cameraFilter)) return false;
       if (q) {
-        const hay = [e.event_type, e.camera_nom, e.camera_location, e.person_nom, e.plate_text_detected].filter(Boolean).join(" ").toLowerCase();
+        const hay = [e.event_type, e.camera_nom, e.camera_location, e.meta?.zone_name, e.meta?.line_name].filter(Boolean).join(" ").toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
     });
   }, [events, typeFilter, cameraFilter, search]);
 
-  if (user && !["admin", "user", "viewer"].includes(user.role)) {
-    return (
-      <div className="min-h-screen bg-[var(--app-bg)]">
-        <div className="flex min-h-screen">
-          <AdminSidebar currentRole={currentRole} isCollapsed={isCollapsed} onToggle={() => setIsCollapsed((p) => !p)} currentPath="/Osirion/admin/events" />
-          <main className={`flex-1 transition-all duration-400 ${isCollapsed ? "lg:ml-20" : "lg:ml-80"}`}>
-            <AccessDenied role={user.role} />
-          </main>
-        </div>
-      </div>
-    );
-  }
+  const user = useAuth();
+  const canExport = ["admin", "user"].includes(user?.role || "viewer");
+  const doExport = (kind) => {
+    if (!filtered.length) return;
+    const parts = [];
+    if (typeFilter !== "tous") parts.push(`type : ${TYPE_META[typeFilter]?.label || typeFilter}`);
+    if (cameraFilter !== "tous") parts.push(`caméra : ${cameras.find((c) => String(c.id) === String(cameraFilter))?.name || cameraFilter}`);
+    if (search.trim()) parts.push(`recherche : ${search.trim()}`);
+    exportEvents(kind, filtered, { generatedAt: new Date().toLocaleString("fr-FR"), filters: parts.length ? parts.join(" · ") : "Aucun", count: filtered.length });
+  };
+
+  const selectCls = "rounded-os border border-os-border bg-os-card px-3 py-2 text-[13px] text-os-t1 outline-none focus:border-os-t3";
+  const btn = "px-3 py-2 rounded-os text-[13px] font-semibold inline-flex items-center gap-2 disabled:opacity-40";
 
   return (
-    <div className="min-h-screen bg-[var(--app-bg)]">
-      <div className="flex min-h-screen">
-        <AdminSidebar
-          currentRole={currentRole}
-          isCollapsed={isCollapsed}
-          onToggle={() => setIsCollapsed((prev) => !prev)}
-          currentPath="/Osirion/admin/events"
+    <OsShell>
+      <div className="p-6">
+        <PageHeader
+          title="Événements"
+          subtitle="Journal d\u2019activité anonyme"
+          actions={<RefreshButton onClick={load} spinning={loading} />}
         />
 
-        <main className={`flex-1 transition-all duration-400 ${isCollapsed ? "lg:ml-20" : "lg:ml-80"}`}>
-          <AdminTopBar
-            title="Événements"
-            subtitle={`${filtered.length} événement(s) affiché(s)`}
-            showSearch={false}
-            actions={
-              <button
-                onClick={loadEvents}
-                className="rounded-xl border border-gray-200 dark:border-gray-800 px-4 py-2.5 text-sm font-medium hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors flex items-center gap-2"
-              >
-                <IconRefresh className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Actualiser
-              </button>
-            }
-          />
-
-          <div className="p-6 space-y-6">
-            {/* Filtres */}
-            <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-4">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <select
-                  value={typeFilter}
-                  onChange={(e) => setTypeFilter(e.target.value)}
-                  className="rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                >
-                  <option value="tous">Tous les types</option>
-                  {Object.entries(TYPE_META).map(([v, m]) => <option key={v} value={v}>{m.label}</option>)}
-                </select>
-                <select
-                  value={cameraFilter}
-                  onChange={(e) => setCameraFilter(e.target.value)}
-                  className="rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                >
-                  <option value="tous">Toutes les caméras</option>
-                  {cameras.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
-                <div className="relative">
-                  <IconSearch className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                  <input
-                    type="text"
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Personne, plaque, lieu…"
-                    className="w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 pl-9 pr-3 py-2 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Liste */}
-            <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 overflow-hidden">
-              {fetchError ? (
-                <div className="p-10 text-center">
-                  <p className="text-sm text-rose-600 dark:text-rose-400">{fetchError}</p>
-                  <button onClick={loadEvents} className="mt-3 text-sm font-medium text-indigo-600 hover:underline">Réessayer</button>
-                </div>
-              ) : loading ? (
-                <div className="p-10 text-center text-sm text-gray-500 dark:text-gray-400">
-                  <IconRefresh className="h-6 w-6 mx-auto mb-3 animate-spin opacity-60" /> Chargement…
-                </div>
-              ) : filtered.length === 0 ? (
-                <div className="p-12 text-center">
-                  <IconInbox className="h-10 w-10 mx-auto mb-3 text-gray-300 dark:text-gray-600" />
-                  <p className="text-sm text-gray-500 dark:text-gray-400">
-                    {events.length === 0 ? "Aucun événement enregistré." : "Aucun événement ne correspond aux filtres."}
-                  </p>
-                </div>
-              ) : (
-                <ul className="divide-y divide-gray-100 dark:divide-gray-800">
-                  {filtered.map((e) => {
-                    const meta = TYPE_META[e.event_type] || { label: e.event_type, badge: "bg-gray-200 text-gray-700 dark:bg-gray-700/50 dark:text-gray-300" };
-                    const src = snapSrc(e.snapshot_url);
-                    const detail = e.person_nom || e.plate_text_detected || (e.event_type === "UNKNOWN_FACE" ? "Visage non identifié" : "—");
-                    return (
-                      <li key={e.id} className="flex items-center gap-4 p-4 hover:bg-gray-50 dark:hover:bg-gray-800/40 transition-colors">
-                        <button
-                          onClick={() => src && setLightbox(e)}
-                          className={`shrink-0 h-14 w-14 rounded-xl bg-gray-100 dark:bg-gray-800 overflow-hidden flex items-center justify-center text-gray-400 ${src ? "cursor-zoom-in" : ""}`}
-                        >
-                          {src ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img src={src} alt="snapshot" className="h-full w-full object-cover" />
-                          ) : <IconUser className="h-6 w-6" />}
-                        </button>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className={`text-[11px] px-2 py-0.5 rounded-full font-semibold ${meta.badge}`}>{meta.label}</span>
-                            <span className="text-sm font-semibold text-gray-900 dark:text-white truncate">{detail}</span>
-                          </div>
-                          <div className="mt-0.5 text-xs text-gray-500 dark:text-gray-400 truncate">
-                            {e.camera_nom || `CAM-${e.camera_id}`}{e.camera_location ? ` · ${e.camera_location}` : ""} · {fmtTime(e.timestamp)}
-                            {e.confidence != null ? ` · ${Math.round(e.confidence * 100)}%` : ""}
-                          </div>
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
+        <Card className="p-4 mb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className={selectCls}>
+              <option value="tous">Tous les types</option>
+              {Object.entries(TYPE_META).map(([v, m]) => <option key={v} value={v}>{m.label}</option>)}
+            </select>
+            <select value={cameraFilter} onChange={(e) => setCameraFilter(e.target.value)} className={selectCls}>
+              <option value="tous">Toutes les caméras</option>
+              {cameras.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <input
+              type="text" value={search} onChange={(e) => setSearch(e.target.value)}
+              placeholder="Zone, caméra, lieu…" className={selectCls}
+            />
+          </div>
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-os-border pt-3">
+            <span className="os-num text-[12px] text-os-t3">{filtered.length} / {events.length} événement(s){!canExport ? " · export réservé admin/opérateur" : ""}</span>
+            <div className="flex items-center gap-2">
+              <button onClick={() => doExport("excel")} disabled={!filtered.length || !canExport} className={`${btn} bg-os-cta text-white hover:bg-os-cta-hover`}><FileSpreadsheet className="h-4 w-4" /> Excel</button>
+              <button onClick={() => doExport("pdf")} disabled={!filtered.length || !canExport} className={`${btn} bg-os-cta text-white hover:bg-os-cta-hover`}><FileText className="h-4 w-4" /> PDF</button>
+              <button onClick={() => doExport("csv")} disabled={!filtered.length || !canExport} className={`${btn} border border-os-border text-os-t2 hover:text-os-t1`}><FileType2 className="h-4 w-4" /> CSV</button>
             </div>
           </div>
-        </main>
-      </div>
+        </Card>
 
-      {lightbox && <Lightbox event={lightbox} onClose={() => setLightbox(null)} />}
-    </div>
+        <Card className="overflow-hidden">
+          {loading ? (
+            <EmptyState icon={ListOrdered}>Chargement…</EmptyState>
+          ) : filtered.length === 0 ? (
+            <EmptyState icon={ListOrdered}>
+              {events.length === 0 ? "Aucun événement enregistré." : "Aucun événement ne correspond aux filtres."}
+            </EmptyState>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-[13px]">
+                <thead>
+                  <tr className="text-left text-[11px] font-semibold uppercase tracking-wide text-os-t3 border-b border-os-border">
+                    <th className="px-4 py-3 font-semibold">Heure</th>
+                    <th className="px-4 py-3 font-semibold">Type</th>
+                    <th className="px-4 py-3 font-semibold">Caméra</th>
+                    <th className="px-4 py-3 font-semibold">Zone / Ligne</th>
+                    <th className="px-4 py-3 font-semibold text-right">Valeur</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map((e) => {
+                    const meta = TYPE_META[e.event_type] || { label: e.event_type, color: "var(--os-t4)" };
+                    const m = e.meta || {};
+                    const value = m.shortage_s != null ? `${Math.round(m.shortage_s)} s de sous-effectif`
+                      : m.minimum != null ? `${m.count ?? 0}/${m.maximum} agents · min ${m.minimum}`
+                      : m.count != null ? `${m.count} pers.`
+                      : m.absence_s != null ? `${Math.round(m.absence_s)} s d'absence`
+                      : m.vacant_s != null ? `vide depuis ${Math.round(m.vacant_s)} s`
+                      : m.dwell_s != null ? `${Math.round(m.dwell_s)} s` : "—";
+                    return (
+                      <tr key={e.id} className="border-b border-os-border last:border-0 hover:bg-black/[0.015] dark:hover:bg-white/[0.02]">
+                        <td className="px-4 py-3 os-num text-os-t2 whitespace-nowrap">{fmtTime(e.timestamp)}</td>
+                        <td className="px-4 py-3">
+                          <span className="inline-flex items-center gap-1.5 text-os-t1 font-medium">
+                            <span className="h-2 w-2 rounded-full" style={{ background: meta.color }} />{meta.label}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-os-t2 whitespace-nowrap">{e.camera_nom || `Caméra ${e.camera_id}`}</td>
+                        <td className="px-4 py-3 text-os-t2">{m.zone_name || m.line_name || "—"}</td>
+                        <td className="px-4 py-3 os-num text-os-t1 text-right whitespace-nowrap">{value}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+      </div>
+    </OsShell>
   );
 }

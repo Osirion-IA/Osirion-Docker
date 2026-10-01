@@ -4,9 +4,80 @@
 
 :root {
   --background: #ffffff;
-  --foreground: #171717;
+  --foreground: #2e3b3c;
   --app-bg: radial-gradient(circle at top, rgba(0, 0, 0, 0.06), transparent 45%),
     radial-gradient(circle at bottom, rgba(0, 0, 0, 0.08), transparent 45%);
+
+  /* ── MARQUE QWIPER (tokens invariants dans les deux thèmes) ────────────────
+     Source : https://www.qwiper.com/brand — bleu #02c2fe, noir #2e3b3c,
+     gris #f0f1f2, blanc. Toutes les surfaces neutres de l'application sont
+     dérivées du NOIR de marque (ardoise cyanée, teinte ~185°), pas d'un gris
+     neutre : c'est ce qui fait tenir l'ensemble avec le bleu.
+
+     Emploi des couleurs :
+       • BLEU  = marque et action principale (état actif, focus, liens, CTA clé).
+                 ⚠ contraste 2,1:1 sur blanc → JAMAIS de texte bleu clair sur
+                 fond clair, et JAMAIS de texte blanc sur aplat bleu : sur un
+                 aplat bleu on écrit en --os-on-primary (5,5:1). Pour du TEXTE
+                 (liens), utiliser --os-link, assombri par thème.
+       • ROUGE = alertes / seuils dépassés UNIQUEMENT (sémantique, hors marque). */
+  --os-primary: #02c2fe;        /* bleu Qwiper — aplats, accents, état actif */
+  --os-primary-hover: #00a9e0;
+  --os-on-primary: #0d1315;     /* texte/icône POSÉ sur un aplat bleu */
+  --os-brand-black: #2e3b3c;
+  --os-brand-grey: #f0f1f2;
+
+  /* Sidebar BLANCHE dans les deux thèmes (y compris face au contenu sombre de
+     « Surveiller ») : c'est le blanc de la charte. Elle se lit donc en NOIR de
+     marque, l'élément actif étant porté par le BLEU. */
+  --os-sidebar: #ffffff;
+  --os-sidebar-border: #e2e5e6;
+  --os-sidebar-t1: #2e3b3c;     /* texte/icône principal (actif) */
+  --os-sidebar-t2: #6c7679;     /* texte/icône secondaire — 4,7:1 sur blanc */
+  --os-sidebar-t3: #b3babb;     /* pastilles inactives, discrètes */
+  --os-sidebar-hover: #f0f1f2;  /* gris de marque */
+  --os-sidebar-active: rgba(2, 194, 254, 0.12);  /* voile bleu de l'écran actif */
+  --os-red: #e60027;   /* alertes / seuils dépassés UNIQUEMENT */
+  --os-green: #1faa59; /* OK */
+  --os-amber: #f5a623; /* attention */
+}
+
+/* Thème SOMBRE (section Surveiller — salle de contrôle). Ardoise cyanée dérivée
+   du noir de marque : plus sombre que la sidebar, qui reste ainsi lisible. */
+[data-os-theme="dark"] {
+  --os-bg: #0d1315;
+  --os-card: #141d1f;
+  --os-card-2: #1a2426;
+  --os-border: #212c2e;
+  --os-border-2: #2e3b3c;
+  --os-t1: #e9eded;
+  --os-t2: #c4cccd;
+  --os-t3: #8d9799;
+  --os-t4: #6c7679;
+  --os-cta: #263234;        /* action NEUTRE (le bleu reste l'action principale) */
+  --os-cta-hover: #2e3b3c;
+  /* Bleu LISIBLE (liens, libellés, séries de données) : 9:1 sur ce fond sombre,
+     donc le bleu de marque convient tel quel ici. */
+  --os-blue: #02c2fe;
+}
+
+/* Thème CLAIR (sections Analyser / Configurer). Fond = gris de marque. */
+[data-os-theme="light"] {
+  --os-bg: #f0f1f2;
+  --os-card: #ffffff;
+  --os-card-2: #ffffff;
+  --os-border: #e2e5e6;
+  --os-border-2: #d3d8d9;
+  --os-t1: #2e3b3c;
+  --os-t2: #566264;
+  --os-t3: #8d9799;
+  --os-t4: #b3babb;
+  --os-cta: #2e3b3c;        /* action NEUTRE = noir de marque */
+  --os-cta-hover: #3d4c4d;
+  /* Bleu LISIBLE : `text-os-blue` sert aussi de couleur de LIEN, et le bleu de
+     marque pur ne fait que 2,1:1 sur blanc. Version assombrie = 5,2:1 (AA), tout
+     en restant de la même famille cyan pour les séries de données. */
+  --os-blue: #0277a0;
 }
 @keyframes scan {
   0% { transform: translateY(-100%); }
@@ -78,5 +149,22 @@
 body {
   color: var(--foreground);
   background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+  /* Marque Qwiper : Sora (variable exposée par next/font/local), repli système. */
+  font-family: var(--font-sora), system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
 }
+
+/* ── Osirion — keyframes (LIVE, alertes, toast, reconnexion, scanlines) ────── */
+@keyframes os-pulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
+@keyframes os-blink { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
+@keyframes os-spin  { to { transform: rotate(360deg); } }
+@keyframes os-toastin {
+  from { opacity: 0; transform: translateX(24px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.os-anim-pulse   { animation: os-pulse 2s ease-in-out infinite; }
+.os-anim-blink   { animation: os-blink 1.1s steps(2, start) infinite; }
+.os-anim-spin    { animation: os-spin 1s linear infinite; }
+.os-anim-toastin { animation: os-toastin .28s cubic-bezier(.2,.8,.2,1) both; }
+
+/* Chiffres mono tabulaires (compteurs alignés, pas de saut de largeur). */
+.os-num { font-family: var(--font-plex-mono), ui-monospace, monospace; font-variant-numeric: tabular-nums; }

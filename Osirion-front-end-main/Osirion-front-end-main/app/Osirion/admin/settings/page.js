@@ -1,484 +1,456 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import AdminSidebar from "../AdminSidebar";
-import AdminTopBar from "../AdminTopBar";
+/**
+ * Paramètres — section Configurer (thème clair). Général / Sécurité / Détection.
+ * Persistance locale (siteName, sessionTimeout, passwordMinLength). Les réglages
+ * système restent admin ; les opérateurs peuvent gérer les régimes horaires.
+ */
+import { useState, useEffect, useCallback } from "react";
+import { Settings as Cog, Shield, Target, CheckCircle2, Save, RotateCcw, Cctv, Plug, Mail, Send, X } from "lucide-react";
+import OsShell from "../_osirion/OsShell";
+import { PageHeader, Card, Segmented } from "../_osirion/ui";
+import WorkSchedules from "../_osirion/WorkSchedules";
 import { useAuth } from "../AuthContext";
-import { AccessDenied } from "../RoleGuard";
-import { Settings, Shield, Target, Car, AlertTriangle, CheckCircle2, Save, RotateCcw, User } from "lucide-react";
+import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
 
-// Paramètres persistés localement (Général + Sécurité). On NE persiste PAS ici
-// les toggles de Détection : le Core en est la source de vérité (lus/poussés via
-// /api/lpr et /api/unknown-face, appliqués à chaud).
 const SETTINGS_STORAGE_KEY = "osirion-settings";
 const PERSIST_KEYS = ["siteName", "sessionTimeout", "passwordMinLength"];
 
+
+// ─────────────────────────────────────────────
+// Saisie d'une LISTE d'adresses (destinataires d'alerte)
+// ─────────────────────────────────────────────
+// La valeur reste une chaîne séparée par des virgules — c'est ce que le backend
+// stocke et ce que l'envoi découpe. Seule la SAISIE change : une adresse fautive
+// n'échouait qu'au moment de l'envoi, avec une erreur SMTP illisible, et rien
+// n'indiquait qu'on pouvait en mettre plusieurs.
+const EMAIL_RE = /^[^@\s,;]+@[^@\s,;]+\.[A-Za-z]{2,}$/;
+
+function RecipientsInput({ value, onChange, disabled }) {
+  const [draft, setDraft] = useState("");
+  const [error, setError] = useState("");
+  const list = (value || "").split(",").map((e) => e.trim()).filter(Boolean);
+
+  const commit = (raw) => {
+    // Virgule, point-virgule, espace et retour à la ligne séparent : un copier-
+    // coller depuis un carnet d'adresses passe d'un coup.
+    const morceaux = String(raw).split(/[,;\s]+/).map((m) => m.trim()).filter(Boolean);
+    if (!morceaux.length) return true;
+    const mauvais = morceaux.filter((m) => !EMAIL_RE.test(m));
+    if (mauvais.length) {
+      setError(`Adresse invalide : ${mauvais.join(", ")}`);
+      return false;
+    }
+    const connus = new Set(list.map((e) => e.toLowerCase()));
+    const ajouts = morceaux.filter((m) => !connus.has(m.toLowerCase()));
+    if (ajouts.length) onChange([...list, ...ajouts].join(", "));
+    setDraft("");
+    setError("");
+    return true;
+  };
+
+  const retirer = (adresse) => {
+    onChange(list.filter((e) => e !== adresse).join(", "));
+    setError("");
+  };
+
+  return (
+    <div>
+      <div className="w-full px-2 py-2 rounded-os border border-os-border bg-os-card flex flex-wrap items-center gap-1.5">
+        {list.map((adresse) => (
+          <span key={adresse}
+            className="inline-flex items-center gap-1.5 rounded-os bg-os-card-2 border border-os-border-2 pl-2.5 pr-1 py-1 text-[13px] text-os-t1">
+            {adresse}
+            <button type="button" onClick={() => retirer(adresse)} disabled={disabled}
+              aria-label={`Retirer ${adresse}`}
+              className="h-5 w-5 grid place-items-center rounded text-os-t4 hover:text-os-red disabled:opacity-40">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </span>
+        ))}
+        <input
+          type="text"
+          value={draft}
+          disabled={disabled}
+          onChange={(e) => { setDraft(e.target.value); if (error) setError(""); }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === "," || e.key === ";") { e.preventDefault(); commit(draft); }
+            else if (e.key === "Backspace" && !draft && list.length) retirer(list[list.length - 1]);
+          }}
+          // Quitter le champ vaut validation : sans cela une adresse tapée puis
+          // laissée telle quelle était perdue à l'enregistrement.
+          onBlur={() => commit(draft)}
+          onPaste={(e) => {
+            const colle = e.clipboardData.getData("text");
+            if (/[,;\s]/.test(colle)) { e.preventDefault(); commit(colle); }
+          }}
+          placeholder={list.length ? "Ajouter une adresse…" : "alerte@monsite.com"}
+          className="flex-1 min-w-[200px] px-1.5 py-1 bg-transparent text-[14px] text-os-t1 outline-none"
+        />
+      </div>
+      {error
+        ? <p className="text-[12px] text-os-red mt-1.5">{error}</p>
+        : <p className="text-[12px] text-os-t3 mt-1.5">
+            {list.length === 0 ? "Aucun destinataire." : `${list.length} destinataire${list.length > 1 ? "s" : ""}.`}
+            {" "}Entrée ou virgule pour ajouter.
+          </p>}
+    </div>
+  );
+}
+
 export default function SettingsPage() {
-  const [isCollapsed, setIsCollapsed] = useState(false);
-  const [activeTab, setActiveTab] = useState("general");
-  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
-  const [savedMsg, setSavedMsg] = useState(false);
-
   const user = useAuth();
-  const currentRole = user?.role || "viewer";
+  const isAdmin = user?.role === "admin";
+  const isOperator = user?.role === "user";
+  const [tab, setTab] = useState("general");
+  const effectiveTab = isOperator ? "horaires" : tab;
+  const [dirty, setDirty] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [settings, setSettings] = useState({ siteName: "Qwiper Sentinel", sessionTimeout: 30, passwordMinLength: 8 });
 
-  // Seuls les paramètres ayant un effet réel sur le système sont conservés.
-  const [settings, setSettings] = useState({
-    siteName: "Osirion Surveillance",   // → titre de l'onglet navigateur
-    sessionTimeout: 30,                 // → déconnexion auto après inactivité
-    passwordMinLength: 8,               // → création d'utilisateur (longueur min)
-    faceRecognition: true,              // → Core (pipeline facial), à chaud — DÉFAUT activé
-    licencePlateRecognition: true,      // → Core (LPR), à chaud
-    unknownFaceEvent: false,            // → Core (événement visage non reconnu), à chaud
-  });
+  const change = (k, v) => { setSettings((p) => ({ ...p, [k]: v })); setDirty(true); };
 
-  const handleSettingChange = (key, value) => {
-    setSettings((prev) => ({ ...prev, [key]: value }));
-    setHasUnsavedChanges(true);
-  };
-
-  // URL publique du Core (moteur de surveillance) — expose l'API LPR / visage inconnu.
-  const CORE_URL = process.env.NEXT_PUBLIC_CORE_URL || "http://localhost:5000";
-  const [lprAvailable, setLprAvailable] = useState(null);
-
-  // Au montage : récupérer l'état RÉEL de la reconnaissance faciale côté Core.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(`${CORE_URL}/api/face/status`);
-        if (!res.ok) return;
-        const data = await res.json();
-        if (cancelled) return;
-        setSettings((prev) => ({ ...prev, faceRecognition: data.face_recognition_enabled !== false }));
-      } catch {
-        // Core injoignable : on garde l'état local par défaut (activé), sans bloquer.
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [CORE_URL]);
-
-  // Active/désactive le pipeline de reconnaissance faciale côté Core (à chaud).
-  const toggleFace = async (enabled) => {
-    try {
-      const res = await fetch(`${CORE_URL}/api/face/toggle`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setSettings((prev) => ({ ...prev, faceRecognition: !!data.face_recognition_enabled }));
-      }
-    } catch {
-      console.warn("Face toggle: Core injoignable à", CORE_URL);
-    }
-  };
-
-  // Au montage : récupérer l'état RÉEL du LPR côté Core et l'afficher.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(`${CORE_URL}/api/lpr/status`);
-        if (!res.ok) return;
-        const data = await res.json();
-        if (cancelled) return;
-        setLprAvailable(data.lpr_available);
-        setSettings((prev) => ({ ...prev, licencePlateRecognition: !!data.lpr_enabled }));
-      } catch {
-        // Core injoignable : on laisse l'état local par défaut, sans bloquer la page.
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [CORE_URL]);
-
-  // Active/désactive le pipeline LPR côté Core (toggle Plaques d'immatriculation).
-  const toggleLPR = async (enabled) => {
-    try {
-      const res = await fetch(`${CORE_URL}/api/lpr/toggle`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setSettings((prev) => ({ ...prev, licencePlateRecognition: !!data.lpr_enabled }));
-      }
-    } catch {
-      console.warn("LPR toggle: Core injoignable à", CORE_URL);
-    }
-  };
-
-  // Au montage : récupérer l'état RÉEL de l'événement « visage non reconnu ».
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(`${CORE_URL}/api/unknown-face/status`);
-        if (!res.ok) return;
-        const data = await res.json();
-        if (cancelled) return;
-        setSettings((prev) => ({ ...prev, unknownFaceEvent: !!data.unknown_face_event_enabled }));
-      } catch {
-        // Core injoignable : on garde l'état local par défaut, sans bloquer la page.
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [CORE_URL]);
-
-  // Active/désactive l'enregistrement d'un événement pour les visages non reconnus.
-  const toggleUnknownFace = async (enabled) => {
-    try {
-      const res = await fetch(`${CORE_URL}/api/unknown-face/toggle`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setSettings((prev) => ({ ...prev, unknownFaceEvent: !!data.unknown_face_event_enabled }));
-      }
-    } catch {
-      console.warn("Unknown-face toggle: Core injoignable à", CORE_URL);
-    }
-  };
-
-  // Au montage : restaurer les paramètres persistés (Général + Sécurité).
   useEffect(() => {
     try {
       const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
       if (!raw) return;
-      const saved = JSON.parse(raw);
-      const subset = {};
-      for (const k of PERSIST_KEYS) if (saved[k] !== undefined) subset[k] = saved[k];
-      if (Object.keys(subset).length) setSettings((prev) => ({ ...prev, ...subset }));
-      if (saved.siteName) document.title = saved.siteName;   // effet visible (titre onglet)
-    } catch {
-      // localStorage indisponible ou JSON invalide : on garde les valeurs par défaut.
-    }
+      const s = JSON.parse(raw);
+      const sub = {};
+      for (const k of PERSIST_KEYS) if (s[k] !== undefined) sub[k] = s[k];
+      if (Object.keys(sub).length) setSettings((p) => ({ ...p, ...sub }));
+      if (s.siteName) document.title = s.siteName;
+    } catch { /* */ }
   }, []);
 
-  const handleSave = () => {
+  const save = () => {
     try {
       const payload = {};
       for (const k of PERSIST_KEYS) payload[k] = settings[k];
       localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(payload));
       if (settings.siteName) document.title = settings.siteName;
-    } catch {
-      // Persistance impossible : on ne bloque pas l'interface.
-    }
-    setHasUnsavedChanges(false);
-    setSavedMsg(true);
-    setTimeout(() => setSavedMsg(false), 2500);
+    } catch { /* */ }
+    setDirty(false); setSaved(true); setTimeout(() => setSaved(false), 2500);
   };
-
-  const handleReset = () => {
-    // Restaure les champs persistés sur la dernière valeur enregistrée
-    // (ou les défauts si rien n'a encore été sauvegardé).
+  const reset = () => {
     try {
       const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
-      const saved = raw ? JSON.parse(raw) : {};
-      setSettings((prev) => {
-        const next = { ...prev };
-        for (const k of PERSIST_KEYS) if (saved[k] !== undefined) next[k] = saved[k];
-        return next;
-      });
-    } catch {
-      // ignore
-    }
-    setHasUnsavedChanges(false);
+      const s = raw ? JSON.parse(raw) : {};
+      setSettings((p) => { const n = { ...p }; for (const k of PERSIST_KEYS) if (s[k] !== undefined) n[k] = s[k]; return n; });
+    } catch { /* */ }
+    setDirty(false);
   };
 
-  const tabs = [
-    { id: "general", label: "Général", icon: <Settings className="h-4 w-4" /> },
-    { id: "security", label: "Sécurité", icon: <Shield className="h-4 w-4" /> },
-    { id: "detection", label: "Détection", icon: <Target className="h-4 w-4" /> },
-  ];
+  // ── HikCentral : config de connexion, persistée EN BASE (indépendante du localStorage) ──
+  const [hik, setHik] = useState({ host: "", app_key: "", user_id: "", app_secret: "" });
+  const [hikMeta, setHikMeta] = useState({ has_secret: false, source: null, configured: false, effective_host: null, loading: true });
+  const [hikBusy, setHikBusy] = useState(null);   // "save" | "test" | null
+  const [hikMsg, setHikMsg] = useState(null);     // { ok, text }
 
-  if (user && !["admin"].includes(user.role)) {
-    return (
-      <div className="min-h-screen bg-[var(--app-bg)]">
-        <div className="flex min-h-screen">
-          <AdminSidebar currentRole={currentRole} isCollapsed={isCollapsed} onToggle={() => setIsCollapsed((p) => !p)} currentPath="/Osirion/admin/settings" />
-          <main className={`flex-1 transition-all duration-400 ${isCollapsed ? "lg:ml-20" : "lg:ml-80"}`}>
-            <AccessDenied role={user.role} />
-          </main>
-        </div>
-      </div>
-    );
+  const loadHik = useCallback(async () => {
+    setHikMeta((m) => ({ ...m, loading: true }));
+    try {
+      const r = await fetchWithRefresh("/api/hikcentral/config");
+      if (r?.ok) {
+        const d = await r.json();
+        setHik({ host: d.host || "", app_key: d.app_key || "", user_id: d.user_id || "", app_secret: "" });
+        setHikMeta({ has_secret: !!d.has_secret, source: d.source, configured: !!d.configured, effective_host: d.effective_host, loading: false });
+      } else setHikMeta((m) => ({ ...m, loading: false }));
+    } catch { setHikMeta((m) => ({ ...m, loading: false })); }
+  }, []);
+  useEffect(() => { loadHik(); }, [loadHik]);
+
+  const hikField = (k, v) => { setHik((p) => ({ ...p, [k]: v })); setHikMsg(null); };
+  const hikBody = () => {
+    const b = { host: hik.host, app_key: hik.app_key, user_id: hik.user_id };
+    if (hik.app_secret) b.app_secret = hik.app_secret;   // vide = conserver l'existant
+    return b;
+  };
+  const saveHik = async () => {
+    setHikBusy("save"); setHikMsg(null);
+    try {
+      const r = await fetchWithRefresh("/api/hikcentral/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(hikBody()) });
+      const d = await r.json().catch(() => ({}));
+      if (r?.ok) { setHikMsg({ ok: true, text: "Configuration enregistrée." }); await loadHik(); }
+      else setHikMsg({ ok: false, text: d?.detail || d?.message || "Échec de l'enregistrement." });
+    } catch { setHikMsg({ ok: false, text: "Erreur réseau." }); }
+    finally { setHikBusy(null); }
+  };
+  const testHik = async () => {
+    setHikBusy("test"); setHikMsg(null);
+    try {
+      const r = await fetchWithRefresh("/api/hikcentral/config/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(hikBody()) });
+      const d = await r.json().catch(() => ({}));
+      setHikMsg(r?.ok ? { ok: true, text: d?.message || "Connexion réussie." } : { ok: false, text: d?.detail || d?.message || "Échec de connexion." });
+    } catch { setHikMsg({ ok: false, text: "Erreur réseau." }); }
+    finally { setHikBusy(null); }
+  };
+
+  // ── Notifications (email SMTP + webhook), persistées EN BASE (comme HikCentral) ──
+  const [notif, setNotif] = useState({ smtp_host: "", smtp_port: 587, smtp_user: "", smtp_password: "", smtp_from: "", smtp_use_tls: true, alert_email_to: "", alert_webhook_url: "", to: "" });
+  const [notifMeta, setNotifMeta] = useState({ has_password: false, source: null, email_configured: false, webhook_configured: false, loading: true });
+  const [notifBusy, setNotifBusy] = useState(null);   // "save" | "test" | null
+  const [notifMsg, setNotifMsg] = useState(null);
+
+  const loadNotif = useCallback(async () => {
+    setNotifMeta((m) => ({ ...m, loading: true }));
+    try {
+      const r = await fetchWithRefresh("/api/notifications/config");
+      if (r?.ok) {
+        const d = await r.json();
+        setNotif({
+          smtp_host: d.smtp_host || "", smtp_port: d.smtp_port ?? 587, smtp_user: d.smtp_user || "",
+          smtp_password: "", smtp_from: d.smtp_from || "", smtp_use_tls: d.smtp_use_tls ?? true,
+          alert_email_to: d.alert_email_to || "", alert_webhook_url: d.alert_webhook_url || "", to: "",
+        });
+        setNotifMeta({ has_password: !!d.has_password, source: d.source, email_configured: !!d.email_configured, webhook_configured: !!d.webhook_configured, loading: false });
+      } else setNotifMeta((m) => ({ ...m, loading: false }));
+    } catch { setNotifMeta((m) => ({ ...m, loading: false })); }
+  }, []);
+  useEffect(() => { loadNotif(); }, [loadNotif]);
+
+  const notifField = (k, v) => { setNotif((p) => ({ ...p, [k]: v })); setNotifMsg(null); };
+  const notifBody = () => {
+    const b = {
+      smtp_host: notif.smtp_host, smtp_port: notif.smtp_port ? Number(notif.smtp_port) : null,
+      smtp_user: notif.smtp_user, smtp_from: notif.smtp_from, smtp_use_tls: !!notif.smtp_use_tls,
+      alert_email_to: notif.alert_email_to, alert_webhook_url: notif.alert_webhook_url,
+    };
+    if (notif.smtp_password) b.smtp_password = notif.smtp_password;   // vide = conserver
+    return b;
+  };
+  const saveNotif = async () => {
+    setNotifBusy("save"); setNotifMsg(null);
+    try {
+      const r = await fetchWithRefresh("/api/notifications/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(notifBody()) });
+      const d = await r.json().catch(() => ({}));
+      if (r?.ok) { setNotifMsg({ ok: true, text: "Configuration enregistrée." }); await loadNotif(); }
+      else setNotifMsg({ ok: false, text: d?.detail || d?.message || "Échec de l'enregistrement." });
+    } catch { setNotifMsg({ ok: false, text: "Erreur réseau." }); }
+    finally { setNotifBusy(null); }
+  };
+  const testNotif = async () => {
+    setNotifBusy("test"); setNotifMsg(null);
+    try {
+      const r = await fetchWithRefresh("/api/notifications/config/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...notifBody(), to: notif.to || undefined }) });
+      const d = await r.json().catch(() => ({}));
+      setNotifMsg(r?.ok ? { ok: true, text: d?.message || "Email de test envoyé." } : { ok: false, text: d?.detail || d?.message || "Échec de l'envoi." });
+    } catch { setNotifMsg({ ok: false, text: "Erreur réseau." }); }
+    finally { setNotifBusy(null); }
+  };
+
+  const inp = "w-full px-3.5 py-2.5 rounded-os border border-os-border bg-os-card text-[14px] text-os-t1 outline-none focus:border-os-t3";
+  const lbl = "block text-[13px] font-semibold text-os-t1 mb-1.5";
+
+  if (user && !isAdmin && !isOperator) {
+    return <OsShell><div className="p-6"><Card className="p-10 text-center"><p className="text-[14px] text-os-t2">Accès réservé aux administrateurs.</p></Card></div></OsShell>;
   }
 
   return (
-    <div className="min-h-screen bg-[var(--app-bg)]">
-      <div className="flex min-h-screen">
-        <AdminSidebar
-          currentRole={currentRole}
-          isCollapsed={isCollapsed}
-          onToggle={() => setIsCollapsed((prev) => !prev)}
-          currentPath="/Osirion/admin/settings"
+    <OsShell>
+      <div className="p-6">
+        <PageHeader
+          title="Paramètres"
+          subtitle="Configuration du système Qwiper Sentinel"
+          actions={!isAdmin || ["hikcentral", "notifications", "horaires"].includes(effectiveTab) ? null : (
+            <>
+              {dirty && <span className="text-[12px] text-os-amber inline-flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-os-amber os-anim-pulse" /> Non enregistré</span>}
+              {saved && <span className="text-[12px] text-os-green inline-flex items-center gap-1.5"><CheckCircle2 className="h-4 w-4" /> Enregistré</span>}
+              <button onClick={reset} className="px-3.5 py-2 rounded-os border border-os-border text-[13px] text-os-t2 hover:text-os-t1 inline-flex items-center gap-2"><RotateCcw className="h-4 w-4" /> Réinitialiser</button>
+              <button onClick={save} disabled={!dirty} className="px-3.5 py-2 rounded-os bg-os-cta text-white text-[13px] font-semibold hover:bg-os-cta-hover disabled:opacity-40 inline-flex items-center gap-2"><Save className="h-4 w-4" /> Enregistrer</button>
+            </>
+          )}
         />
 
-        <main className={`flex-1 transition-all duration-400 ${isCollapsed ? "lg:ml-20" : "lg:ml-80"}`}>
-          <AdminTopBar
-            title="Paramètres"
-            subtitle="Configuration du système Osirion"
-            showSearch={false}
-            actions={
-              <>
-                {hasUnsavedChanges && (
-                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 text-sm font-medium">
-                    <div className="h-2 w-2 rounded-full bg-yellow-500 animate-pulse" />
-                    Modifications non sauvegardées
-                  </div>
-                )}
+        <div className="mb-5">
+          <Segmented value={effectiveTab} onChange={setTab} options={isAdmin ? [{ value: "general", label: "Général" }, { value: "security", label: "Sécurité" }, { value: "detection", label: "Détection" }, { value: "horaires", label: "Régimes horaires" }, { value: "notifications", label: "Notifications" }, { value: "hikcentral", label: "HikCentral" }] : [{ value: "horaires", label: "Régimes horaires" }]} />
+        </div>
 
-                {savedMsg && (
-                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 text-sm font-medium">
-                    <CheckCircle2 className="h-4 w-4" />
-                    Paramètres enregistrés
-                  </div>
-                )}
+        {effectiveTab === "general" && (
+          <Card className="p-6 max-w-2xl">
+            <div className="flex items-center gap-3 mb-5">
+              <span className="h-10 w-10 grid place-items-center rounded-os bg-os-card-2 border border-os-border-2 text-os-t2"><Cog className="h-5 w-5" /></span>
+              <div><h3 className="text-[15px] font-semibold text-os-t1">Paramètres généraux</h3></div>
+            </div>
+            <label className={lbl}>Nom du site</label>
+            <input type="text" value={settings.siteName} onChange={(e) => change("siteName", e.target.value)} className={inp} />
+            <p className="text-[12px] text-os-t3 mt-2">Affiché comme titre de l&apos;onglet du navigateur.</p>
+          </Card>
+        )}
 
-                <button
-                  onClick={handleReset}
-                  className="rounded-xl border border-gray-200 dark:border-gray-800 px-4 py-2.5 text-sm font-medium hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors flex items-center gap-2">
-                  <RotateCcw className="h-4 w-4" />
-                  Réinitialiser
-                </button>
+        {effectiveTab === "security" && (
+          <Card className="p-6 max-w-2xl">
+            <div className="flex items-center gap-3 mb-5">
+              <span className="h-10 w-10 grid place-items-center rounded-os bg-os-card-2 border border-os-border-2 text-os-t2"><Shield className="h-5 w-5" /></span>
+              <div><h3 className="text-[15px] font-semibold text-os-t1">Sécurité & authentification</h3><p className="text-[13px] text-os-t3">Contrôle d&apos;accès</p></div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className={lbl}>Session (min)</label>
+                <input type="number" min="0" max="120" value={settings.sessionTimeout} onChange={(e) => change("sessionTimeout", parseInt(e.target.value))} className={`${inp} os-num`} />
+                <p className="text-[12px] text-os-t3 mt-2">Déconnexion auto après inactivité (à chaud, ≤ 15 s). <span className="text-os-t2">0 = désactivé</span> · une vidéo en lecture ne déconnecte pas.</p>
+              </div>
+              <div>
+                <label className={lbl}>Mot de passe (min)</label>
+                <input type="number" min="6" max="32" value={settings.passwordMinLength} onChange={(e) => change("passwordMinLength", parseInt(e.target.value))} className={`${inp} os-num`} />
+                <p className="text-[12px] text-os-t3 mt-2">Longueur minimale à la création d&apos;un utilisateur.</p>
+              </div>
+            </div>
+          </Card>
+        )}
 
-                <button
-                  onClick={handleSave}
-                  disabled={!hasUnsavedChanges}
-                  className={`rounded-xl px-4 py-2.5 text-sm font-medium transition-all flex items-center gap-2 ${
-                    hasUnsavedChanges
-                      ? "bg-gray-900 dark:bg-white hover:bg-gray-800 dark:hover:bg-gray-100 text-white dark:text-gray-900 shadow-lg"
-                      : "bg-gray-300 dark:bg-gray-700 text-gray-500 dark:text-gray-400 cursor-not-allowed"
-                  }`}>
-                  <Save className="h-4 w-4" />
-                  Enregistrer
-                </button>
-              </>
-            }
-          />
+        {effectiveTab === "detection" && (
+          <Card className="p-6 max-w-2xl">
+            <div className="flex items-center gap-3 mb-5">
+              <span className="h-10 w-10 grid place-items-center rounded-os bg-os-card-2 border border-os-border-2 text-os-t2"><Target className="h-5 w-5" /></span>
+              <div><h3 className="text-[15px] font-semibold text-os-t1">Détection</h3><p className="text-[13px] text-os-t3">Moteur Core</p></div>
+            </div>
+            <p className="text-[13px] text-os-t3 rounded-os border border-os-border bg-os-card-2 p-4">
+              La détection de personnes (anonyme) est toujours active sur les caméras. Les règles opérationnelles (attroupement, intrusion horaire…) se configurent dans « Règles & alertes ».
+            </p>
+          </Card>
+        )}
 
-          <div className="px-6 lg:px-10 py-6">
-            {/* Onglets */}
-            <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-2 mb-6">
-              <div className="flex gap-2 overflow-x-auto">
-                {tabs.map((tab) => (
-                  <button
-                    key={tab.id}
-                    onClick={() => setActiveTab(tab.id)}
-                    className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all whitespace-nowrap ${
-                      activeTab === tab.id
-                        ? "bg-gray-900 dark:bg-white text-white dark:text-gray-900 shadow"
-                        : "text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
-                    }`}
-                  >
-                    {tab.icon}
-                    {tab.label}
-                  </button>
-                ))}
+        {/* Écriture : USER ou ADMIN, comme le backend (can_manage_cameras). */}
+        {effectiveTab === "horaires" && <WorkSchedules canWrite={["admin", "user"].includes(user?.role)} />}
+
+        {effectiveTab === "notifications" && (
+          <Card className="p-6 max-w-2xl">
+            <div className="flex items-center gap-3 mb-5">
+              <span className="h-10 w-10 grid place-items-center rounded-os bg-os-card-2 border border-os-border-2 text-os-t2"><Mail className="h-5 w-5" /></span>
+              <div>
+                <h3 className="text-[15px] font-semibold text-os-t1">Notifications par email</h3>
+                <p className="text-[13px] text-os-t3">Serveur SMTP pour l&apos;envoi des alertes</p>
+              </div>
+              <span className="ml-auto inline-flex items-center gap-1.5 text-[12px]">
+                <span className="h-2 w-2 rounded-full" style={{ background: notifMeta.email_configured ? "var(--os-green)" : "var(--os-t4)" }} />
+                <span className="text-os-t3">{notifMeta.email_configured ? "Configuré" : "Non configuré"}{notifMeta.source ? ` · ${notifMeta.source === "db" ? "base" : ".env"}` : ""}</span>
+              </span>
+            </div>
+
+            {notifMeta.source === "env" && (
+              <p className="mb-4 rounded-os border border-os-border bg-os-card-2 px-3.5 py-2.5 text-[12px] text-os-t3">
+                ⓘ Aucune configuration saisie ici : le système utilise le repli <span className="os-num">.env</span>. Enregistrez ci-dessous pour piloter l&apos;envoi des emails depuis l&apos;interface.
+              </p>
+            )}
+
+            <div className="space-y-4">
+              <div>
+                <label className={lbl}>Serveur SMTP</label>
+                <div className="grid grid-cols-1 sm:grid-cols-[2fr_1fr] gap-4">
+                  <input type="text" value={notif.smtp_host} onChange={(e) => notifField("smtp_host", e.target.value)} placeholder="smtp.gmail.com" className={inp} />
+                  <input type="number" value={notif.smtp_port} onChange={(e) => notifField("smtp_port", e.target.value)} placeholder="587" className={`${inp} os-num`} />
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className={lbl}>Utilisateur (login)</label>
+                  <input type="text" value={notif.smtp_user} onChange={(e) => notifField("smtp_user", e.target.value)} placeholder="compte@gmail.com" className={inp} autoComplete="off" />
+                </div>
+                <div>
+                  <label className={lbl}>Mot de passe</label>
+                  <input type="password" value={notif.smtp_password} onChange={(e) => notifField("smtp_password", e.target.value)} autoComplete="new-password"
+                    placeholder={notifMeta.has_password ? "•••••••• (laisser vide pour conserver)" : "Mot de passe d'application"} className={inp} />
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className={lbl}>Expéditeur (From)</label>
+                  <input type="text" value={notif.smtp_from} onChange={(e) => notifField("smtp_from", e.target.value)} placeholder="alertes@monsite.com" className={inp} />
+                </div>
+              </div>
+              <div>
+                <label className={lbl}>Destinataires</label>
+                <RecipientsInput value={notif.alert_email_to} onChange={(v) => notifField("alert_email_to", v)} />
+              </div>
+              <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                <input type="checkbox" checked={!!notif.smtp_use_tls} onChange={(e) => notifField("smtp_use_tls", e.target.checked)} className="h-4 w-4 accent-[var(--os-cta)]" />
+                <span className="text-[13px] text-os-t2">Chiffrement TLS (STARTTLS) — recommandé, port 587</span>
+              </label>
+              <div>
+                <label className={lbl}>Webhook (facultatif)</label>
+                <input type="text" value={notif.alert_webhook_url} onChange={(e) => notifField("alert_webhook_url", e.target.value)} placeholder="https://hooks.slack.com/…" className={inp} />
+                <p className="text-[12px] text-os-t3 mt-1.5">POST JSON à chaque alerte notifiée (Slack / Teams / endpoint).</p>
+              </div>
+              <div className="pt-3 border-t border-os-border">
+                <label className={lbl}>Email de test (facultatif)</label>
+                <input type="text" value={notif.to} onChange={(e) => notifField("to", e.target.value)} placeholder="destinataire du test — sinon les destinataires ci-dessus" className={inp} />
               </div>
             </div>
 
-            {/* ── Général ── */}
-            {activeTab === "general" && (
-              <div className="space-y-6">
-                <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6">
-                  <div className="flex items-center gap-3 mb-6">
-                    <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center text-white">
-                      <Settings className="h-6 w-6" />
-                    </div>
-                    <div>
-                      <h3 className="text-lg font-bold text-gray-900 dark:text-white">Paramètres généraux</h3>
-                      <p className="text-sm text-gray-500 dark:text-gray-400">Configuration de base du système</p>
-                    </div>
-                  </div>
+            <p className="text-[12px] text-os-t3 mt-3">Mot de passe chiffré au repos, jamais réaffiché. Gmail : activez la validation en 2 étapes et utilisez un <b>mot de passe d&apos;application</b>. L&apos;envoi automatique s&apos;active <b>par règle</b> (Règles &amp; alertes).</p>
+            {notifMsg && <p className={`mt-3 text-[13px] ${notifMsg.ok ? "text-os-green" : "text-os-red"}`}>{notifMsg.text}</p>}
 
-                  <div className="p-5 rounded-xl bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700">
-                    <label className="block text-sm font-semibold text-gray-900 dark:text-white mb-2">
-                      Nom du site
-                    </label>
-                    <input
-                      type="text"
-                      value={settings.siteName}
-                      onChange={(e) => handleSettingChange("siteName", e.target.value)}
-                      className="w-full px-4 py-2.5 rounded-xl border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-600 text-sm font-medium"
-                    />
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-                      Affiché comme titre de l&apos;onglet du navigateur (appliqué à l&apos;enregistrement).
-                    </p>
-                  </div>
-                </div>
+            <div className="mt-5 flex items-center gap-2">
+              <button onClick={saveNotif} disabled={notifBusy != null}
+                className="px-3.5 py-2 rounded-os bg-os-cta text-white text-[13px] font-semibold hover:bg-os-cta-hover disabled:opacity-50 inline-flex items-center gap-2">
+                <Save className="h-4 w-4" /> {notifBusy === "save" ? "Enregistrement…" : "Enregistrer"}
+              </button>
+              <button onClick={testNotif} disabled={notifBusy != null}
+                className="px-3.5 py-2 rounded-os border border-os-border text-[13px] text-os-t2 hover:text-os-t1 disabled:opacity-50 inline-flex items-center gap-2">
+                <Send className="h-4 w-4" /> {notifBusy === "test" ? "Envoi…" : "Envoyer un test"}
+              </button>
+            </div>
+          </Card>
+        )}
+
+        {effectiveTab === "hikcentral" && (
+          <Card className="p-6 max-w-2xl">
+            <div className="flex items-center gap-3 mb-5">
+              <span className="h-10 w-10 grid place-items-center rounded-os bg-os-card-2 border border-os-border-2 text-os-t2"><Cctv className="h-5 w-5" /></span>
+              <div>
+                <h3 className="text-[15px] font-semibold text-os-t1">Connexion HikCentral</h3>
+                <p className="text-[13px] text-os-t3">Identifiants d&apos;accès à la passerelle OpenAPI</p>
               </div>
+              <span className="ml-auto inline-flex items-center gap-1.5 text-[12px]">
+                <span className="h-2 w-2 rounded-full" style={{ background: hikMeta.configured ? "var(--os-green)" : "var(--os-t4)" }} />
+                <span className="text-os-t3">{hikMeta.configured ? "Configuré" : "Non configuré"}{hikMeta.source ? ` · ${hikMeta.source === "db" ? "base" : ".env"}` : ""}</span>
+              </span>
+            </div>
+
+            {hikMeta.source === "env" && (
+              <p className="mb-4 rounded-os border border-os-border bg-os-card-2 px-3.5 py-2.5 text-[12px] text-os-t3">
+                ⓘ Aucune configuration saisie ici : le système utilise le repli <span className="os-num">.env</span>{hikMeta.effective_host ? ` (hôte : ${hikMeta.effective_host})` : ""}. Enregistrez ci-dessous pour piloter la connexion depuis l&apos;interface.
+              </p>
             )}
 
-            {/* ── Sécurité ── */}
-            {activeTab === "security" && (
-              <div className="space-y-6">
-                <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6">
-                  <div className="flex items-center gap-3 mb-6">
-                    <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-red-500 to-red-600 flex items-center justify-center text-white">
-                      <Shield className="h-6 w-6" />
-                    </div>
-                    <div>
-                      <h3 className="text-lg font-bold text-gray-900 dark:text-white">Sécurité et authentification</h3>
-                      <p className="text-sm text-gray-500 dark:text-gray-400">Protection et contrôle d&apos;accès</p>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="p-5 rounded-xl bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700">
-                      <label className="block text-sm font-semibold text-gray-900 dark:text-white mb-2">
-                        Session (min)
-                      </label>
-                      <input
-                        type="number"
-                        value={settings.sessionTimeout}
-                        onChange={(e) => handleSettingChange("sessionTimeout", parseInt(e.target.value))}
-                        className="w-full px-4 py-2.5 rounded-xl border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-600 text-sm font-bold"
-                        min="1"
-                        max="120"
-                      />
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-                        Déconnexion automatique après inactivité (appliqué à chaud, ≤ 15 s).
-                      </p>
-                    </div>
-
-                    <div className="p-5 rounded-xl bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700">
-                      <label className="block text-sm font-semibold text-gray-900 dark:text-white mb-2">
-                        Mot de passe (min)
-                      </label>
-                      <input
-                        type="number"
-                        value={settings.passwordMinLength}
-                        onChange={(e) => handleSettingChange("passwordMinLength", parseInt(e.target.value))}
-                        className="w-full px-4 py-2.5 rounded-xl border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-600 text-sm font-bold"
-                        min="6"
-                        max="32"
-                      />
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-                        Longueur minimale exigée à la création d&apos;un utilisateur.
-                      </p>
-                    </div>
-                  </div>
+            <div className="space-y-4">
+              <div>
+                <label className={lbl}>Hôte / Passerelle</label>
+                <input type="text" value={hik.host} onChange={(e) => hikField("host", e.target.value)} placeholder="https://192.168.1.10:443" className={inp} />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className={lbl}>App Key</label>
+                  <input type="text" value={hik.app_key} onChange={(e) => hikField("app_key", e.target.value)} placeholder="Clé du partenaire" className={inp} />
+                </div>
+                <div>
+                  <label className={lbl}>Linked User</label>
+                  <input type="text" value={hik.user_id} onChange={(e) => hikField("user_id", e.target.value)} placeholder="ex. admin" className={inp} />
                 </div>
               </div>
-            )}
-
-            {/* ── Détection (toggles appliqués à chaud côté Core) ── */}
-            {activeTab === "detection" && (
-              <div className="space-y-6">
-                <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-6">
-                  <div className="flex items-center gap-3 mb-6">
-                    <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-purple-500 to-purple-600 flex items-center justify-center text-white">
-                      <Target className="h-6 w-6" />
-                    </div>
-                    <div>
-                      <h3 className="text-lg font-bold text-gray-900 dark:text-white">Détection</h3>
-                      <p className="text-sm text-gray-500 dark:text-gray-400">Modules activables à chaud (moteur Core)</p>
-                    </div>
-                  </div>
-
-                  <div className="space-y-4">
-                    {/* Reconnaissance faciale (pipeline principal, à chaud) */}
-                    <div className="flex items-center justify-between p-5 rounded-xl bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700">
-                      <div className="flex items-center gap-3">
-                        <div className="h-10 w-10 rounded-lg bg-gray-700 dark:bg-gray-600 flex items-center justify-center text-white">
-                          <User className="h-5 w-5" />
-                        </div>
-                        <div>
-                          <div className="text-sm font-bold text-gray-900 dark:text-white">Reconnaissance faciale</div>
-                          <div className="text-xs text-gray-600 dark:text-gray-400">Détecter et identifier les visages (pipeline principal)</div>
-                          {settings.faceRecognition === false && (
-                            <div className="text-[11px] mt-1 text-amber-600 dark:text-amber-400">
-                              ⚠ Module suspendu — aucun visage détecté ni reconnu
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={settings.faceRecognition}
-                          onChange={(e) => {
-                            setSettings((p) => ({ ...p, faceRecognition: e.target.checked }));
-                            toggleFace(e.target.checked);
-                          }}
-                          className="sr-only peer"
-                        />
-                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
-                      </label>
-                    </div>
-
-                    {/* Plaques (LPR) */}
-                    <div className="flex items-center justify-between p-5 rounded-xl bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700">
-                      <div className="flex items-center gap-3">
-                        <div className="h-10 w-10 rounded-lg bg-gray-700 dark:bg-gray-600 flex items-center justify-center text-white">
-                          <Car className="h-5 w-5" />
-                        </div>
-                        <div>
-                          <div className="text-sm font-bold text-gray-900 dark:text-white">Plaques d&apos;immatriculation</div>
-                          <div className="text-xs text-gray-600 dark:text-gray-400">Lire et identifier les plaques (LPR/ANPR)</div>
-                          {lprAvailable === false && (
-                            <div className="text-[11px] mt-1 text-amber-600 dark:text-amber-400">
-                              ⚠ Modèle de plaque non chargé côté Core
-                            </div>
-                          )}
-                          {lprAvailable === true && (
-                            <div className="text-[11px] mt-1 text-emerald-600 dark:text-emerald-400">
-                              ✓ Module LPR opérationnel
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={settings.licencePlateRecognition}
-                          onChange={(e) => {
-                            setSettings((p) => ({ ...p, licencePlateRecognition: e.target.checked }));
-                            toggleLPR(e.target.checked);
-                          }}
-                          className="sr-only peer"
-                        />
-                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-orange-300 dark:peer-focus:ring-orange-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-orange-600"></div>
-                      </label>
-                    </div>
-
-                    {/* Visages non reconnus */}
-                    <div className="flex items-center justify-between p-5 rounded-xl bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700">
-                      <div className="flex items-center gap-3">
-                        <div className="h-10 w-10 rounded-lg bg-gray-700 dark:bg-gray-600 flex items-center justify-center text-white">
-                          <AlertTriangle className="h-5 w-5" />
-                        </div>
-                        <div>
-                          <div className="text-sm font-bold text-gray-900 dark:text-white">Visages non reconnus</div>
-                          <div className="text-xs text-gray-600 dark:text-gray-400">Enregistrer un événement distinct (UNKNOWN_FACE) quand un visage est détecté mais non identifié</div>
-                        </div>
-                      </div>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={settings.unknownFaceEvent}
-                          onChange={(e) => {
-                            setSettings((p) => ({ ...p, unknownFaceEvent: e.target.checked }));
-                            toggleUnknownFace(e.target.checked);
-                          }}
-                          className="sr-only peer"
-                        />
-                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-rose-300 dark:peer-focus:ring-rose-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-rose-600"></div>
-                      </label>
-                    </div>
-                  </div>
-                </div>
+              <div>
+                <label className={lbl}>App Secret</label>
+                <input type="password" value={hik.app_secret} onChange={(e) => hikField("app_secret", e.target.value)} autoComplete="new-password"
+                  placeholder={hikMeta.has_secret ? "•••••••• (laisser vide pour conserver)" : "Secret du partenaire"} className={inp} />
+                <p className="text-[12px] text-os-t3 mt-1.5">Chiffré au repos, jamais réaffiché.</p>
               </div>
-            )}
-          </div>
-        </main>
+            </div>
+
+            {hikMsg && <p className={`mt-4 text-[13px] ${hikMsg.ok ? "text-os-green" : "text-os-red"}`}>{hikMsg.text}</p>}
+
+            <div className="mt-5 flex items-center gap-2">
+              <button onClick={saveHik} disabled={hikBusy != null}
+                className="px-3.5 py-2 rounded-os bg-os-cta text-white text-[13px] font-semibold hover:bg-os-cta-hover disabled:opacity-50 inline-flex items-center gap-2">
+                <Save className="h-4 w-4" /> {hikBusy === "save" ? "Enregistrement…" : "Enregistrer"}
+              </button>
+              <button onClick={testHik} disabled={hikBusy != null}
+                className="px-3.5 py-2 rounded-os border border-os-border text-[13px] text-os-t2 hover:text-os-t1 disabled:opacity-50 inline-flex items-center gap-2">
+                <Plug className="h-4 w-4" /> {hikBusy === "test" ? "Test…" : "Tester la connexion"}
+              </button>
+            </div>
+          </Card>
+        )}
       </div>
-    </div>
+    </OsShell>
   );
 }

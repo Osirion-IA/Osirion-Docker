@@ -5,15 +5,17 @@ Système de surveillance multi-caméras avec reconnaissance faciale
 import threading
 import queue
 import time
-from typing import List, Dict
+import shutil
+from pathlib import Path
+from typing import List, Dict, Set
 
-from ByteTrack.yolox.tracker.byte_tracker import BYTETracker
+from core.trackers.oc_sort import OCSortTrackerAdapter
 from services.camera_fetching_service import fetch_camera_list
-from services.mediamtx_path_service import sync_paths
+from services.mediamtx_path_service import sync_paths, managed_paths_health
+from services.hik_stream_resolver import resolve_stream_url, resolver_health
 from core.camera_manager import CameraCapture
 from core.tracking_processor import TrackingProcessor
-from core.global_person_tracker import GlobalPersonTracker
-from core.runtime_control import RuntimeControl
+from core import event_dispatch
 from utils.logger import get_logger
 from utils.measurement import get_measurement
 from utils.gpu_monitor import get_gpu_stats
@@ -52,23 +54,8 @@ class SurveillanceSystem:
         # Sérialise les ajouts/retraits/réconciliations de caméras (démarrage + supervision).
         self.camera_lock = threading.Lock()
         self._supervisor_thread = None
-        
-        # Tracker global multi-caméra
-        # Fallback aligné sur l'échelle cosine IndexFlatIP (0.50 au lieu de l'ancien 0.75 sur (cosine+1)/2)
-        self.global_tracker = GlobalPersonTracker(
-            cache_ttl_seconds=getattr(config, 'GLOBAL_CACHE_TTL_SECONDS', 300),
-            similarity_threshold=getattr(config, 'GLOBAL_SIMILARITY_THRESHOLD', 0.50)
-        )
+        self._health_monitor_thread = None
 
-        # Contrôle runtime (toggles depuis le frontend). Initialisé sur les valeurs
-        # de config, modifiable à chaud via les endpoints Flask (/api/lpr/toggle,
-        # /api/unknown-face/toggle).
-        self.runtime_control = RuntimeControl(
-            lpr_enabled=getattr(config, 'ENABLE_PLATE_RECOGNITION', False),
-            unknown_face_event_enabled=getattr(config, 'ENABLE_UNKNOWN_FACE_EVENT', False),
-            face_recognition_enabled=getattr(config, 'ENABLE_FACE_RECOGNITION', True),
-        )
-        
         self.threads = []
         self.web_server = None
     
@@ -87,10 +74,7 @@ class SurveillanceSystem:
         self.result_frames[cam_id] = None
         self.result_metadata[cam_id] = None
         self.result_locks[cam_id] = threading.Lock()
-        self.trackers[cam_id] = BYTETracker(
-            self.config.BYTE_TRACK_ARGS,
-            frame_rate=self.config.BYTE_TRACK_FRAME_RATE,
-        )
+        self.trackers[cam_id] = OCSortTrackerAdapter(self.config.OC_SORT_ARGS)
         self.track_id_to_person[cam_id] = {}
         self.current_frame_idx[cam_id] = 0
 
@@ -117,12 +101,9 @@ class SurveillanceSystem:
             result_metadata=self.result_metadata,
             result_lock=self.result_locks[cam_id],
             tracker=self.trackers[cam_id],
-            person_db=self.track_id_to_person[cam_id],
             frame_idx_container=self.current_frame_idx,
             stop_event=cam_stop,
             config=self.config,
-            global_tracker=self.global_tracker,  # tracker global multi-caméra
-            runtime_control=self.runtime_control  # toggles partagés (LPR, etc.)
         )
         processing_thread = threading.Thread(
             target=processor.run, daemon=True, name=f"processor-{cam_id}"
@@ -250,9 +231,69 @@ class SurveillanceSystem:
                 desired=desired,
                 transport=getattr(self.config, 'MEDIAMTX_RTSP_TRANSPORT', 'tcp'),
                 close_after=getattr(self.config, 'MEDIAMTX_ON_DEMAND_CLOSE_AFTER', '30s'),
+                transcode_encoder=getattr(self.config, 'HIK_TRANSCODE_ENCODER', 'h264_nvenc'),
+                transcode_flags=getattr(self.config, 'HIK_TRANSCODE_FLAGS', ''),
+                hik_start_timeout=getattr(self.config, 'HIK_ONDEMAND_START_TIMEOUT', '30s'),
+                healthy=self._healthy_camera_ids(),
             )
         except Exception:
             logger.error("Échec synchro des chemins MediaMTX", exc_info=True)
+
+    def _healthy_camera_ids(self) -> Set[int]:
+        """Caméras dont la capture est VIVANTE (flux ouvert, frames fraîches).
+
+        Sert à protéger un chemin MediaMTX qui diffuse encore alors que son URL
+        n'est plus résoluble : une URL rtsp_s déjà établie continue de fonctionner
+        tant que le relais tient sa session, et supprimer ce chemin couperait un
+        flux sain. Lecture best-effort, sans verrou (cf. camera_health).
+        """
+        healthy: Set[int] = set()
+        for cam_id, cap in list(self.camera_captures.items()):
+            try:
+                h = cap.health() or {}
+                age = h.get("last_frame_age_s")
+                if h.get("connected") and age is not None and age <= 5:
+                    healthy.add(cam_id)
+            except Exception:
+                continue
+        return healthy
+
+    def _resolve_hik_urls(self, desired: Dict[int, Dict]) -> None:
+        """Résout À LA DEMANDE l'URL RTSP des caméras HikCentral (source_type=
+        "hikcentral"), qui n'ont pas de rtsp_url stockée, et l'injecte dans le
+        cam_dict — consommée ensuite par le relais MediaMTX ET la capture.
+
+        Best-effort : une caméra dont l'URL ne se résout pas (liaison agence
+        coupée, passerelle en 502) reste sans rtsp_url → `sync_paths` SUPPRIME alors
+        son chemin MediaMTX s'il existe et que la capture est morte, pour ne pas y
+        laisser un relais se relancer en boucle contre une passerelle qui ne répond
+        plus. N'impacte pas les autres.
+
+        Le rafraîchissement forcé demandé ici n'est qu'une INTENTION : le résolveur
+        la neutralise dès qu'il constate des échecs (cf. hik_stream_resolver), pour
+        ne pas contourner le cache backend au moment précis où la passerelle sature.
+        """
+        for cam in desired.values():
+            if cam.get("source_type") != "hikcentral" or cam.get("rtsp_url"):
+                continue
+            # Si la caméra est DÉJÀ en difficulté (capture non connectée / frames
+            # trop vieilles), l'URL rtsp_s a probablement EXPIRÉ (la passerelle SMS
+            # renvoie 5XX en boucle) → forcer une URL fraîche (bypass du cache
+            # backend) pour auto-guérir, au lieu d'attendre l'expiration du cache
+            # (jusqu'à 240 s). Sinon, résolution normale (cache).
+            force = False
+            cap = self.camera_captures.get(cam["id"])
+            if cap is not None:
+                try:
+                    h = cap.health() or {}
+                    age = h.get("last_frame_age_s")
+                    if not h.get("connected", True) or (age is not None and age > 10):
+                        force = True
+                except Exception:
+                    pass
+            url = resolve_stream_url(cam["id"], refresh=force)
+            if url:
+                cam["rtsp_url"] = url
 
     def _reconcile_cameras(self) -> None:
         """Compare l'état backend à l'état courant et applique les différences À
@@ -272,6 +313,10 @@ class SurveillanceSystem:
             return
 
         desired = {c["id"]: c for c in cameras if c.get("is_active", False)}
+
+        # Résout l'URL des caméras HikCentral (pas de rtsp_url stockée) AVANT tout :
+        # le relais MediaMTX comme la capture en ont besoin.
+        self._resolve_hik_urls(desired)
 
         # Synchronise les chemins MediaMTX (création/maj/suppression) avec l'état
         # voulu AVANT d'ajuster les threads caméra, qui lisent rtsp://.../cam<id>.
@@ -302,8 +347,8 @@ class SurveillanceSystem:
                         exc_info=True, extra={'camera_id': cam_id}
                     )
 
-            # 3) Résurrection : une caméra censée être active dont (au moins) un
-            #    thread est mort (ex. exception non gérée) est redémarrée proprement.
+            # 3) Caméras déjà actives : résurrection si un thread est mort
+            #    (exception non gérée) → redémarrage propre de la caméra.
             for cam_id in desired_ids & current_ids:
                 threads = self.camera_threads.get(cam_id, [])
                 if threads and any(not t.is_alive() for t in threads):
@@ -313,6 +358,28 @@ class SurveillanceSystem:
                     )
                     self._remove_camera(cam_id)
                     self._add_camera(desired[cam_id])
+                    continue
+
+                # Les seuils/régimes d'effectif sont de la configuration métier :
+                # les appliquer à chaud sans couper le flux vidéo.
+                processor = self.camera_processors.get(cam_id)
+                if processor is not None:
+                    try:
+                        processor.update_camera_config(desired[cam_id])
+                    except Exception:
+                        logger.warning(
+                            f"Caméra {cam_id} : mise à jour de la politique "
+                            "d'effectif impossible — nouvel essai au prochain cycle.",
+                            exc_info=True,
+                            extra={'camera_id': cam_id},
+                        )
+
+            # Met aussi à jour les métadonnées exposées (nom, emplacement,
+            # politique) par remplacement atomique de la liste.
+            running = set(self.camera_stop_events)
+            self.active_cameras = [
+                desired[camera_id] for camera_id in desired_ids if camera_id in running
+            ]
 
     def _supervise_loop(self) -> None:
         """Boucle de supervision : réconcilie périodiquement avec le backend."""
@@ -325,6 +392,30 @@ class SurveillanceSystem:
             except Exception:
                 logger.error("Erreur dans la boucle de supervision des caméras", exc_info=True)
         logger.info("Supervision des caméras arrêtée.")
+
+    def _health_monitor_loop(self) -> None:
+        """Propage rapidement la disponibilité vidéo aux machines métier."""
+        interval = max(
+            0.5,
+            float(getattr(self.config, "CAMERA_HEALTH_DECISION_INTERVAL", 2.0)),
+        )
+        logger.info(
+            "Décisions liées à la santé caméra actives (toutes les %.1fs).",
+            interval,
+        )
+        while not self.stop_event.is_set():
+            now = time.time()
+            try:
+                for row in self.camera_health():
+                    processor = self.camera_processors.get(row["id"])
+                    if processor is not None:
+                        processor.update_camera_health(row.get("state"), now=now)
+            except Exception:
+                logger.error(
+                    "Erreur dans la propagation de santé caméra", exc_info=True
+                )
+            if self.stop_event.wait(interval):
+                break
 
     def _measure_sampler_loop(self) -> None:
         """Échantillonneur de MESURE (chapitre 4) : émet périodiquement un
@@ -351,22 +442,23 @@ class SurveillanceSystem:
                     proc = self.camera_processors.get(cid)
                     snap = proc.latency_snapshot(reset=True) if proc is not None else {}
                     h = health.get(cid, {})
-                    n_face = snap.get("n_face", 0)
+                    n_det = snap.get("n_detections", 0)
                     cams_payload.append({
                         "id": cid,
                         "name": cam.get("cam_name"),
                         "capture_fps": h.get("fps"),
                         "state": h.get("state"),
                         # Débit réel d'inférence = frames traitées / durée d'intervalle.
-                        "processed_fps": round(n_face / dt, 2) if dt > 0 else None,
-                        "face_ms": snap.get("face_ms"),
-                        "lpr_ms": snap.get("lpr_ms"),
-                        "n_processed": n_face,
+                        "processed_fps": round(n_det / dt, 2) if dt > 0 else None,
+                        "detect_ms": snap.get("detect_ms"),
+                        "frame_ms": snap.get("frame_ms"),
+                        "n_processed": n_det,
                     })
-                try:
-                    cache = self.global_tracker.get_statistics()
-                except Exception:
-                    cache = {}
+                cache = {}
+                disk_target = Path("/app/observation_runs")
+                if not disk_target.exists():
+                    disk_target = Path("/app")
+                total_b, used_b, free_b = shutil.disk_usage(disk_target)
                 measure.emit(
                     "system_sample",
                     interval_s=round(dt, 2),
@@ -374,6 +466,25 @@ class SurveillanceSystem:
                     cameras=cams_payload,
                     cache=cache,
                     gpu=get_gpu_stats(),
+                    # Santé de l'INGESTION (passerelle HikCentral + disjoncteur).
+                    # Sans ces compteurs, la campagne d'août 2026 a exigé de croiser
+                    # 363 Mo de journaux MediaMTX pour comprendre que la panne venait
+                    # de la passerelle et non des caméras. Ils rendent metrics.jsonl
+                    # auto-suffisant pour ce diagnostic.
+                    ingest={
+                        **resolver_health(),
+                        **managed_paths_health(
+                            getattr(self.config, 'MEDIAMTX_API_BASE',
+                                    'http://mediamtx:9997')
+                        ),
+                    },
+                    disk={
+                        "path": str(disk_target),
+                        "total_gb": round(total_b / 1024 ** 3, 2),
+                        "used_gb": round(used_b / 1024 ** 3, 2),
+                        "free_gb": round(free_b / 1024 ** 3, 2),
+                        "used_percent": round(100 * used_b / total_b, 1) if total_b else 0,
+                    },
                 )
             except Exception:
                 logger.error("[MESURE] erreur dans l'échantillonneur système", exc_info=True)
@@ -381,6 +492,7 @@ class SurveillanceSystem:
 
     def run(self):
         """Démarre le système de surveillance (avec supervision à chaud des caméras)."""
+        event_dispatch.start()   # dispatcher d'événements découplé (Event Engine)
         cameras = fetch_camera_list()
         logger.info(f"Caméras trouvées au total : {len(cameras)}")
         active = [cam for cam in cameras if cam.get("is_active", False)]
@@ -416,6 +528,13 @@ class SurveillanceSystem:
             self._supervisor_thread.start()
         else:
             logger.info("Supervision des caméras désactivée (CAMERA_REFRESH_SECONDS=0).")
+
+        self._health_monitor_thread = threading.Thread(
+            target=self._health_monitor_loop,
+            daemon=True,
+            name="camera-health-decisions",
+        )
+        self._health_monitor_thread.start()
 
         # Échantillonneur de MESURE (chapitre 4) — démarré seulement si activé.
         if get_measurement().enabled:
@@ -462,17 +581,11 @@ class SurveillanceSystem:
             for ev in self.camera_stop_events.values():
                 ev.set()
 
-        # Afficher les statistiques du tracker global
-        stats = self.global_tracker.get_statistics()
-        logger.info(
-            f"Statistiques tracking global : {stats['active_persons']} personnes actives, "
-            f"{stats['total_persons_tracked']} total suivies, "
-            f"taux de cache hit : {stats['cache_hit_rate']}"
-        )
-        
         # Arrêter le serveur web si actif
         if self.web_server:
             self.web_server.stop()
-        
+
+        event_dispatch.stop()   # arrêt du dispatcher d'événements
+
         time.sleep(0.5)
         logger.info("Application multi-caméras fermée proprement")

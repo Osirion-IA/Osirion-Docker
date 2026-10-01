@@ -23,8 +23,17 @@
 #             ./Osirion-backend-main/Osirion-backend-main/alembic → /app/alembic
 #   Core    : ./Osirion-core-master/Osirion-core-master/config  → /app/config
 #             (+ core/, services/, utils/, face_detection*.py)
-#   yolov11n-face.pt et ByteTrack restent dans l'image (non écrasés).
+#   yolov11n-face.pt reste dans l'image (non écrasé). Le tracker OC-SORT vit
+#   dans core/ (donc bind-monté et hot-reloadable).
 # =============================================================================
+
+# Rotation des journaux stdout/stderr Docker. Sans limite explicite, le pilote
+# json-file grossit indéfiniment et peut remplir le disque pendant une campagne.
+x-osirion-logging: &osirion-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "10"
 
 networks:
   osirion:
@@ -39,6 +48,7 @@ services:
     image: pgvector/pgvector:pg15
     container_name: osirion-db
     restart: unless-stopped
+    logging: *osirion-logging
     networks:
       - osirion
     environment:
@@ -72,6 +82,7 @@ services:
         GPU: "0"
     container_name: osirion-backend
     restart: unless-stopped
+    logging: *osirion-logging
     networks:
       - osirion
     depends_on:
@@ -83,6 +94,20 @@ services:
       DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-Osirion-AI}
       SECRET_KEY: ${SECRET_KEY}
       FERNET_KEY: ${FERNET_KEY}
+      # Clé de service partagée avec le Core (auth M2M sans expiration). Vide = off.
+      CORE_API_KEY: ${CORE_API_KEY:-}
+      # Source de flux HikCentral (OpenAPI Gateway, AK/SK). Vide = connecteur off.
+      HIK_HOST: ${HIK_HOST:-}
+      HIK_APP_KEY: ${HIK_APP_KEY:-}
+      HIK_APP_SECRET: ${HIK_APP_SECRET:-}
+      HIK_USER_ID: ${HIK_USER_ID:-}
+      HIK_VERIFY_SSL: ${HIK_VERIFY_SSL:-false}
+      HIK_STREAM_TYPE: ${HIK_STREAM_TYPE:-1}
+      # Synchro périodique du catalogue HikCentral (thread de fond). 0 = désactivée.
+      HIK_SYNC_INTERVAL_MINUTES: ${HIK_SYNC_INTERVAL_MINUTES:-15}
+      # Historique de connectivité caméra : le backend interroge la santé du Core
+      # (réseau interne Docker) et persiste les transitions d'état.
+      CORE_URL: ${CORE_URL:-http://core:5000}
       BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS:-["http://localhost:3000"]}
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
       REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
@@ -92,6 +117,12 @@ services:
       ADMIN_PASSWORD: ${AUTH_PASSWORD:-adminadminadmin}
       CUDA_VISIBLE_DEVICES: "0"
       UVICORN_RELOAD: "true"
+      # ── Qualité de l'enrôlement facial (garde-fous, tunables) ───────────────
+      # NE PAS mettre plus strict que la reconnaissance en production (Core=0.7).
+      # Netteté mesurée sur le CROP du visage (pas la frame entière) → un portrait
+      # à fond flou/bokeh n'est plus rejeté à tort. 0 = filtre netteté désactivé.
+      ENROLL_FACE_MIN_CONFIDENCE: ${ENROLL_FACE_MIN_CONFIDENCE:-0.6}
+      ENROLL_FACE_CROP_MIN_SHARPNESS: ${ENROLL_FACE_CROP_MIN_SHARPNESS:-25.0}
       # ── Notifications d'alerte (SMTP/webhook) — valeurs dans .env (non versionné)
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
@@ -101,6 +132,12 @@ services:
       SMTP_USE_TLS: ${SMTP_USE_TLS:-true}
       ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-}
       ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      # Rétention destructive désactivée par défaut ; l'activer uniquement après
+      # validation de la politique d'archivage.
+      RETENTION_DAYS: ${RETENTION_DAYS:-0}
+      RETENTION_CHECK_HOURS: ${RETENTION_CHECK_HOURS:-24}
+      RETENTION_MIN_FREE_GB: ${RETENTION_MIN_FREE_GB:-10}
+      NOTIFY_RETRY_SECONDS: ${NOTIFY_RETRY_SECONDS:-60}
     volumes:
       # ── Bind mounts — code local écrase le code de l'image ──────────────────
       - ./Osirion-backend-main/Osirion-backend-main/app:/app/app
@@ -109,7 +146,7 @@ services:
       # ── Named volumes — données persistantes (non écrasées par le bind mount)
       - uploads_data:/app/uploads
       - cropped_data:/app/cropped
-      - insightface_cache:/root/.insightface
+      - snapshots_data:/app/snapshots
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
       interval: 30s
@@ -123,7 +160,7 @@ services:
   # Se connecte au backend via le réseau interne Docker (http://backend:8000).
   #
   # Bind mounts granulaires : seuls les packages Python modifiés sont écrasés.
-  # ByteTrack (/app/ByteTrack) et yolov11n-face.pt restent dans l'image.
+  # yolov11n-face.pt reste dans l'image (le tracker OC-SORT vit dans core/, bind-monté).
   # Pas d'auto-reload (risque de coupure des flux RTSP) — faire :
   #   docker restart osirion-core   après modification du code.
   # ---------------------------------------------------------------------------
@@ -135,6 +172,11 @@ services:
         GPU: "1"
     container_name: osirion-core
     restart: unless-stopped
+    logging: *osirion-logging
+    # MediaMTX étant en network_mode: host, le Core (sur le bridge) l'atteint via
+    # la passerelle Docker → mappe host.docker.internal vers host-gateway.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - osirion
     depends_on:
@@ -151,75 +193,88 @@ services:
       # MediaMTX (rtsp://mediamtx:8554/cam<id>) → UNE seule connexion à la caméra
       # physique (MediaMTX), partagée entre l'IA (Core) et la vidéo (WebRTC).
       READ_FROM_MEDIAMTX: "true"
-      MEDIAMTX_RTSP_BASE: mediamtx:8554
-      # API MediaMTX (réseau interne) : le Core y déclare/supprime à chaud 1 chemin
-      # par caméra à partir du rtsp_url backend (cf. services.mediamtx_path_service).
-      MEDIAMTX_API_BASE: http://mediamtx:9997
+      # MediaMTX tourne en network_mode: host (cf. service mediamtx) → on l'atteint
+      # via l'hôte (host.docker.internal = passerelle Docker), plus par le DNS
+      # interne 'mediamtx' qui n'existe plus sur le bridge.
+      MEDIAMTX_RTSP_BASE: host.docker.internal:8554
+      # API MediaMTX : le Core y déclare/supprime à chaud 1 chemin par caméra
+      # (cf. services.mediamtx_path_service).
+      MEDIAMTX_API_BASE: http://host.docker.internal:9997
+      # ── Transcodage HikCentral (HEVC→H.264 pour le WebRTC navigateur) ─────────
+      # Sources HikCentral en H.265 : le relais ffmpeg (DANS le conteneur mediamtx)
+      # ré-encode en H.264. L'image mediamtx stock ne fournit PAS nvenc → défaut
+      # libx264 (CPU, quasi gratuit sur un sous-flux 360p@10fps).
+      HIK_TRANSCODE_ENCODER: ${HIK_TRANSCODE_ENCODER:-libx264}
+      HIK_TRANSCODE_FLAGS: ${HIK_TRANSCODE_FLAGS:--preset veryfast -tune zerolatency -crf 26 -g 20}
+      HIK_ONDEMAND_START_TIMEOUT: ${HIK_ONDEMAND_START_TIMEOUT:-30s}
+      MEDIAMTX_ON_DEMAND_CLOSE_AFTER: ${MEDIAMTX_ON_DEMAND_CLOSE_AFTER:-180s}
+      HIK_RESOLVE_FAIL_THRESHOLD: ${HIK_RESOLVE_FAIL_THRESHOLD:-3}
+      HIK_RESOLVE_BACKOFF_BASE: ${HIK_RESOLVE_BACKOFF_BASE:-30}
+      HIK_RESOLVE_BACKOFF_MAX: ${HIK_RESOLVE_BACKOFF_MAX:-300}
       AUTH_EMAIL: ${AUTH_EMAIL}
       AUTH_PASSWORD: ${AUTH_PASSWORD}
+      # Clé de service (auth M2M) : si définie, le Core l'utilise (X-API-Key) au lieu
+      # du login JWT email/password → plus jamais d'expiration/déconnexion. Vide = JWT.
+      CORE_API_KEY: ${CORE_API_KEY:-}
       FLASK_SECRET_KEY: ${FLASK_SECRET_KEY}
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+      # Mode de sécurité : development (CORS ouvert) | production (CORS strict).
+      OSIRION_ENV: ${OSIRION_ENV:-development}
+      # En dev, laisser vide → toute origine acceptée. En prod, lister les domaines HTTPS.
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_DIR: logs
       CUDA_VISIBLE_DEVICES: "0"
-      # ── Événement « visage non reconnu » (UNKNOWN_FACE) ─────────────────────
-      # OPT-IN : false par défaut. Activable à chaud via le frontend (toggle) ou
-      # en mettant true ici. Enregistre un événement distinct pour tout visage
-      # détecté mais non identifié (person_id NULL). N'affecte pas le facial.
-      ENABLE_UNKNOWN_FACE_EVENT: ${ENABLE_UNKNOWN_FACE_EVENT:-false}
-      # ── LPR / ANPR (reconnaissance de plaques) ──────────────────────────────
-      # OPT-IN : false par défaut. Activable à chaud via le frontend (toggle) ou
-      # en mettant true ici. Nécessite un modèle YOLO de plaque (PLATE_MODEL_PATH).
-      ENABLE_PLATE_RECOGNITION: ${ENABLE_PLATE_RECOGNITION:-false}
-      # ── Recherche d'embeddings LOCALE (réplique FAISS dans le Core) ──────────
-      # OPT-IN : false par défaut → comportement actuel (recherche via HTTP backend).
-      # true → recherche FAISS en RAM dans le Core (latence ~0.1 ms vs ~5-15 ms en
-      # HTTP). PostgreSQL reste géré uniquement par le backend ; le Core ne garde
-      # qu'une copie lecture seule, rechargée au démarrage + poll de version.
-      # Repli HTTP automatique si l'index local n'est pas prêt.
-      FAISS_LOCAL: ${FAISS_LOCAL:-false}
-      FAISS_LOCAL_RECONCILE_SECONDS: ${FAISS_LOCAL_RECONCILE_SECONDS:-15}
-      PLATE_MODEL_PATH: ${PLATE_MODEL_PATH:-license_plate_detector.pt}
-      PLATE_SEARCH_THRESHOLD: ${PLATE_SEARCH_THRESHOLD:-0.82}
-      # ── Optimisations LPR (latence & précision) — défauts sûrs dans le code ──
-      PLATE_PROCESS_EVERY_N: ${PLATE_PROCESS_EVERY_N:-2}        # détection YOLO 1 frame/2
-      PLATE_TEMPORAL_VOTING: ${PLATE_TEMPORAL_VOTING:-true}     # vote OCR multi-frames
-      PLATE_VOTE_MIN_AGREE: ${PLATE_VOTE_MIN_AGREE:-2}
-      PLATE_PREPROCESS: ${PLATE_PREPROCESS:-true}               # upscale+CLAHE avant OCR
-      PLATE_ILLUMINATION_ROBUST: ${PLATE_ILLUMINATION_ROBUST:-true} # anti forte lumière (glare/surexpo)
-      PLATE_DESKEW: ${PLATE_DESKEW:-false}                      # correction de perspective (agressif)
-      PLATE_YOLO_HALF: ${PLATE_YOLO_HALF:-true}                 # FP16 GPU (repli FP32 auto)
-      PLATE_MIN_CROP_WIDTH: ${PLATE_MIN_CROP_WIDTH:-60}
-      PLATE_MIN_CROP_HEIGHT: ${PLATE_MIN_CROP_HEIGHT:-18}
-      PLATE_CROP_MIN_SHARPNESS: ${PLATE_CROP_MIN_SHARPNESS:-0.0} # 0 = filtre netteté désactivé
-      PLATE_FORMAT_REGEX: ${PLATE_FORMAT_REGEX:-}               # vide = pas de filtre de format
-      # ── MESURE (évaluation chapitre 4 du mémoire) ───────────────────────────
-      # Journalise latence/débit/cache/GPU + décisions reco + lectures plaques
-      # dans /app/measurements/metrics.jsonl (bind mount → ./measurements sur l'hôte),
-      # dépouillé hors-ligne par tools/analyze_metrics.py. MEASURE_ENABLED=false → no-op.
-      MEASURE_ENABLED: ${MEASURE_ENABLED:-true}
-      MEASURE_FILE: /app/measurements/metrics.jsonl
-      MEASURE_SAMPLE_SECONDS: ${MEASURE_SAMPLE_SECONDS:-5}
+      # ── Détection de personnes (YOLO26, COCO classe 0) — Vision Engine anonyme
+      PERSON_MODEL_PATH: ${PERSON_MODEL_PATH:-yolo26n.pt}
+      PERSON_DETECTION_CONFIDENCE: ${PERSON_DETECTION_CONFIDENCE:-0.4}   # confiance YOLO mini
+      PERSON_YOLO_HALF: ${PERSON_YOLO_HALF:-true}                        # FP16 GPU (repli FP32 auto)
+      # Plancher de confiance envoyé AU TRACKER (récupération BYTE des personnes
+      # occluses) — bien plus bas que la confiance de détection ci-dessus. Réduit le
+      # sous-comptage des files (une personne masquée 1–2 s n'est plus perdue).
+      PERSON_TRACK_MIN_CONFIDENCE: ${PERSON_TRACK_MIN_CONFIDENCE:-0.1}
+      # Résolution d'inférence YOLO (côté long). Vide/0 = défaut 640 ; 960/1280
+      # améliorent le recall des personnes petites/lointaines (fond de file) au prix
+      # d'un coût GPU ~quadratique. Baisser si le GPU sature (↔ nombre de caméras).
+      PERSON_YOLO_IMGSZ: ${PERSON_YOLO_IMGSZ:-960}
+      # Zones de présence : alterne les échelles (une seule passe par frame) car
+      # les postures assises peuvent être mieux reconnues à 640 qu'à 960.
+      PRESENCE_YOLO_SCALES: ${PRESENCE_YOLO_SCALES:-640,960}
+      PRESENCE_YOLO_SCALE_BLOCK_FRAMES: ${PRESENCE_YOLO_SCALE_BLOCK_FRAMES:-4}
+      # Part minimale de la boîte personne recouvrant une zone `presence`.
+      PRESENCE_BBOX_OVERLAP_MIN: ${PRESENCE_BBOX_OVERLAP_MIN:-0.50}
+      # Retient brièvement un candidat entre deux blocs d'échelle, sans remettre
+      # le chrono de vacance à zéro si ce n'était finalement qu'un passant.
+      PRESENCE_CANDIDATE_GRACE_SECONDS: ${PRESENCE_CANDIDATE_GRACE_SECONDS:-5}
+      # Une panne vidéo devient rapidement un état « indisponible », jamais un
+      # poste vide ; les épisodes métier sont suspendus à cette cadence.
+      CAMERA_HEALTH_DECISION_INTERVAL: ${CAMERA_HEALTH_DECISION_INTERVAL:-2}
+      BLUR_THRESHOLD: ${BLUR_THRESHOLD:-80.0}                            # gate anti-flou (0=off)
+      # ── Robustesse du comptage (tracking + Event Engine) ────────────────────
+      # Sursis de publication d'un track occlus (frames) : il reste compté à sa
+      # dernière position observée au lieu de disparaître ~4 frames. 0 = désactivé.
+      TRACK_COAST_FRAMES: ${TRACK_COAST_FRAMES:-8}
+      # Survie (frames) de l'état par track (âge, côté engagé d'une ligne) après sa
+      # dernière apparition → un passage n'est plus perdu si la personne est ratée
+      # une frame près de la ligne.
+      TRACK_STATE_TTL_FRAMES: ${TRACK_STATE_TTL_FRAMES:-90}
+      # Lissage (s) de l'occupation publiée — médiane glissante. 0 = instantané.
+      OCCUPANCY_SMOOTH_SECONDS: ${OCCUPANCY_SMOOTH_SECONDS:-1.5}
+      # Délai (s) avant de confirmer une sortie de zone (évite de couper en deux un
+      # temps d'attente à cause d'une occlusion).
+      DWELL_EXIT_GRACE_SECONDS: ${DWELL_EXIT_GRACE_SECONDS:-2.0}
+      # Dispositif de mesure (chapitre mémoire) retiré → no-op.
+      MEASURE_ENABLED: "false"
     volumes:
-      # ── Bind mounts — packages Python modifiés ──────────────────────────────
-      # ByteTrack (/app/ByteTrack) et yolov11n-face.pt restent dans l'image.
+      # ── Bind mounts — packages Python modifiés (hot-reload du code) ──────────
+      # Le modèle yolo26n.pt reste dans l'image (pré-téléchargé au build).
       - ./Osirion-core-master/Osirion-core-master/config:/app/config
       - ./Osirion-core-master/Osirion-core-master/core:/app/core
       - ./Osirion-core-master/Osirion-core-master/services:/app/services
       - ./Osirion-core-master/Osirion-core-master/utils:/app/utils
-      - ./Osirion-core-master/Osirion-core-master/face_detection.py:/app/face_detection.py
-      - ./Osirion-core-master/Osirion-core-master/face_detection_new.py:/app/face_detection_new.py
-      - ./Osirion-core-master/Osirion-core-master/plate_detection.py:/app/plate_detection.py
+      - ./Osirion-core-master/Osirion-core-master/person_detection.py:/app/person_detection.py
       - ./Osirion-core-master/Osirion-core-master/main_refactored.py:/app/main_refactored.py
-      # Modèle YOLO de plaque (LPR) — montage en lecture seule (évite un rebuild)
-      - ./Osirion-core-master/Osirion-core-master/license_plate_detector.pt:/app/license_plate_detector.pt:ro
-      # ── Patches ByteTrack — fix np.float → float (NumPy ≥ 1.24) ────────────
-      - ./Osirion-core-master/Osirion-core-master/patches/matching.py:/app/ByteTrack/yolox/tracker/matching.py
-      - ./Osirion-core-master/Osirion-core-master/patches/byte_tracker.py:/app/ByteTrack/yolox/tracker/byte_tracker.py
       # ── Named volume — logs persistants ────────────────────────────────────
       - core_logs:/app/logs
-      # ── Mesure (chapitre 4) — journal metrics.jsonl directement sur l'hôte ──
-      - ./measurements:/app/measurements
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:5000/api/cameras"]
       interval: 30s
@@ -250,16 +305,20 @@ services:
     image: bluenviron/mediamtx:latest-ffmpeg
     container_name: osirion-mediamtx
     restart: unless-stopped
-    networks:
-      - osirion
-    ports:
-      - "8554:8554"        # RTSP (ingest / republish)
-      - "8889:8889"        # WebRTC — signalisation HTTP (WHEP / WHIP)
-      - "8189:8189/udp"    # WebRTC — mux ICE UDP (DOIT être publié pour la lecture navigateur)
-      # NB : port 9997 (API) volontairement NON publié → API joignable uniquement
-      # depuis le Core sur le réseau Docker interne.
+    logging: *osirion-logging
+    # network_mode: host → MediaMTX se lie DIRECTEMENT aux interfaces de l'hôte.
+    # Indispensable pour le WebRTC : derrière le NAT bridge Docker, l'ICE UDP ne
+    # s'établit pas pour les postes du LAN (« deadline exceeded while waiting
+    # connection ») — le chemin retour est cassé et MediaMTX ne voit pas les vraies
+    # adresses. En réseau hôte, il découvre les vraies IP (dont l'IP LAN) et l'ICE
+    # marche nativement, sans mapping de ports ni webrtcAdditionalHosts.
+    # Ports directement sur l'hôte : 8554 (RTSP), 8889 (WHEP), 8189 (ICE udp+tcp),
+    # 9997 (API — désormais joignable sur le LAN ; à restreindre en production).
+    network_mode: host
     volumes:
       - ./mediamtx.yml:/mediamtx.yml:ro
+      # Logs debug persistants sur l'hôte (capture de repro hors-ligne)
+      - ./logs-mediamtx:/logs
 
   # ---------------------------------------------------------------------------
   # Frontend — Next.js standalone (~200 MB)
@@ -273,6 +332,7 @@ services:
       context: ./Osirion-front-end-main/Osirion-front-end-main
     container_name: osirion-frontend
     restart: unless-stopped
+    logging: *osirion-logging
     networks:
       - osirion
     depends_on:
@@ -282,6 +342,11 @@ services:
       - "3000:3000"
     environment:
       NODE_ENV: production
+      # Mode de sécurité (pilote le flag Secure des cookies d'auth) :
+      #   development → cookies non-Secure (HTTP LAN OK)  |  production → Secure (HTTPS).
+      OSIRION_ENV: ${OSIRION_ENV:-development}
+      # Override optionnel : COOKIE_SECURE=true|false force le flag ; vide → suit OSIRION_ENV.
+      COOKIE_SECURE: ${COOKIE_SECURE:-}
       # URL interne (server-side Next.js → backend dans Docker)
       BACKEND_URL: http://backend:8000
       NEXT_PUBLIC_BASE_BACKEND_URL: http://backend:8000
@@ -302,5 +367,5 @@ volumes:
   db_data:
   uploads_data:
   cropped_data:
-  insightface_cache:
+  snapshots_data:
   core_logs:

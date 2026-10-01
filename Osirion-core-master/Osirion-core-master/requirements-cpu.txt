@@ -28,22 +28,21 @@ python-dotenv==1.2.1
 # Vision / ML
 # ----------------------
 opencv-python-headless>=4.9.0
-insightface>=0.7.3
-# onnxruntime CPU-only : ~50 MB (vs ~700 MB pour onnxruntime-gpu)
-onnxruntime>=1.17.1
 numpy>=1.26.0,<2.0
 pillow==10.2.0
 
 # ----------------------
-# ByteTrack — dépendances
-# (ByteTrack lui-même est cloné dans le Dockerfile)
+# Tracker (OC-SORT) — dépendances
 # ----------------------
+# OC-SORT implémenté EN LOCAL (core/trackers/oc_sort.py) — aucun clone Git externe.
+# lapx (affectation linéaire) + scipy (repli) pour l'association ; filterpy pour
+# le filtre de Kalman. Aligné sur requirements.txt (build GPU).
 lapx>=0.5.2
 scipy>=1.12.0
-cython_bbox>=0.1.3
+filterpy>=1.4.5
 
 # ----------------------
-# Flask extensions (CORS pour le toggle LPR appelé par le navigateur)
+# Flask extensions (CORS pour les routes /api/* appelées par le navigateur)
 # ----------------------
 Flask-Cors>=4.0.0
 
@@ -54,10 +53,7 @@ python-dateutil==2.8.2
 rich==13.7.1
 
 # ----------------------
-# LPR / ANPR — reconnaissance de plaques (build CPU)
+# Vision — détection de personnes (YOLO26, COCO classe 0)
 # ----------------------
-# ultralytics : détection de plaque (absent du build CPU d'origine car la
-#               détection faciale passait par InsightFace/onnxruntime).
-# easyocr     : OCR des caractères (fonctionne sur CPU, plus lent qu'en GPU).
-ultralytics>=8.0.0
-easyocr>=1.7.1
+# YOLO26 nécessite un ultralytics récent (≥ janvier 2026).
+ultralytics>=8.3.0

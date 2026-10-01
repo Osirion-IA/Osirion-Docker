@@ -2,8 +2,8 @@
 # Osirion-Core — Dockerfile multi-stage
 # =============================================================================
 # Build args :
-#   GPU=1  (défaut) — torch CUDA + onnxruntime-gpu  (~6 GB image finale)
-#   GPU=0           — torch CPU  + onnxruntime      (~3 GB image finale)
+#   GPU=1  (défaut) — torch CUDA  (détection de personnes YOLO26 sur GPU)
+#   GPU=0           — torch CPU
 #
 # Usage :
 #   GPU  : docker build .
@@ -30,7 +30,6 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     g++ \
-    git \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
@@ -55,37 +54,18 @@ RUN --mount=type=cache,target=/root/.cache/pip \
             "torch==2.9.1" "torchvision==0.24.1"; \
     fi
 
-# Dépendances applicatives :
-#   GPU=1 → requirements.txt     (onnxruntime-gpu ≥1.17, bundle CUDA ~700 MB)
-#   GPU=0 → requirements-cpu.txt (onnxruntime CPU  ≥1.17,         ~50 MB)
+# Dépendances applicatives (YOLO/ultralytics → torch, chemin GPU via torch CUDA).
+#   GPU=1 → requirements.txt
+#   GPU=0 → requirements-cpu.txt
+# NB : plus d'onnxruntime ni de libs nvidia-* explicites. La reconnaissance
+# faciale (InsightFace → onnxruntime) a été retirée ; seul YOLO/torch subsiste,
+# et torch CUDA tire lui-même les paquets nvidia-*-cu12 dont il a besoin.
 RUN --mount=type=cache,target=/root/.cache/pip \
     if [ "$GPU" = "1" ]; then \
-        pip install --user --retries 10 --timeout 120 --resume-retries 10 -r requirements.txt && \
-        pip install --user --retries 10 --timeout 120 --resume-retries 10 \
-            "nvidia-cuda-runtime-cu12" \
-            "nvidia-cufft-cu12" \
-            "nvidia-cublas-cu12>=12.2" \
-            "nvidia-cudnn-cu12>=8.9" && \
-        # ── Conflit onnxruntime : insightface tire `onnxruntime` (CPU) en
-        # dépendance transitive, dont le pybind (onnxruntime_pybind11_state.so)
-        # ÉCRASE celui d'onnxruntime-gpu → CUDAExecutionProvider disparaît et
-        # InsightFace retombe sur CPU. On purge les DEUX distributions puis on
-        # réinstalle UNIQUEMENT onnxruntime-gpu EN DERNIER (son pybind l'emporte).
-        pip uninstall -y onnxruntime onnxruntime-gpu && \
-        pip install --user --retries 10 --timeout 120 --resume-retries 10 --no-deps \
-            "onnxruntime-gpu>=1.17.1" && \
-        # Garde-fou : échoue le build si le pybind embarqué est un build CPU
-        # (sans symbole CUDAExecutionProvider) — empêche toute régression future.
-        grep -aq CUDAExecutionProvider \
-            /root/.local/lib/python3.11/site-packages/onnxruntime/capi/onnxruntime_pybind11_state*.so \
-        || { echo "ERREUR build : pybind onnxruntime sans CUDA (build CPU détecté)"; exit 1; }; \
+        pip install --user --retries 10 --timeout 120 --resume-retries 10 -r requirements.txt; \
     else \
         pip install --user --retries 10 --timeout 120 --resume-retries 10 -r requirements-cpu.txt; \
     fi
-
-# ByteTrack cloné comme package local — import via PYTHONPATH=/app
-# from ByteTrack.yolox.tracker.byte_tracker import BYTETracker
-RUN git clone --depth 1 https://github.com/ifzhang/ByteTrack.git /build/ByteTrack
 
 # -----------------------------------------------------------------------------
 # Stage 2 : runtime — image finale, sans outils de compilation
@@ -97,11 +77,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PATH="/root/.local/bin:$PATH"
-# /app pour "from ByteTrack.yolox..." et /app/ByteTrack pour les imports internes yolox
-ENV PYTHONPATH=/app:/app/ByteTrack
+# /app : racine des packages applicatifs (config, core, services, utils, ...)
+ENV PYTHONPATH=/app
 
 LABEL org.opencontainers.image.title="Osirion-Core" \
-      org.opencontainers.image.description="Système de surveillance multi-caméras avec détection et reconnaissance faciale"
+      org.opencontainers.image.description="Système de surveillance multi-caméras — détection de personnes anonyme (YOLO26)"
 
 # Dépendances runtime uniquement (pas d'outils de build)
 # curl est requis par le HEALTHCHECK
@@ -125,47 +105,26 @@ RUN if [ "$GPU" = "1" ]; then \
 
 WORKDIR /app
 
-# ByteTrack comme package local (doit être dans PYTHONPATH=/app)
-COPY --from=builder /build/ByteTrack ./ByteTrack
-
 # Code source de l'application uniquement
 COPY config/            ./config/
 COPY core/              ./core/
 COPY services/          ./services/
 COPY utils/             ./utils/
 COPY templates/         ./templates/
-COPY face_detection.py  .
-COPY plate_detection.py .
+COPY person_detection.py .
 COPY main_refactored.py .
-COPY yolov11n-face.pt   .
-# Modèle YOLO de détection de plaque (LPR/ANPR).
-# Le module plaques se désactive proprement si le modèle est absent.
-COPY license_plate_detector.pt .
 
-# Pré-télécharger le modèle InsightFace buffalo_l (~183 MB) pour éviter un
-# téléchargement au premier démarrage du conteneur.
-# Note : CPUExecutionProvider utilisé ici car le builder n'a pas de GPU ;
-#        en production GPU, face_detection.py sélectionne CUDAExecutionProvider.
-RUN python -c "\
-from insightface.app import FaceAnalysis; \
-app = FaceAnalysis( \
-    name='buffalo_l', \
-    providers=['CPUExecutionProvider'], \
-    allowed_modules=['detection', 'recognition'] \
-); \
-app.prepare(ctx_id=-1, det_size=(320, 320)); \
-print('InsightFace buffalo_l prêt')"
-
-# Pré-télécharger les modèles EasyOCR (détecteur CRAFT + recognizer 'en', ~100 MB)
-# pour le module LPR — évite un téléchargement (et un blocage potentiel sans réseau)
-# au premier chargement du pipeline plaques. gpu=False suffit ici (builder sans GPU).
-RUN python -c "import easyocr; easyocr.Reader(['en'], gpu=False); print('EasyOCR prêt')"
+# Pré-télécharger les modèles YOLO de détection de personnes pour éviter un
+# téléchargement au premier démarrage (et fonctionner hors-ligne). yolo26n ≈ 5 MB
+# (léger, défaut) et yolo26s ≈ 20 MB (plus précis sur petits/occultés — scènes
+# larges HikCentral 360p). Le modèle actif est choisi par PERSON_MODEL_PATH.
+RUN python -c "from ultralytics import YOLO; YOLO('yolo26n.pt'); YOLO('yolo26s.pt'); print('yolo26n + yolo26s prêts')"
 
 RUN mkdir -p logs
 
 EXPOSE 5000
 
-# start_period=90s laisse le temps à InsightFace de s'initialiser au démarrage
+# start_period=90s laisse le temps au modèle YOLO de s'initialiser au démarrage
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
     CMD curl -sf http://localhost:5000/api/cameras || exit 1
 

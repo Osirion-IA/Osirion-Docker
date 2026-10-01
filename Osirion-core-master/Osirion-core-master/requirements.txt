@@ -28,26 +28,18 @@ python-dotenv==1.2.1
 # ----------------------
 # opencv-python-headless : pas de GUI (adapté Docker / serveur)
 opencv-python-headless>=4.9.0
-insightface>=0.7.3
-# onnxruntime-gpu active CUDAExecutionProvider pour InsightFace (RTX 4050)
-# Remplace onnxruntime CPU-only — incompatibles, ne pas installer les deux
-onnxruntime-gpu>=1.17.1
 numpy>=1.26.0,<2.0
 pillow==10.2.0
 
 # ----------------------
-# ByteTrack — dépendances
-# (ByteTrack lui-même est cloné dans le Dockerfile
-#  car son import nécessite le répertoire source :
-#  from ByteTrack.yolox.tracker.byte_tracker import BYTETracker)
+# Tracker (OC-SORT) — dépendances
 # ----------------------
+# OC-SORT est désormais implémenté EN LOCAL (core/trackers/oc_sort.py) — plus
+# aucun clone Git externe. Dépendances : lapx (affectation linéaire) + scipy
+# (repli) pour l'association ; filterpy pour le filtre de Kalman.
 lapx>=0.5.2
 scipy>=1.12.0
-cython_bbox>=0.1.3
-loguru>=0.7.0
 filterpy>=1.4.5
-thop>=0.1.1
-tabulate>=0.9.0
 
 # ----------------------
 # Flask extensions
@@ -56,9 +48,11 @@ Flask-Cors>=4.0.0
 Flask-Limiter>=3.5.0
 
 # ----------------------
-# Tracking / Vision
+# Vision — détection de personnes (YOLO26, COCO classe 0)
 # ----------------------
-ultralytics>=8.0.0
+# YOLO26 nécessite un ultralytics récent (≥ janvier 2026). Tire torch (CUDA
+# détecté automatiquement). Le modèle yolo26n.pt est pré-téléchargé au build.
+ultralytics>=8.3.0
 
 # ----------------------
 # Utilitaires
@@ -66,13 +60,3 @@ ultralytics>=8.0.0
 python-dateutil==2.8.2
 psutil>=5.9.0
 rich==13.7.1
-
-# ----------------------
-# LPR / ANPR — reconnaissance de plaques d'immatriculation
-# ----------------------
-# Détection de plaque : Ultralytics YOLO (déjà listé ci-dessus).
-# OCR : EasyOCR (lecture des caractères). EasyOCR s'appuie sur torch,
-#       déjà tiré par ultralytics — pas de surcoût de dépendance majeur.
-#       Détecte automatiquement le GPU (CUDA) si disponible.
-easyocr>=1.7.1
-# python-bidi / shapely / pyclipper sont des dépendances transitives d'easyocr

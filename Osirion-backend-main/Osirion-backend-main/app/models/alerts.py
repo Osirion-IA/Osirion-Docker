@@ -2,10 +2,10 @@
 """
 Modèle Alert — centre d'alertes (hits blacklist).
 
-Une alerte est créée AUTOMATIQUEMENT côté backend lorsqu'un événement de
-détection concerne une entité blacklistée (personne sur liste de surveillance
-OU plaque blacklistée). C'est un simple enregistrement traçable, AVEC un
-workflow (new → acknowledged → resolved).
+Une alerte est un enregistrement traçable (workflow new → acknowledged →
+resolved) émis quand une règle de décision se déclenche (ex. seuil d'occupation,
+présence hors horaires). Alimentée par le moteur de règles (à venir) ;
+l'infrastructure (workflow + notifications) est ici.
 
 ⚠️ Important : la création d'une alerte n'envoie JAMAIS de notification (email/
 webhook). L'envoi est déclenché EXCLUSIVEMENT par un utilisateur via
@@ -20,9 +20,12 @@ ALERT_NEW = "new"
 ALERT_ACKNOWLEDGED = "acknowledged"
 ALERT_RESOLVED = "resolved"
 
-# Types d'alerte.
-ALERT_KIND_PERSON = "person"
-ALERT_KIND_PLATE = "plate"
+# Sévérités (reprises de la règle qui a déclenché l'alerte).
+SEV_INFO = "info"
+SEV_WARNING = "warning"
+SEV_CRITICAL = "critical"
+
+# Types d'alerte (libre : ex. "crowd", "intrusion", "occupancy"…).
 
 
 class Alert(SQLModel, table=True):
@@ -33,13 +36,12 @@ class Alert(SQLModel, table=True):
     # Lien vers l'événement source (snapshot, caméra, timestamp d'origine).
     event_id: Optional[int] = Field(default=None, foreign_key="event.id")
 
-    kind: str = Field(..., max_length=20)             # "person" | "plate"
-    label: str = Field(..., max_length=255)           # nom de la personne ou texte de plaque
-    reason: Optional[str] = Field(default=None, max_length=255)  # motif blacklist
+    kind: str = Field(..., max_length=20)             # "crowd" | "intrusion" | …
+    severity: str = Field(default="warning", max_length=20)  # info | warning | critical
+    label: str = Field(..., max_length=255)           # libellé de l'alerte
+    reason: Optional[str] = Field(default=None, max_length=255)  # motif / détail
 
     camera_id: Optional[int] = Field(default=None)
-    person_id: Optional[int] = Field(default=None, foreign_key="people.id")
-    vehicle_id: Optional[int] = Field(default=None, foreign_key="vehicle.id")
     snapshot_url: Optional[str] = Field(default=None, max_length=255)
 
     # Workflow : new → acknowledged → resolved.
@@ -47,8 +49,22 @@ class Alert(SQLModel, table=True):
     acknowledged_at: Optional[datetime] = Field(default=None)
     acknowledged_by: Optional[int] = Field(default=None)   # user.id qui a acquitté
 
-    # Notification MANUELLE (jamais automatique).
+    # Notification : posée par le moteur de règles quand un canal aboutit, ou par
+    # l'envoi manuel (POST /alerts/{id}/notify).
     notified_at: Optional[datetime] = Field(default=None)
     notified_channel: Optional[str] = Field(default=None, max_length=40)
+
+    # ── Reprise des envois échoués ───────────────────────────────────────────
+    # Campagne d'août 2026 : 55 alertes sur 574 n'ont jamais été délivrées, à
+    # cause de coupures DNS passagères sur le serveur de messagerie. Sans
+    # nouvelle tentative, un hoquet réseau de quelques secondes perdait l'alerte
+    # DÉFINITIVEMENT — et rien ne le signalait. Ces trois champs permettent au
+    # thread de reprise de rejouer l'envoi et à l'interface d'afficher l'échec.
+    notify_attempts: int = Field(default=0)
+    notify_last_error: Optional[str] = Field(default=None, max_length=255)
+    notify_next_retry_at: Optional[datetime] = Field(default=None, index=True)
+    # Canaux demandés par la règle au moment du déclenchement. La reprise ne doit
+    # jamais élargir la diffusion à un canal ajouté ultérieurement.
+    notify_requested_channels: Optional[str] = Field(default=None, max_length=40)
 
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)

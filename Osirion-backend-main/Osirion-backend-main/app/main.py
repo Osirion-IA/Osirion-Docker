@@ -6,18 +6,23 @@ from slowapi.errors import RateLimitExceeded
 import os
 
 from app.database import engine
-from app.routes.people_routes import router as people_router
 from app.routes.cameras_routes import router as camera_router
 from app.routes.monitoring_routes import router as monitoring_router
 from app.routes.events_routes import router as events_router
 from app.routes.auth_routes import router as auth_router
 from app.routes.users_routes import router as users_router
-from app.routes.plates_routes import router as plates_router
 from app.routes.alerts_routes import router as alerts_router
 from app.routes.dashboard_routes import router as dashboard_router
 from app.routes.audit_routes import router as audit_router
 from app.routes.maintenance_routes import router as maintenance_router
-from app.services.Faiss_search_service import build_or_reload_faiss_index
+from app.routes.groups_routes import router as groups_router
+from app.routes.zones_routes import router as zones_router
+from app.routes.analytics_routes import router as analytics_router
+from app.routes.rules_routes import router as rules_router
+from app.routes.hikcentral_routes import router as hikcentral_router
+from app.routes.camera_status_routes import router as camera_status_router
+from app.routes.notifications_routes import router as notifications_router
+from app.routes.work_schedules_routes import router as work_schedules_router
 from app.middleware.rate_limit import limiter
 from app.config import settings
 
@@ -37,10 +42,19 @@ app.state.limiter = limiter
 # ─────────────────────────────────────────────
 @app.on_event("startup")
 def startup_event():
-    # Les migrations sont appliquées par scripts/entrypoint.py (alembic upgrade head)
-    # avant le démarrage d'uvicorn — create_all n'est pas appelé ici pour éviter
-    # les conflits avec Alembic sur les tables déjà créées.
-    build_or_reload_faiss_index()
+    # Migrations appliquées par scripts/entrypoint.py (alembic upgrade head) avant uvicorn.
+    # Synchro périodique du catalogue HikCentral (no-op si non configuré / intervalle 0).
+    from app.services.hikcentral_scheduler import start_periodic_sync
+    start_periodic_sync()
+    # Enregistreur d'historique de connectivité caméra (poll santé Core → transitions).
+    from app.services.camera_status_recorder import start as start_camera_status_recorder
+    start_camera_status_recorder()
+    # Rétention automatique des événements/captures (no-op si RETENTION_DAYS=0).
+    from app.services.retention_scheduler import start_retention
+    start_retention()
+    # Reprise des notifications d'alerte échouées (no-op si NOTIFY_RETRY_SECONDS=0).
+    from app.services.notification_retry import start_notification_retry
+    start_notification_retry()
 
 
 @app.exception_handler(RateLimitExceeded)
@@ -83,13 +97,19 @@ app.mount("/snapshots", StaticFiles(directory="snapshots"), name="snapshots")
 app.include_router(auth_router, prefix="/auth", tags=["🔐 Authentication"])
 app.include_router(events_router, prefix="/events", tags=[" Events"])
 app.include_router(users_router, prefix="/users", tags=["👥 Users Management"])
-app.include_router(people_router, prefix="/people", tags=["👤 People"])
-app.include_router(plates_router, prefix="/plates", tags=["🚗 License Plates"])
 app.include_router(alerts_router, prefix="/alerts", tags=["🚨 Alerts"])
 app.include_router(dashboard_router, prefix="/dashboard", tags=["📊 Dashboard"])
 app.include_router(audit_router, prefix="/audit", tags=["📝 Audit"])
 app.include_router(maintenance_router, prefix="/maintenance", tags=["🧹 Maintenance"])
 app.include_router(camera_router, prefix="/cameras", tags=["📹 Cameras"])
+app.include_router(groups_router, prefix="/groups", tags=["🗂️ Camera Groups"])
+app.include_router(zones_router, prefix="/zones", tags=["📐 Zones & Comptage"])
+app.include_router(analytics_router, prefix="/analytics", tags=["📈 Analytics"])
+app.include_router(rules_router, prefix="/rules", tags=["⚙️ Rules"])
+app.include_router(hikcentral_router, prefix="/hikcentral", tags=["🎥 HikCentral"])
+app.include_router(camera_status_router, prefix="/camera-status", tags=["📡 Camera Status"])
+app.include_router(notifications_router, prefix="/notifications", tags=["✉️ Notifications"])
+app.include_router(work_schedules_router, prefix="/work-schedules", tags=["🕗 Régimes horaires"])
 app.include_router(monitoring_router,prefix="/sysInfo", tags=["Syetem Informations"])
 
 # ─────────────────────────────────────────────
@@ -117,12 +137,8 @@ def health_check():
     except Exception:
         db_status = "unreachable"
 
-    from app.services.Faiss_search_service import index
-    faiss_status = f"{index.ntotal} vecteurs" if index is not None else "vide (aucune personne enregistrée)"
-
     return {
         "status": "healthy" if db_status == "connected" else "degraded",
         "database": db_status,
-        "faiss_index": faiss_status,
         "authentication": "enabled"
     }

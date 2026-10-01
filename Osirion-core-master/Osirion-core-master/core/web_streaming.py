@@ -15,7 +15,7 @@ from utils.logger import get_logger
 from utils.measurement import get_measurement
 
 # flask_cors est optionnel : autorise le navigateur (frontend) à appeler les
-# routes REST /api/* du Core (ex. toggle LPR). Sans lui, le toggle même-origine
+# routes REST /api/* du Core (ex. toggle facial). Sans lui, le toggle même-origine
 # fonctionne quand même via le proxy Next.js — donc import non bloquant.
 try:
     from flask_cors import CORS
@@ -50,9 +50,13 @@ class WebStreamingServer:
         cors_origins = surveillance_system.config.CORS_ALLOWED_ORIGINS
         self.socketio = SocketIO(self.app, cors_allowed_origins=cors_origins, async_mode='threading')
 
-        # CORS sur les routes REST /api/* (toggle LPR appelé par le navigateur)
+        # CORS sur les routes REST /api/* (toggles appelés par le navigateur).
+        # supports_credentials=True → Flask-CORS reflète l'Origin autorisée au lieu
+        # d'un '*' littéral (cohérent avec le Socket.IO, robuste si un fetch envoie
+        # des credentials).
         if _HAS_CORS:
-            CORS(self.app, resources={r"/api/*": {"origins": cors_origins}})
+            CORS(self.app, resources={r"/api/*": {"origins": cors_origins}},
+                 supports_credentials=True)
 
         # {session_id: camera_id}  — caméra regardée par chaque client
         self.active_streams = {}
@@ -80,6 +84,7 @@ class WebStreamingServer:
                 "protocol": "WebSocket (Socket.IO)",
                 "endpoints": {
                     "GET /api/cameras": "Liste des caméras disponibles",
+                    "GET /api/staffing": "Effectif agents courant par caméra",
                     "GET /api/stats": "Statistiques du système"
                 },
                 "websocket": {
@@ -139,6 +144,144 @@ class WebStreamingServer:
                 "server_time": time.time(),
             })
 
+        @self.app.route('/api/staffing')
+        def staffing_overview():
+            """Instantané léger de l'effectif de toutes les caméras configurées.
+
+            Contrairement au Socket.IO, cet endpoint ne démarre aucun thread de
+            diffusion par caméra. Il convient donc à une page de supervision
+            globale, y compris pour un parc important.
+            """
+            health = {
+                row["id"]: row
+                for row in self.surveillance_system.camera_health()
+            }
+            rows = []
+            zone_priority = {
+                "unavailable": 100,
+                "vacant": 90,
+                "confirming": 70,
+                "vacancy_pending": 60,
+                "occupied": 50,
+                "off_schedule": 30,
+                "unconfigured": 20,
+                "initializing": 10,
+            }
+            for cam in self.surveillance_system.active_cameras:
+                cam_id = cam["id"]
+                processor = self.surveillance_system.camera_processors.get(cam_id)
+                status = (
+                    processor.presence_status_snapshot()
+                    if processor is not None else {}
+                )
+                staffing = status.get("staffing") or {}
+                presence_zones = status.get("presence_zones") or []
+                if (
+                    not staffing.get("enabled")
+                    and not staffing.get("available")
+                    and not presence_zones
+                ):
+                    continue
+                cam_health = health.get(cam_id, {})
+                age = cam_health.get("last_frame_age_s")
+                camera_state = cam_health.get("state", "unknown")
+                monitoring_available = camera_state == "online"
+                if not monitoring_available:
+                    staffing = {
+                        **staffing,
+                        "monitoring_available": False,
+                        "monitoring_state": "unavailable",
+                        "monitoring_reason": camera_state,
+                        "decision_state": "unavailable",
+                        "count": None,
+                        "in_work": False,
+                        "below_minimum": False,
+                        "low": False,
+                    }
+                    presence_zones = [
+                        {
+                            **zone,
+                            "state": "unavailable",
+                            "monitoring_available": False,
+                            "monitoring_reason": camera_state,
+                        }
+                        for zone in presence_zones
+                    ]
+
+                presence_state = max(
+                    (zone.get("state", "initializing") for zone in presence_zones),
+                    key=lambda state: zone_priority.get(state, 0),
+                    default="unconfigured",
+                )
+                staffing_state = staffing.get("decision_state", "unconfigured")
+                decision_state = (
+                    "unavailable" if not monitoring_available
+                    else (
+                        staffing_state
+                        if staffing_state in {"staffing_low", "staffing_pending"}
+                        else presence_state
+                    )
+                )
+                rows.append({
+                    **staffing,
+                    "camera_id": cam_id,
+                    "camera_name": cam.get("cam_name"),
+                    "location": cam.get("location"),
+                    "camera_state": camera_state,
+                    "monitoring_available": monitoring_available,
+                    "last_frame_age_s": age,
+                    "updated_at": (
+                        time.time() - float(age) if age is not None else None
+                    ),
+                    "decision_state": decision_state,
+                    "staffing_state": staffing_state,
+                    "presence_state": presence_state,
+                    "presence_zones": presence_zones,
+                })
+            return jsonify({
+                "cameras": rows,
+                "count": len(rows),
+                "server_time": time.time(),
+            })
+
+        @self.app.route('/api/cameras/<int:cam_id>/preview', methods=['POST', 'DELETE'])
+        def preview_camera(cam_id):
+            """Prévisualisation d'une caméra du catalogue HikCentral SANS la traiter.
+
+            POST : résout l'URL rtsp_s + crée un chemin MediaMTX `preview<id>`
+            transcodé (H.264), à la demande → le navigateur peut lire le flux en
+            WHEP avant même de configurer la caméra. DELETE : nettoie le chemin.
+            """
+            from services.hik_stream_resolver import resolve_stream_url
+            from services.mediamtx_path_service import ensure_preview_path, delete_preview_path
+            cfg = self.surveillance_system.config
+            api_base = getattr(cfg, 'MEDIAMTX_API_BASE', 'http://mediamtx:9997')
+
+            if request.method == 'DELETE':
+                try:
+                    delete_preview_path(api_base, cam_id)
+                except Exception:
+                    logger.warning("Échec suppression chemin preview cam %s", cam_id, exc_info=True)
+                return jsonify({"ok": True})
+
+            if not getattr(cfg, 'MANAGE_MEDIAMTX_PATHS', True):
+                return jsonify({"error": "Gestion MediaMTX désactivée."}), 400
+            url = resolve_stream_url(cam_id, refresh=False)
+            if not url:
+                return jsonify({"error": "Flux indisponible (caméra non HikCentral ou liaison muette)."}), 502
+            try:
+                path = ensure_preview_path(
+                    api_base=api_base, cam_id=cam_id, rtsp_url=url,
+                    transport=getattr(cfg, 'MEDIAMTX_RTSP_TRANSPORT', 'tcp'),
+                    encoder=getattr(cfg, 'HIK_TRANSCODE_ENCODER', 'libx264'),
+                    encoder_flags=getattr(cfg, 'HIK_TRANSCODE_FLAGS', ''),
+                    start_timeout=getattr(cfg, 'HIK_ONDEMAND_START_TIMEOUT', '30s'),
+                )
+            except Exception:
+                logger.error("Échec création chemin preview cam %s", cam_id, exc_info=True)
+                return jsonify({"error": "Échec de création du flux de prévisualisation."}), 500
+            return jsonify({"ok": True, "path": path})
+
         @self.app.route('/api/stats')
         def system_stats():
             with self.stream_lock:
@@ -151,65 +294,6 @@ class WebStreamingServer:
                 "active_broadcast_cameras": active_cameras,
                 "uptime": time.time() - getattr(self, 'start_time', time.time())
             })
-
-        # ── LPR / ANPR — état et activation/désactivation à chaud ──────────────
-        @self.app.route('/api/lpr/status')
-        def lpr_status():
-            control = getattr(self.surveillance_system, 'runtime_control', None)
-            enabled = control.lpr_enabled if control else False
-            # `available` sans forcer le chargement des modèles : lu seulement si
-            # le module plate_detection a déjà été importé.
-            mod = sys.modules.get('plate_detection')
-            available = getattr(mod, 'LPR_AVAILABLE', None) if mod else None
-            return jsonify({"lpr_enabled": enabled, "lpr_available": available})
-
-        @self.app.route('/api/lpr/toggle', methods=['POST'])
-        def lpr_toggle():
-            control = getattr(self.surveillance_system, 'runtime_control', None)
-            if control is None:
-                return jsonify({"error": "runtime_control indisponible"}), 503
-            data = request.get_json(silent=True) or {}
-            if 'enabled' not in data:
-                return jsonify({"error": "champ 'enabled' (bool) requis"}), 400
-            new_state = control.set_lpr(bool(data['enabled']))
-            return jsonify({"lpr_enabled": new_state})
-
-        # ── Événement « visage non reconnu » — état et activation à chaud ───────
-        @self.app.route('/api/unknown-face/status')
-        def unknown_face_status():
-            control = getattr(self.surveillance_system, 'runtime_control', None)
-            enabled = control.unknown_face_event_enabled if control else False
-            return jsonify({"unknown_face_event_enabled": enabled})
-
-        @self.app.route('/api/unknown-face/toggle', methods=['POST'])
-        def unknown_face_toggle():
-            control = getattr(self.surveillance_system, 'runtime_control', None)
-            if control is None:
-                return jsonify({"error": "runtime_control indisponible"}), 503
-            data = request.get_json(silent=True) or {}
-            if 'enabled' not in data:
-                return jsonify({"error": "champ 'enabled' (bool) requis"}), 400
-            new_state = control.set_unknown_face_event(bool(data['enabled']))
-            return jsonify({"unknown_face_event_enabled": new_state})
-
-        # ── Reconnaissance faciale — état et activation/désactivation à chaud ───
-        @self.app.route('/api/face/status')
-        def face_status():
-            control = getattr(self.surveillance_system, 'runtime_control', None)
-            # Défaut True : le facial est le pipeline principal (activé sauf coupure).
-            enabled = control.face_recognition_enabled if control else True
-            return jsonify({"face_recognition_enabled": enabled})
-
-        @self.app.route('/api/face/toggle', methods=['POST'])
-        def face_toggle():
-            control = getattr(self.surveillance_system, 'runtime_control', None)
-            if control is None:
-                return jsonify({"error": "runtime_control indisponible"}), 503
-            data = request.get_json(silent=True) or {}
-            if 'enabled' not in data:
-                return jsonify({"error": "champ 'enabled' (bool) requis"}), 400
-            new_state = control.set_face_recognition(bool(data['enabled']))
-            return jsonify({"face_recognition_enabled": new_state})
 
         # ── GPU — métriques d'utilisation (si NVIDIA disponible) ───────────────
         @self.app.route('/api/gpu')
@@ -243,14 +327,6 @@ class WebStreamingServer:
                 return jsonify({"error": "camera_id (int) requis"}), 400
             get_measurement().set_expected(camera_id, person)
             return jsonify({"ok": True, "camera_id": camera_id, "expected": person or None})
-
-        @self.app.route('/api/measure/plate', methods=['POST'])
-        def measure_plate():
-            """Vérité terrain plaque courante : {plate:str}. plate vide = efface."""
-            data = request.get_json(silent=True) or {}
-            plate = data.get('plate', request.args.get('plate'))
-            get_measurement().set_expected_plate(plate)
-            return jsonify({"ok": True, "expected_plate": plate or None})
 
     def _setup_socketio(self):
         """Configure les événements WebSocket"""
@@ -417,6 +493,11 @@ class WebStreamingServer:
 
     def _run_server(self):
         """Exécute le serveur Flask-SocketIO"""
+        # Serveur de dev Werkzeug ASSUMÉ pour le flux Socket.IO (léger, 1 endpoint) :
+        # allow_unsafe_werkzeug=True est déjà posé. On coupe l'avertissement
+        # « production deployment » du logger werkzeug (bruit, choix conscient).
+        import logging as _logging
+        _logging.getLogger("werkzeug").setLevel(_logging.ERROR)
         try:
             self.socketio.run(
                 self.app,

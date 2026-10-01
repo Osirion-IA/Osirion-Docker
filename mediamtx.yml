@@ -19,7 +19,13 @@
 # volontairement minimal et n'utilise que des clés stables.
 # =============================================================================
 
-logLevel: info
+logLevel: debug
+# Logs écrits À LA FOIS sur stdout (docker logs) ET dans un fichier persistant
+# bind-monté sur l'hôte (./logs-mediamtx/mediamtx.log) → permet de capturer une
+# reproduction hors-ligne (serveur sur le réseau caméras, sans internet) puis de
+# relire les logs plus tard. Repasser logLevel à 'info' une fois le debug terminé.
+logDestinations: [stdout, file]
+logFile: /logs/mediamtx.log
 
 # ── API HTTP de contrôle (création dynamique des chemins par le Core) ─────────
 # Joignable UNIQUEMENT sur le réseau Docker interne (http://mediamtx:9997) : le
@@ -63,12 +69,20 @@ rtspAddress: :8554
 # ── Serveur WebRTC (lecture WHEP / publication WHIP) ─────────────────────────
 webrtc: yes
 webrtcAddress: :8889
-# Mux ICE UDP sur un port unique (publié vers l'hôte) — tous les lecteurs le
-# partagent. 'webrtcAdditionalHosts: 127.0.0.1' fait que MediaMTX annonce un
-# candidat ICE joignable par le navigateur via le port publié (sinon il
-# n'annoncerait que l'IP interne 172.x du conteneur, injoignable depuis l'hôte).
+# Mux ICE sur un port unique (publié vers l'hôte) — tous les lecteurs le
+# partagent. 'webrtcAdditionalHosts' fait que MediaMTX annonce des candidats ICE
+# joignables par le navigateur via le port publié (sinon il n'annoncerait que
+# l'IP interne 172.x du conteneur, injoignable). 127.0.0.1 = lecture depuis
+# l'hôte ; l'IP LAN (192.168.1.148) = lecture depuis les postes du réseau.
+#
+# UDP + TCP : derrière le NAT Docker, l'ICE UDP est souvent cassé pour les postes
+# distants (MediaMTX voit toujours la source 172.18.0.1 après SNAT). On expose donc
+# AUSSI un candidat ICE TCP (même port) : le navigateur bascule dessus si l'UDP
+# échoue, en empruntant le même chemin fiable que le signaling. Les deux ports
+# (8189/udp ET 8189/tcp) doivent être publiés dans docker-compose.yml.
 webrtcLocalUDPAddress: :8189
-webrtcAdditionalHosts: [127.0.0.1]
+webrtcLocalTCPAddress: :8189
+webrtcAdditionalHosts: [127.0.0.1, 192.168.1.148]
 
 # ── Chemins (1 par caméra) ──────────────────────────────────────────────────
 # Convention : path = "cam<id>"  →  le frontend lit  /cam<id>/whep

@@ -1,92 +1,92 @@
 "use client";
 
 /**
- * Santé des caméras — page temps réel.
- *
- * Les métriques (état, FPS, reconnexions, viewers…) vivent dans le Core (moteur
- * de surveillance). On interroge son endpoint /api/cameras/health (CORS activé)
- * directement depuis le navigateur, exactement comme GpuMonitor pour /api/gpu.
- * Aucune dépendance nouvelle : sparkline SVG inline + polling.
+ * Santé des caméras traitées — section Configurer (thème clair). Métriques temps
+ * réel lues DIRECTEMENT depuis le Core (CORE_URL/api/cameras/health) : état, FPS,
+ * reconnexions, uptime, spectateurs. Les caméras sont REGROUPÉES PAR SITE (croisé
+ * avec le catalogue backend) ; les caméras HikCentral offrent un bouton « Relancer »
+ * (ré-interroge HikCentral) car les liaisons agences sont parfois instables.
+ * Sparkline SVG inline + polling 2 s.
  */
+import { useState, useEffect, useRef, useMemo } from "react";
+import OsShell from "../_osirion/OsShell";
+import { PageHeader, Card, Segmented, EmptyState } from "../_osirion/ui";
+import { Video, RotateCw } from "lucide-react";
+import { CORE_URL } from "../../../lib/publicUrls";
+import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
+import { groupCamerasBySite } from "../../../lib/cameraGroups";
 
-import { useState, useEffect, useRef } from "react";
-import AdminSidebar from "../AdminSidebar";
-import AdminTopBar from "../AdminTopBar";
-import { useAuth } from "../AuthContext";
-
-const CORE_URL = process.env.NEXT_PUBLIC_CORE_URL || "http://localhost:5000";
-const POLL_MS = 2000;
-const MAX_POINTS = 30;       // ~1 min d'historique FPS à 2 s/échantillon
-const FPS_SCALE = 30;        // échelle haute de la sparkline (fps)
-
-// ── Métadonnées d'état (label + couleurs) ───────────────────────────────────
+const POLL_MS = 2000, MAX_POINTS = 30, FPS_SCALE = 30;
 const STATES = {
-  online:     { label: "En ligne",    dot: "bg-emerald-500", badge: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-300", spark: "#10b981" },
-  stalled:    { label: "Figée",       dot: "bg-orange-500",  badge: "bg-orange-500/15 text-orange-600 dark:text-orange-300",   spark: "#f97316" },
-  connecting: { label: "Connexion…",  dot: "bg-amber-500",   badge: "bg-amber-500/15 text-amber-600 dark:text-amber-300",     spark: "#f59e0b" },
-  offline:    { label: "Hors ligne",  dot: "bg-rose-500",    badge: "bg-rose-500/15 text-rose-600 dark:text-rose-300",         spark: "#ef4444" },
-  stopped:    { label: "Arrêtée",     dot: "bg-gray-400",    badge: "bg-gray-500/15 text-gray-600 dark:text-gray-300",         spark: "#9ca3af" },
+  online: { label: "En ligne", color: "var(--os-green)" },
+  stalled: { label: "Figée", color: "var(--os-amber)" },
+  connecting: { label: "Connexion…", color: "var(--os-amber)" },
+  offline: { label: "Hors ligne", color: "var(--os-red)" },
+  stopped: { label: "Arrêtée", color: "var(--os-t4)" },
 };
 const stateMeta = (s) => STATES[s] || STATES.stopped;
+const fmtAge = (s) => (s == null ? "—" : s < 60 ? `${s.toFixed(0)} s` : `${Math.floor(s / 60)} min ${Math.floor(s % 60)} s`);
+const fmtUptime = (s) => (!s ? "—" : Math.floor(s / 3600) > 0 ? `${Math.floor(s / 3600)} h ${Math.floor((s % 3600) / 60)} min` : `${Math.floor(s / 60)} min`);
 
-function fmtAge(sec) {
-  if (sec === null || sec === undefined) return "—";
-  if (sec < 60) return `${sec.toFixed(0)} s`;
-  const m = Math.floor(sec / 60);
-  return `${m} min ${Math.floor(sec % 60)} s`;
-}
-function fmtUptime(sec) {
-  if (!sec) return "—";
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  if (h > 0) return `${h} h ${m} min`;
-  return `${m} min`;
-}
-
-// Sparkline SVG (aire + ligne), 0..FPS_SCALE.
 function Sparkline({ data, color, height = 44 }) {
   if (!data || data.length === 0) return <div style={{ height }} />;
-  const w = 100, h = 100;
-  const n = data.length;
-  const step = n > 1 ? w / (n - 1) : w;
-  const pts = data.map((v, i) => {
-    const y = h - (Math.max(0, Math.min(FPS_SCALE, v)) / FPS_SCALE) * h;
-    return `${(i * step).toFixed(2)},${y.toFixed(2)}`;
-  });
+  const w = 100, h = 100, n = data.length, step = n > 1 ? w / (n - 1) : w;
+  const pts = data.map((v, i) => `${(i * step).toFixed(2)},${(h - (Math.max(0, Math.min(FPS_SCALE, v)) / FPS_SCALE) * h).toFixed(2)}`);
   const line = pts.join(" ");
-  const area = `0,${h} ${line} ${((n - 1) * step).toFixed(2)},${h}`;
   return (
     <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ width: "100%", height }} className="block">
-      <polyline points={area} fill={color} fillOpacity="0.12" stroke="none" />
-      <polyline points={line} fill="none" stroke={color} strokeWidth="2"
-                vectorEffect="non-scaling-stroke" strokeLinejoin="round" strokeLinecap="round" />
+      <polyline points={`0,${h} ${line} ${((n - 1) * step).toFixed(2)},${h}`} fill={color} fillOpacity="0.12" stroke="none" />
+      <polyline points={line} fill="none" stroke={color} strokeWidth="2" vectorEffect="non-scaling-stroke" strokeLinejoin="round" strokeLinecap="round" />
     </svg>
   );
 }
-
-// Petite métrique (label + valeur) dans la grille d'une carte.
-const Metric = ({ label, value, accent }) => (
+const Metric = ({ label, value, color }) => (
   <div>
-    <div className="text-[11px] uppercase tracking-wide text-gray-500 dark:text-gray-400">{label}</div>
-    <div className={`text-sm font-semibold ${accent || "text-gray-900 dark:text-white"}`}>{value}</div>
+    <div className="text-[10px] uppercase tracking-wide text-os-t4">{label}</div>
+    <div className="text-[13px] font-semibold os-num" style={{ color: color || "var(--os-t1)" }}>{value}</div>
   </div>
 );
 
 export default function CamerasHealthPage() {
-  const [isCollapsed, setIsCollapsed] = useState(false);
-  const [status, setStatus] = useState("loading");  // loading | ok | error
+  const [status, setStatus] = useState("loading");
   const [summary, setSummary] = useState({ count: 0, online: 0 });
   const [cameras, setCameras] = useState([]);
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const histRef = useRef({});  // cam_id -> [fps, ...]
+  const [meta, setMeta] = useState({});        // id → { source_type, group_ids, cam_name }
+  const [groups, setGroups] = useState([]);
+  const [retry, setRetry] = useState({});      // id → { state: "pending"|"ok"|"err", msg }
+  const [groupId, setGroupId] = useState("");
+  const [camId, setCamId] = useState("");
+  const [stateFilter, setStateFilter] = useState("all");
+  const histRef = useRef({});
 
-  const user = useAuth();
-  const currentRole = user?.role || "viewer";
-
+  // Catalogue backend (source_type + site) — croisé avec la santé Core. Rafraîchi
+  // à l'entrée puis toutes les 30 s (le catalogue bouge peu).
   useEffect(() => {
     let active = true;
-    let timer = null;
+    const load = async () => {
+      const [cr, gr] = await Promise.all([
+        fetchWithRefresh("/api/cameras"),
+        fetchWithRefresh("/api/groups"),
+      ]);
+      if (!active) return;
+      if (cr?.ok) {
+        const list = await cr.json();
+        const m = {};
+        for (const c of Array.isArray(list) ? list : []) {
+          m[c.id] = { source_type: c.source_type, group_ids: c.group_ids || [], cam_name: c.cam_name };
+        }
+        setMeta(m);
+      }
+      if (gr?.ok) { const g = await gr.json(); setGroups(Array.isArray(g) ? g : []); }
+    };
+    load();
+    const t = setInterval(load, 30000);
+    return () => { active = false; clearInterval(t); };
+  }, []);
 
+  useEffect(() => {
+    let active = true, timer = null;
     const poll = async () => {
       try {
         const res = await fetch(`${CORE_URL}/api/cameras/health`, { cache: "no-store" });
@@ -104,123 +104,156 @@ export default function CamerasHealthPage() {
         setCameras(cams);
         setSummary({ count: data.count || cams.length, online: data.online || 0 });
         setStatus("ok");
-      } catch {
-        if (active) setStatus("error");
-      } finally {
-        if (active && autoRefresh) timer = setTimeout(poll, POLL_MS);
-      }
+      } catch { if (active) setStatus("error"); }
+      finally { if (active && autoRefresh) timer = setTimeout(poll, POLL_MS); }
     };
-
     poll();
     return () => { active = false; if (timer) clearTimeout(timer); };
   }, [autoRefresh]);
 
+  const doRetry = async (id) => {
+    setRetry((r) => ({ ...r, [id]: { state: "pending", msg: "" } }));
+    try {
+      const res = await fetchWithRefresh(`/api/hikcentral/cameras/${id}/retry`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) setRetry((r) => ({ ...r, [id]: { state: "ok", msg: "Flux ré-interrogé." } }));
+      else setRetry((r) => ({ ...r, [id]: { state: "err", msg: data?.detail || data?.message || "Échec." } }));
+    } catch {
+      setRetry((r) => ({ ...r, [id]: { state: "err", msg: "Erreur réseau." } }));
+    }
+    setTimeout(() => setRetry((r) => { const n = { ...r }; delete n[id]; return n; }), 5000);
+  };
+
+  // Enrichit chaque caméra santé (Core) avec son site + type (backend) puis regroupe.
+  const sites = useMemo(() => {
+    let enriched = cameras.map((c) => ({
+      ...c,
+      cam_name: c.name || meta[c.id]?.cam_name,
+      group_ids: meta[c.id]?.group_ids || [],
+      source_type: meta[c.id]?.source_type,
+    }));
+    if (camId) enriched = enriched.filter((c) => c.id === Number(camId));
+    else if (groupId) enriched = enriched.filter((c) => (c.group_ids || []).includes(Number(groupId)));
+    if (stateFilter === "attention") enriched = enriched.filter((c) => ["offline", "stalled", "connecting"].includes(c.state));
+    else if (stateFilter !== "all") enriched = enriched.filter((c) => c.state === stateFilter);
+    return groupCamerasBySite(enriched, groups);
+  }, [cameras, meta, groups, groupId, camId, stateFilter]);
+
+  // Options de caméra limitées aux caméras traitées (santé), filtrées par agence.
+  const camOptions = useMemo(() => cameras
+    .map((c) => ({ id: c.id, name: c.name || meta[c.id]?.cam_name || `Caméra ${c.id}`, gids: meta[c.id]?.group_ids || [] }))
+    .filter((c) => !groupId || c.gids.includes(Number(groupId)))
+    .sort((a, b) => a.name.localeCompare(b.name, "fr")), [cameras, meta, groupId]);
+  const sel = "rounded-os border border-os-border bg-os-card px-3 py-2 text-[13px] text-os-t1 outline-none";
+
+  const renderCard = (c) => {
+    const m = stateMeta(c.state);
+    const hist = histRef.current[c.id] || [];
+    const degraded = c.reconnection_attempts > 0 && c.state !== "online";
+    const isHik = c.source_type === "hikcentral";
+    const rt = retry[c.id];
+    const attention = c.state === "offline" || c.state === "stalled" || c.state === "connecting";
+    return (
+      <Card key={c.id} className="p-5">
+        <div className="flex items-start justify-between gap-3 mb-4">
+          <div className="min-w-0">
+            <div className="text-[14px] font-semibold text-os-t1 truncate">{c.name || `Caméra ${c.id}`}</div>
+            <div className="os-num text-[11px] text-os-t3 truncate">{c.location || "—"} · #{c.id}</div>
+          </div>
+          <span className="shrink-0 inline-flex items-center gap-1.5 text-[12px] font-medium" style={{ color: m.color }}>
+            <span className={`h-2 w-2 rounded-full ${c.state === "online" ? "os-anim-pulse" : ""}`} style={{ background: m.color }} />{m.label}
+          </span>
+        </div>
+        <div className="flex items-end justify-between mb-1">
+          <div className="os-num text-[28px] font-bold leading-none" style={{ color: m.color }}>
+            {(c.fps ?? 0).toFixed(1)}
+            <span className="text-[13px] font-medium text-os-t4 ml-1">fps</span>
+            {c.state !== "online" && <span className="ml-2 text-[11px] font-medium text-os-t4">dernier relevé</span>}
+          </div>
+          <div className="text-[11px] text-os-t4">{c.source_kind || (isHik ? "HikCentral" : "—")}</div>
+        </div>
+        <Sparkline data={hist} color={m.color} />
+        <div className="mt-4 grid grid-cols-3 gap-x-4 gap-y-3">
+          <Metric label="Dernière frame" value={fmtAge(c.last_frame_age_s)} />
+          <Metric label="Reconnexions" value={c.reconnections ?? 0} color={c.reconnections > 0 ? "var(--os-amber)" : undefined} />
+          <Metric label="Flux ouvert depuis" value={fmtUptime(c.uptime_s)} />
+        </div>
+        {degraded && <p className="mt-4 rounded-os border border-os-border bg-os-card-2 px-3 py-2 text-[12px] text-os-amber">Reconnexion — {c.reconnection_attempts} tentative(s).</p>}
+        {isHik && (
+          <div className="mt-4 flex items-center justify-between gap-3 border-t border-os-border pt-3">
+            {rt?.state === "ok" ? (
+              <span className="text-[12px] text-os-green">{rt.msg}</span>
+            ) : rt?.state === "err" ? (
+              <span className="text-[12px] text-os-red truncate" title={rt.msg}>{rt.msg}</span>
+            ) : (
+              <span className="text-[12px] text-os-t4">"Source HikCentral"</span>
+            )}
+            <button
+              onClick={() => doRetry(c.id)}
+              disabled={rt?.state === "pending"}
+              className={`shrink-0 inline-flex items-center gap-1.5 rounded-os px-3 py-1.5 text-[12px] font-medium border disabled:opacity-50 ${
+                attention ? "border-transparent bg-os-primary text-os-on-primary hover:bg-os-primary-hover" : "border-os-border text-os-t2 hover:text-os-t1"
+              }`}
+            >
+              <RotateCw className={`h-3.5 w-3.5 ${rt?.state === "pending" ? "os-anim-spin" : ""}`} /> Relancer
+            </button>
+          </div>
+        )}
+      </Card>
+    );
+  };
+
   return (
-    <div className="min-h-screen bg-gray-50/70 dark:bg-gray-950">
-      <div className="flex min-h-screen">
-        <AdminSidebar
-          currentRole={currentRole}
-          isCollapsed={isCollapsed}
-          onToggle={() => setIsCollapsed((p) => !p)}
-          currentPath="/Osirion/admin/cameras-health"
+    <OsShell>
+      <div className="p-6">
+        <PageHeader
+          title="Santé des caméras traitées"
+          subtitle={status === "ok" ? `${summary.online}/${summary.count} flux exploitables · métriques Core temps réel` : "Métriques Core temps réel"}
+          actions={<label className="flex items-center gap-2 text-[13px] text-os-t2"><input type="checkbox" checked={autoRefresh} onChange={() => setAutoRefresh((v) => !v)} /> Auto (2s)</label>}
         />
 
-        <main className={`flex-1 transition-all duration-300 ${isCollapsed ? "lg:ml-20" : "lg:ml-80"}`}>
-          <AdminTopBar
-            title="Santé des caméras"
-            subtitle={status === "ok" ? `${summary.online}/${summary.count} en ligne` : "—"}
-            showSearch={false}
-            actions={
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={autoRefresh}
-                  onChange={() => setAutoRefresh((v) => !v)}
-                  className="h-4 w-4 rounded border-gray-300"
-                />
-                <span className="text-gray-600 dark:text-gray-300">Auto (2s)</span>
-              </label>
-            }
-          />
+        <div className="mb-5 flex flex-wrap items-center gap-2">
+          <select value={groupId} onChange={(e) => { setGroupId(e.target.value); setCamId(""); }} className={sel}>
+            <option value="">Toutes les agences</option>
+            {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+          </select>
+          <select value={camId} onChange={(e) => setCamId(e.target.value)} className={sel}>
+            <option value="">Toutes les caméras</option>
+            {camOptions.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          <Segmented value={stateFilter} onChange={setStateFilter} size="sm"
+            options={[{ value: "all", label: "Toutes" }, { value: "online", label: "En ligne" }, { value: "attention", label: "À surveiller" }]} />
+        </div>
 
-          <div className="p-5 lg:p-8 space-y-6">
-            {status === "error" && (
-              <div className="rounded-xl bg-amber-50/80 p-4 text-amber-800 border border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/50">
-                Métriques indisponibles — Core injoignable sur {CORE_URL}.
-              </div>
-            )}
-
-            {status === "loading" && (
-              <div className="py-24 text-center text-gray-500 dark:text-gray-400">Lecture de la santé des caméras…</div>
-            )}
-
-            {status !== "loading" && cameras.length === 0 && (
-              <div className="rounded-2xl border bg-white/70 p-10 text-center text-gray-500 dark:text-gray-400 dark:border-gray-800 dark:bg-gray-900/60">
-                Aucune caméra active. Ajoutez/activez une caméra : elle apparaîtra ici automatiquement (prise en compte à chaud).
-              </div>
-            )}
-
-            {cameras.length > 0 && (
-              <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
-                {cameras.map((c) => {
-                  const meta = stateMeta(c.state);
-                  const hist = histRef.current[c.id] || [];
-                  const degraded = c.reconnection_attempts > 0 && c.state !== "online";
-                  return (
-                    <div key={c.id} className="rounded-2xl border bg-white/70 p-5 backdrop-blur-sm dark:border-gray-800 dark:bg-gray-900/60 shadow-sm">
-                      {/* En-tête : nom + état */}
-                      <div className="flex items-start justify-between gap-3 mb-4">
-                        <div className="min-w-0">
-                          <div className="font-semibold text-gray-900 dark:text-white truncate">{c.name || `Caméra ${c.id}`}</div>
-                          <div className="text-xs text-gray-500 dark:text-gray-400 truncate">{c.location || "—"} · #{c.id}</div>
-                        </div>
-                        <span className={`shrink-0 inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${meta.badge}`}>
-                          <span className={`h-2 w-2 rounded-full ${meta.dot} ${c.state === "online" ? "animate-pulse" : ""}`} />
-                          {meta.label}
-                        </span>
-                      </div>
-
-                      {/* FPS + sparkline */}
-                      <div className="flex items-end justify-between mb-1">
-                        <div className="text-3xl font-bold tabular-nums" style={{ color: meta.spark }}>
-                          {(c.fps ?? 0).toFixed(1)}
-                          <span className="text-sm font-medium text-gray-400 ml-1">fps</span>
-                        </div>
-                        <div className="text-xs text-gray-500 dark:text-gray-400">{c.source_kind || "—"}</div>
-                      </div>
-                      <Sparkline data={hist} color={meta.spark} />
-
-                      {/* Métriques détaillées */}
-                      <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
-                        <Metric label="Frames" value={(c.frames_captured ?? 0).toLocaleString("fr-FR")} />
-                        <Metric
-                          label="Reconnexions"
-                          value={c.reconnections ?? 0}
-                          accent={c.reconnections > 0 ? "text-amber-600 dark:text-amber-400" : undefined}
-                        />
-                        <Metric label="Dernière frame" value={fmtAge(c.last_frame_age_s)} />
-                        <Metric label="Spectateurs" value={c.viewers ?? 0} />
-                        <Metric label="Uptime" value={fmtUptime(c.uptime_s)} />
-                        <Metric
-                          label="Threads"
-                          value={c.threads_alive ? "actifs" : "arrêtés"}
-                          accent={c.threads_alive ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}
-                        />
-                      </div>
-
-                      {degraded && (
-                        <div className="mt-4 rounded-lg bg-amber-50/80 px-3 py-2 text-xs text-amber-700 border border-amber-200 dark:bg-amber-950/30 dark:text-amber-300 dark:border-amber-800/40">
-                          Reconnexion en cours — {c.reconnection_attempts} tentative(s) consécutive(s).
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+        {status === "error" && (
+          <Card className="p-4 mb-4"><p className="text-[13px] text-os-amber">Métriques indisponibles — Core injoignable sur {CORE_URL}.</p></Card>
+        )}
+        {status === "loading" ? (
+          <EmptyState icon={Video}>Lecture de la santé des caméras…</EmptyState>
+        ) : cameras.length === 0 ? (
+          <EmptyState icon={Video}>Aucune caméra traitée. Configurez une caméra (1re zone) : elle apparaîtra ici automatiquement.</EmptyState>
+        ) : sites.length === 0 ? (
+          <EmptyState icon={Video}>Aucune caméra ne correspond aux filtres.</EmptyState>
+        ) : (
+          <div className="space-y-7">
+            {sites.map((s) => {
+              const onlineN = s.cameras.filter((c) => c.state === "online").length;
+              return (
+                <div key={s.id}>
+                  <div className="flex items-center gap-3 mb-3">
+                    <h2 className="text-[13px] font-semibold uppercase tracking-wide text-os-t2">{s.name}</h2>
+                    <span className="os-num text-[12px] text-os-t4">{onlineN}/{s.cameras.length} flux exploitables</span>
+                    <div className="flex-1 h-px bg-os-border" />
+                  </div>
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    {s.cameras.map(renderCard)}
+                  </div>
+                </div>
+              );
+            })}
           </div>
-        </main>
+        )}
       </div>
-    </div>
+    </OsShell>
   );
 }

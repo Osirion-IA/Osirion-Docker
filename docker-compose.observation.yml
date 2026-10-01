@@ -1,0 +1,24 @@
+# Mode temporaire de campagne 24–48 h.
+# Usage :
+#   OBSERVATION_RUN_ID=eval_YYYYMMDD_HHMM docker compose \
+#     -f docker-compose.yml -f docker-compose.observation.yml up -d --force-recreate
+# Retour au mode normal : docker compose up -d --force-recreate
+services:
+  core:
+    environment:
+      # Une preuve visuelle toutes les deux minutes et par poste, uniquement
+      # pendant les créneaux travaillés. 0 désactive complètement ce flux.
+      PRESENCE_AUDIT_INTERVAL_SECONDS: "120"
+      # Mesures de débit, latence, santé caméra et GPU toutes les 30 secondes.
+      MEASURE_ENABLED: "true"
+      MEASURE_SAMPLE_SECONDS: "30"
+      MEASURE_FILE: /app/observation_runs/${OBSERVATION_RUN_ID:-current}/metrics.jsonl
+      ENABLE_JSON_LOGS: "true"
+      LOG_MAX_BYTES: "52428800"
+      LOG_BACKUP_COUNT: "10"
+    volumes:
+      - ./observation_runs:/app/observation_runs
+
+  backend:
+    volumes:
+      - ./observation_runs:/app/observation_runs

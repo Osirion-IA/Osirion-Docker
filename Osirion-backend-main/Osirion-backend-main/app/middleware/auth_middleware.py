@@ -1,14 +1,18 @@
-from fastapi import Depends, HTTPException, status
+import hmac
+from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlmodel import Session, select
 from typing import Optional
 from app.database import engine
+from app.config import settings
 from app.models.users import User, UserRole
 from app.utils.auth_utils import decode_token, verify_token_type, is_account_locked
 from datetime import datetime
 
-# Configuration du schéma de sécurité Bearer
-security = HTTPBearer()
+# Schéma Bearer OPTIONNEL (auto_error=False) : une requête sans en-tête Bearer ne
+# doit PAS être rejetée avant qu'on ait pu vérifier une éventuelle clé de service
+# (X-API-Key). L'absence d'authentification est traitée explicitement plus bas.
+security = HTTPBearer(auto_error=False)
 
 
 def get_session():
@@ -17,29 +21,58 @@ def get_session():
         yield session
 
 
+def _service_user() -> User:
+    """Utilisateur SYNTHÉTIQUE (non persisté) représentant le Core, authentifié par
+    CORE_API_KEY. Rôle ADMIN : service interne de confiance (lit caméras/zones,
+    POST events). id=0 = sentinelle (aucun user réel n'a l'id 0 ; AuditLog.user_id
+    est nullable et sans FK → aucune contrainte violée)."""
+    return User(
+        id=0, fullName="Service Core", email="core@service.local",
+        role=UserRole.ADMIN.value, is_active=True, is_verified=True,
+    )
+
+
 # ─────────────────────────────────────────────
 # DÉPENDANCE : RÉCUPÉRATION DE L'UTILISATEUR COURANT
 # ─────────────────────────────────────────────
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     session: Session = Depends(get_session)
 ) -> User:
     """
-    Récupère l'utilisateur courant à partir du token JWT.
-    
+    Récupère l'utilisateur courant à partir de la clé de service (X-API-Key) OU
+    du token JWT Bearer.
+
     Args:
-        credentials: Credentials Bearer contenant le token
+        request: Requête entrante (lecture de l'en-tête X-API-Key)
+        credentials: Credentials Bearer contenant le token (None si absent)
         session: Session de base de données
-        
+
     Returns:
-        Instance de l'utilisateur authentifié
-        
+        Instance de l'utilisateur authentifié (ou de service)
+
     Raises:
-        HTTPException: Si le token est invalide ou l'utilisateur n'existe pas
+        HTTPException: Si aucune auth valide n'est fournie
     """
+    # ── Auth machine-à-machine : clé de service (Core) ──────────────────────────
+    # Comparaison à temps constant. Si la clé matche → utilisateur de service, PAS
+    # de JWT, donc jamais d'expiration ni de refresh côté Core.
+    if settings.CORE_API_KEY:
+        provided_key = request.headers.get("X-API-Key")
+        if provided_key and hmac.compare_digest(provided_key, settings.CORE_API_KEY):
+            return _service_user()
+
+    # ── Auth utilisateur : JWT Bearer ───────────────────────────────────────────
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentification requise",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     token = credentials.credentials
-    
+
     # Décoder le token
     payload = decode_token(token)
     

@@ -5,6 +5,10 @@ import { useRouter } from "next/navigation";
 import { AuthContext } from "./AuthContext";
 import AlertNotifier from "./AlertNotifier";
 import { getSetting } from "../../lib/settings";
+import { triggerRefresh } from "../../lib/fetchWithRefresh";
+
+const LAST_ACTIVITY_KEY = "osirion-session-last-activity";
+const ACTIVITY_WRITE_INTERVAL_MS = 5000;
 
 // Lit le cookie non-httpOnly token_expires_at (timestamp ms)
 function getTokenExpiry() {
@@ -58,12 +62,15 @@ export default function AdminLayout({ children }) {
     let timer = null;
 
     async function doRefresh() {
-      const res = await fetch("/api/auth/refresh", { method: "POST" });
-      if (!res.ok) {
-        router.replace("/");
-      } else {
-        scheduleNext();
-      }
+      const res = await triggerRefresh();   // partagé avec fetchWithRefresh (anti-course rotation)
+      if (res.ok) { scheduleNext(); return; }
+      // Refresh KO : possible course (rotation / autre onglet) — vérifier la session
+      // AVANT de déconnecter (le cookie a peut-être déjà été rafraîchi ailleurs).
+      try {
+        const me = await fetch("/api/auth/me");
+        if (me.ok) { scheduleNext(); return; }
+      } catch { /* */ }
+      router.replace("/");
     }
 
     function scheduleNext() {
@@ -83,25 +90,59 @@ export default function AdminLayout({ children }) {
   }, [user, router]);
 
   // Déconnexion automatique après inactivité (paramètre Sécurité « Session (min) »).
-  // Tout geste utilisateur réarme le délai ; passé ce délai sans activité, on
-  // efface la session (cookies) et on redirige vers la page de connexion.
+  // L'activité est partagée entre les onglets : un onglet ancien et inactif ne
+  // doit jamais effacer les cookies pendant qu'un autre onglet est utilisé.
   useEffect(() => {
     if (!user) return;
 
     let lastActivity = Date.now();
+    let lastSharedWrite = 0;
     let loggingOut = false;
 
-    const onActivity = () => { lastActivity = Date.now(); };
+    const readSharedActivity = () => {
+      try {
+        const value = Number(window.localStorage.getItem(LAST_ACTIVITY_KEY));
+        return Number.isFinite(value) ? value : 0;
+      } catch { return 0; }
+    };
+    const markActivity = (force = false) => {
+      const now = Date.now();
+      lastActivity = now;
+      if (!force && now - lastSharedWrite < ACTIVITY_WRITE_INTERVAL_MS) return;
+      lastSharedWrite = now;
+      try { window.localStorage.setItem(LAST_ACTIVITY_KEY, String(now)); } catch { /* */ }
+    };
+    const onActivity = () => markActivity();
+    const onSharedActivity = (event) => {
+      if (event.key !== LAST_ACTIVITY_KEY) return;
+      const value = Number(event.newValue);
+      if (Number.isFinite(value)) lastActivity = Math.max(lastActivity, value);
+    };
     const events = ["mousemove", "mousedown", "keydown", "scroll", "touchstart", "click"];
     events.forEach((e) => window.addEventListener(e, onActivity, { passive: true }));
+    window.addEventListener("storage", onSharedActivity);
+    markActivity(true);
 
     // Délai RELU à chaque tick → une modification du paramètre « Session (min) »
     // s'applique À CHAUD (≤ 15 s), sans rechargement, et même depuis un autre
     // onglet (localStorage partagé). Aucune dépendance au cycle de vie du layout.
+    // Une vidéo EN LECTURE compte comme une activité : sur une plateforme de
+    // vidéosurveillance, regarder le mur de caméras (sans souris/clavier) n'est PAS
+    // de l'inactivité — sinon on serait déconnecté en pleine surveillance.
+    const isWatchingLive = () => {
+      for (const v of document.querySelectorAll("video")) {
+        if (!v.paused && !v.ended && v.readyState >= 2 && v.currentTime > 0) return true;
+      }
+      return false;
+    };
+
     const checkId = setInterval(async () => {
-      const minutes = Number(getSetting("sessionTimeout", 30)) || 30;
-      const timeoutMs = minutes * 60 * 1000;
-      if (loggingOut || Date.now() - lastActivity < timeoutMs) return;
+      const raw = getSetting("sessionTimeout", 30);
+      const minutes = Number.isFinite(Number(raw)) ? Number(raw) : 30;
+      if (minutes <= 0) return;                                     // 0 = déconnexion auto désactivée
+      if (isWatchingLive()) { markActivity(); return; }             // visionnage live = activité
+      const effectiveActivity = Math.max(lastActivity, readSharedActivity());
+      if (loggingOut || Date.now() - effectiveActivity < minutes * 60 * 1000) return;
       loggingOut = true;
       clearInterval(checkId);
       try { await fetch("/api/auth/logout", { method: "POST" }); } catch { /* */ }
@@ -110,6 +151,7 @@ export default function AdminLayout({ children }) {
 
     return () => {
       events.forEach((e) => window.removeEventListener(e, onActivity));
+      window.removeEventListener("storage", onSharedActivity);
       clearInterval(checkId);
     };
   }, [user, router]);
@@ -127,7 +169,7 @@ export default function AdminLayout({ children }) {
   return (
     <AuthContext.Provider value={user}>
       {children}
-      {/* Notifications globales (toast + son) sur détection blacklist personne/plaque */}
+      {/* Notifications globales (toast + son) sur détection blacklist personne */}
       <AlertNotifier />
     </AuthContext.Provider>
   );

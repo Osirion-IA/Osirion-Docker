@@ -2,8 +2,8 @@
 # Osirion-Backend — Dockerfile multi-stage
 # =============================================================================
 # Build args :
-#   GPU=0  (défaut) — torch CPU  + onnxruntime      (~3 GB image finale)
-#   GPU=1           — torch CUDA + onnxruntime-gpu  (~7 GB image finale)
+#   GPU=0  (défaut) — torch CPU   (détection de visage YOLO via ultralytics)
+#   GPU=1           — torch CUDA
 #
 # Usage :
 #   CPU : docker build .
@@ -102,6 +102,9 @@ COPY alembic.ini      .
 COPY app/             ./app/
 COPY scripts/         ./scripts/
 
+# Modèle de détection de visage (YOLO via ultralytics) utilisé par
+# app/services/detection_service.py. La reconnaissance faciale InsightFace
+# (onnxruntime + pack antelopev2 ~1 GB) a été retirée — plus rien à pré-télécharger.
 COPY yolov11n-face.pt .
 
 EXPOSE 8000

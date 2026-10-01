@@ -8,7 +8,10 @@ export async function GET(req) {
       return NextResponse.json({ message: "Aucun access_token." }, { status: 401 });
     }
 
-    const response = await fetch(`${backendUrl}/cameras/`, {
+    // Propage le filtre optionnel ?group_id=<id> vers le backend.
+    const groupId = req.nextUrl.searchParams.get("group_id");
+    const query = groupId ? `?group_id=${encodeURIComponent(groupId)}` : "";
+    const response = await fetch(`${backendUrl}/cameras/${query}`, {
       method: "GET",
       headers: {
         "Authorization": `Bearer ${accessToken}`,

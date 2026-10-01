@@ -1,21 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import io from 'socket.io-client';
+// SOCKET_URL (Core) et MEDIAMTX_URL (vidéo WHEP) dérivés de l'hôte d'accès
+// (cf. lib/publicUrls) → la vidéo + l'overlay marchent depuis tout poste du LAN.
+import { SOCKET_URL, MEDIAMTX_URL } from "../../../lib/publicUrls";
 
-// Socket.IO du Core : reçoit les métadonnées (bounding boxes JSON).
-const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:5000";
-// MediaMTX : vidéo WebRTC (WHEP). Le navigateur décode en natif (accéléré GPU).
-const MEDIAMTX_URL = process.env.NEXT_PUBLIC_MEDIAMTX_URL || "http://localhost:8889";
-
-// Couleur d'overlay (CSS). Visages : vert=reconnu / rouge=inconnu.
-// Plaques : rouge=blacklist / cyan=connue / ambre=simplement détectée.
+// Couleur d'overlay (CSS) — détection de personne anonyme (couleur neutre).
+// eslint-disable-next-line no-unused-vars
 function detectionColor(det) {
-    // Alerte (blacklist) prioritaire, quel que soit le type : rouge soutenu.
-    if (det.alert) return '#dc2626';
-    if (det.type === 'plate') {
-        if (det.known) return '#06b6d4';
-        return '#f59e0b';
-    }
-    return det.recognized ? '#22c55e' : '#ef4444';
+    return '#06b6d4';
 }
 
 // WHEP « non-trickle » : on attend la fin du gathering ICE avant d'envoyer
@@ -35,7 +27,10 @@ function waitIceGatheringComplete(pc, timeoutMs) {
     });
 }
 
-export default function CameraStream({ cameraId, onLatencyUpdate, showStats = true }) {
+// streamPath : nom du chemin MediaMTX à lire (défaut `cam<id>`). Permet de lire un
+// chemin de PRÉVISUALISATION `preview<id>` pour une caméra du catalogue non encore
+// traitée (cf. éditeur de Zones).
+export default function CameraStream({ cameraId, streamPath, onLatencyUpdate, showStats = true, showPresenceZones = true }) {
     const videoRef = useRef(null);
     const canvasRef = useRef(null);
     const pcRef = useRef(null);
@@ -43,16 +38,15 @@ export default function CameraStream({ cameraId, onLatencyUpdate, showStats = tr
     const [status, setStatus] = useState('connecting');
     const [latency, setLatency] = useState(0);
     const [fps, setFps] = useState(0);
-    // Les boxes plaques sont désormais dessinées CÔTÉ CLIENT (overlay canvas).
-    // Ce drapeau ne sert plus qu'au badge + à la légende des couleurs.
-    const [lprActive, setLprActive] = useState(false);
+    const [staffing, setStaffing] = useState(null);
 
     // ── Vidéo WebRTC (WHEP) depuis MediaMTX ──────────────────────────────────
     useEffect(() => {
         let cancelled = false;
         let retryTimer = null;
         let resourceUrl = null;                  // ressource WHEP (DELETE au cleanup)
-        const whepUrl = `${MEDIAMTX_URL}/cam${cameraId}/whep`;
+        const path = streamPath || `cam${cameraId}`;
+        const whepUrl = `${MEDIAMTX_URL}/${path}/whep`;
 
         function closePc() {
             const pc = pcRef.current;
@@ -127,7 +121,7 @@ export default function CameraStream({ cameraId, onLatencyUpdate, showStats = tr
             }
             closePc();
         };
-    }, [cameraId]);
+    }, [cameraId, streamPath]);
 
     // ── Overlay : bounding boxes via Socket.IO 'metadata' ────────────────────
     useEffect(() => {
@@ -140,6 +134,7 @@ export default function CameraStream({ cameraId, onLatencyUpdate, showStats = tr
 
         socket.on('metadata', (data) => {
             if (data.camera_id !== cameraId) return;
+            setStaffing(data.staffing?.enabled ? data.staffing : null);
             const canvas = canvasRef.current;
             if (!canvas) return;
 
@@ -168,11 +163,64 @@ export default function CameraStream({ cameraId, onLatencyUpdate, showStats = tr
             ctx.font = `${fontPx}px ui-sans-serif, system-ui, sans-serif`;
             ctx.textBaseline = 'top';
 
+            // Zones « poste d'agent » : le polygone et l'état métier proviennent
+            // exactement de la même décision que /api/staffing. Cet overlay sert
+            // donc de contrôle terrain, pas de simple décoration côté navigateur.
+            if (showPresenceZones) {
+                const zoneColors = {
+                    occupied: '#22c55e', confirming: '#3b82f6',
+                    vacancy_pending: '#f59e0b', vacant: '#ef4444',
+                    off_schedule: '#64748b', unavailable: '#6b7280',
+                    unconfigured: '#6b7280', initializing: '#06b6d4',
+                };
+                const zoneLabels = {
+                    occupied: 'occupé', confirming: 'confirmation',
+                    vacancy_pending: 'vacance observée', vacant: 'vacant',
+                    off_schedule: 'hors horaire', unavailable: 'indisponible',
+                    unconfigured: 'non configuré', initializing: 'initialisation',
+                };
+                for (const zone of (data.presence_zones || [])) {
+                    const points = Array.isArray(zone.polygon) ? zone.polygon : [];
+                    if (points.length < 3) continue;
+                    const color = zoneColors[zone.state] || '#06b6d4';
+                    ctx.save();
+                    ctx.beginPath();
+                    points.forEach((point, index) => {
+                        const px = Number(point?.[0]) * W;
+                        const py = Number(point?.[1]) * H;
+                        if (index === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+                    });
+                    ctx.closePath();
+                    ctx.fillStyle = `${color}20`;
+                    ctx.fill();
+                    ctx.strokeStyle = color;
+                    ctx.lineWidth = Math.max(2, Math.round(W / 280));
+                    ctx.setLineDash(zone.state === 'unavailable' || zone.state === 'off_schedule' ? [8, 6] : []);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+
+                    const anchorX = Math.max(0, Math.min(W - 10, Number(points[0]?.[0]) * W));
+                    const anchorY = Math.max(0, Number(points[0]?.[1]) * H - fontPx - 10);
+                    const count = zone.state === 'occupied' ? ` · ${zone.confirmed_count || 1}` : '';
+                    const label = `${zone.zone_name || 'Poste'} · ${zoneLabels[zone.state] || zone.state}${count}`;
+                    const labelW = Math.min(W - anchorX, ctx.measureText(label).width + 10);
+                    ctx.fillStyle = `${color}e6`;
+                    ctx.fillRect(anchorX, anchorY, labelW, fontPx + 8);
+                    ctx.fillStyle = '#fff';
+                    ctx.fillText(label, anchorX + 5, anchorY + 4, Math.max(0, labelW - 10));
+                    ctx.restore();
+                }
+            }
+
             for (const det of (data.detections || [])) {
                 const [x1, y1, x2, y2] = det.bbox;
                 const color = detectionColor(det);
                 ctx.strokeStyle = color;
+                // Position MAINTENUE (personne momentanément occultée, toujours
+                // comptée) : trait pointillé, pour ne pas la donner pour observée.
+                ctx.setLineDash(det.predicted ? [6, 5] : []);
                 ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+                ctx.setLineDash([]);
 
                 const label = det.label || '';
                 if (label) {
@@ -201,23 +249,7 @@ export default function CameraStream({ cameraId, onLatencyUpdate, showStats = tr
                 ctx && ctx.clearRect(0, 0, canvas.width, canvas.height);
             }
         };
-    }, [cameraId]);
-
-    // Poll léger de l'état LPR du Core (badge + légende). Rafraîchi toutes les 15s.
-    useEffect(() => {
-        let active = true;
-        const fetchLpr = async () => {
-            try {
-                const res = await fetch(`${SOCKET_URL}/api/lpr/status`);
-                if (!res.ok) return;
-                const data = await res.json();
-                if (active) setLprActive(!!data.lpr_enabled);
-            } catch { /* Core injoignable : ignorer */ }
-        };
-        fetchLpr();
-        const id = setInterval(fetchLpr, 15000);
-        return () => { active = false; clearInterval(id); };
-    }, []);
+    }, [cameraId, showPresenceZones]);
 
     const latencyColor =
         latency === 0 ? 'text-gray-400' :
@@ -246,6 +278,23 @@ export default function CameraStream({ cameraId, onLatencyUpdate, showStats = tr
                 className="absolute inset-0 w-full h-full pointer-events-none"
             />
 
+            {/* Effectif anonyme dans les zones personnel, fourni par le Core. */}
+            {staffing && (
+                <div className={`absolute top-3 right-3 z-10 rounded-md px-2.5 py-1.5 backdrop-blur-sm text-xs font-semibold ${
+                    staffing.low
+                        ? 'bg-red-600/90 text-white'
+                        : staffing.below_minimum
+                            ? 'bg-amber-500/90 text-black'
+                        : staffing.in_work
+                            ? 'bg-black/65 text-white'
+                            : 'bg-black/50 text-white/60'
+                }`}>
+                    <span className="font-mono">{staffing.count}/{staffing.maximum}</span>
+                    <span className="ml-1.5">agents</span>
+                    <span className="ml-1.5 text-[10px] opacity-75">min {staffing.minimum}</span>
+                </div>
+            )}
+
             {/* État connexion */}
             {status !== 'live' && (
                 <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-gray-950">
@@ -262,20 +311,6 @@ export default function CameraStream({ cameraId, onLatencyUpdate, showStats = tr
                             <span className="text-white/50 text-sm font-medium">Signal perdu</span>
                         </>
                     )}
-                </div>
-            )}
-
-            {/* Badge LPR + légende des couleurs de plaques (overlay dessiné côté client) */}
-            {status === 'live' && lprActive && (
-                <div className="absolute top-3 left-3 flex flex-col gap-1">
-                    <div className="px-2 py-0.5 rounded-md bg-black/60 backdrop-blur-sm text-xs font-semibold text-amber-300 flex items-center gap-1">
-                        <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" /> LPR actif
-                    </div>
-                    <div className="px-2 py-1 rounded-md bg-black/50 backdrop-blur-sm text-[10px] text-white/80 leading-tight space-y-0.5">
-                        <div className="flex items-center gap-1"><span className="h-2 w-2 rounded-sm" style={{ background: '#f59e0b' }} /> Plaque détectée</div>
-                        <div className="flex items-center gap-1"><span className="h-2 w-2 rounded-sm" style={{ background: '#06b6d4' }} /> Plaque connue</div>
-                        <div className="flex items-center gap-1"><span className="h-2 w-2 rounded-sm" style={{ background: '#ef4444' }} /> Blacklist (alerte)</div>
-                    </div>
                 </div>
             )}
 

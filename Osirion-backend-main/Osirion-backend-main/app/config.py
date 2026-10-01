@@ -10,6 +10,13 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     FERNET_KEY: str  # Doit être une clé Fernet valide
+
+    # AUTH MACHINE-À-MACHINE (Core) — clé de service statique, SANS expiration.
+    # Le Core (service interne) s'authentifie via l'en-tête X-API-Key au lieu d'un
+    # JWT : plus de login/refresh/expiration → il ne se déconnecte jamais. Vide =
+    # désactivé (le Core retombe alors sur l'auth JWT email/password classique).
+    # À définir dans .env (secret long, généré aléatoirement). Réseau interne Docker.
+    CORE_API_KEY: str = ""
     
     # SECURITY
     BCRYPT_ROUNDS: int = 12
@@ -17,8 +24,10 @@ class Settings(BaseSettings):
     # CORS
     BACKEND_CORS_ORIGINS: list[str] = ["*"]  # à changer en prod pour ton frontend
 
-    # AI / Embeddings
-    EMBEDDING_DIM: int = 512
+    # DECISION ENGINE — décalage horaire (heures) appliqué à l'évaluation des
+    # plages horaires des règles (les timestamps sont en UTC). Ex. +1 pour l'heure
+    # d'Europe centrale. 0 = plages interprétées en UTC.
+    RULE_TZ_OFFSET_HOURS: int = 0
 
     # RATE LIMITING
     RATE_LIMIT_PER_MINUTE: str = "5/minute"  # pour les routes sensibles (login)
@@ -35,6 +44,40 @@ class Settings(BaseSettings):
     SMTP_USE_TLS: bool = True
     ALERT_EMAIL_TO: str = ""        # destinataire(s) par défaut, séparés par des virgules
     ALERT_WEBHOOK_URL: str = ""     # webhook POST JSON (Slack/Teams/endpoint custom)
+
+    # SOURCE DE FLUX HIKCENTRAL (OpenAPI Gateway Artemis, AK/SK) — optionnel.
+    # Si renseigné, on peut synchroniser le catalogue de caméras (par groupe/area)
+    # et résoudre des URLs RTSP standard (rtsp_s). Vide = connecteur désactivé.
+    HIK_HOST: str = ""              # ex. https://137.74.118.35:443 (OpenAPI Gateway)
+    HIK_APP_KEY: str = ""           # Integration Partner Key
+    HIK_APP_SECRET: str = ""        # Integration Partner Secret
+    HIK_USER_ID: str = ""           # Linked User du partner
+    HIK_VERIFY_SSL: bool = False    # certif auto-signé → False en dev
+    HIK_STREAM_TYPE: int = 1        # 0=main (HEVC 1440p), 1=sub (HEVC 360p, léger) → ingestion
+    # Synchronisation périodique du catalogue (thread de fond). 0 = désactivée
+    # (synchro manuelle seulement, via POST /hikcentral/sync).
+    HIK_SYNC_INTERVAL_MINUTES: int = 15
+
+    # ── Historique de connectivité caméra (poller backend → camera_status_event) ──
+    # Le backend interroge la santé du Core et persiste les transitions d'état.
+    CORE_URL: str = "http://core:5000"           # URL interne Docker du Core
+    CAMERA_STATUS_POLL_SECONDS: int = 15
+    CAMERA_STATUS_RECORDER_ENABLED: bool = True
+
+    # ── Rétention automatique des événements et captures ─────────────────────
+    # ~800 Mo de captures par jour observés en campagne : sans rotation, la
+    # partition sature en quelques semaines et l'enregistrement des preuves
+    # s'arrête sans prévenir. 0 = désactivée (purge manuelle seulement).
+    # Désactivée par défaut : une politique destructive doit être activée après
+    # archivage et validation explicite de la durée de conservation.
+    RETENTION_DAYS: int = 0
+    RETENTION_CHECK_HOURS: float = 24
+    RETENTION_MIN_FREE_GB: float = 10   # sous ce seuil : log ERROR à chaque cycle
+
+    # ── Reprise des notifications échouées ───────────────────────────────────
+    # 55 alertes sur 574 perdues en campagne sur des coupures DNS de quelques
+    # secondes, faute de nouvelle tentative. 0 = désactivée.
+    NOTIFY_RETRY_SECONDS: int = 60
 
     class Config:
         env_file = ".env"

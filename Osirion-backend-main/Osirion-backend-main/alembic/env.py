@@ -13,12 +13,17 @@ load_dotenv()
 # importer ici tous tes modules de modèles SQLModel
 # adapte ces imports au nom et emplacement de tes fichiers
 from app.models.users import User
-from app.models.people import People
-from app.models.cameras import Camera
+from app.models.cameras import Camera, CameraGroupLink
+from app.models.camera_groups import CameraGroup
+from app.models.zones import Zone, CountLine
+from app.models.rules import Rule
 from app.models.events import Event
-from app.models.vehicles import Vehicle
 from app.models.alerts import Alert
 from app.models.audit import AuditLog
+from app.models.work_schedule import WorkSchedule
+from app.models.camera_status_event import CameraStatusEvent
+from app.models.hikcentral_config import HikCentralConfig
+from app.models.notification_config import NotificationConfig
 
 # this is the Alembic Config object
 config = context.config
@@ -76,4 +81,3 @@ if context.is_offline_mode():
     run_migrations_offline()
 else:
     run_migrations_online()
-

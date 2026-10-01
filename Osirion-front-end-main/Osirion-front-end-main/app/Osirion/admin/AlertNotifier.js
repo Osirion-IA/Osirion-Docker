@@ -2,12 +2,11 @@
 
 /**
  * AlertNotifier — notification globale (toast + son) à la détection d'une
- * PERSONNE blacklistée ou d'une PLAQUE blacklistée.
+ * PERSONNE blacklistée.
  *
  * Source des signaux : flux Socket.IO 'metadata' du Core (le même que l'overlay
  * live), donc AUCUNE modification backend/Core requise :
- *   • plaque blacklistée → détection { type:'plate', alert:true }
- *   • personne blacklistée → détection { type:'face', recognized:true }
+ *   • personne blacklistée → détection { type:'face', alert:true }
  *     (dans cette app, la « blacklist » = la liste des personnes enrôlées
  *      /api/people ; une reconnaissance faciale = un membre de cette liste).
  *
@@ -20,13 +19,30 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import io from "socket.io-client";
-
-const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:5000";
-const COOLDOWN_MS = 20000;   // anti-spam : même piste re-alertée au plus toutes les 20 s
+import { fetchWithRefresh } from "../../lib/fetchWithRefresh";
 const MAX_TOASTS = 4;
 const TOAST_TTL = 9000;
 const MUTE_KEY = "osirion-alert-muted";
+
+// Thème couleur du toast par sévérité (classes littérales → détectées par Tailwind).
+const SEV_THEME = {
+  info: {
+    border: "border-sky-300/60 dark:border-sky-700/50", shadow: "shadow-sky-900/20",
+    bar: "from-sky-600 to-cyan-500", iconWrap: "bg-sky-100 dark:bg-sky-900/40 text-sky-600 dark:text-sky-300",
+    title: "text-sky-700 dark:text-sky-300", dot: "bg-sky-500",
+  },
+  warning: {
+    border: "border-amber-300/60 dark:border-amber-700/50", shadow: "shadow-amber-900/20",
+    bar: "from-amber-500 to-orange-500", iconWrap: "bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-300",
+    title: "text-amber-700 dark:text-amber-300", dot: "bg-amber-500",
+  },
+  critical: {
+    border: "border-rose-300/60 dark:border-rose-700/50", shadow: "shadow-rose-900/20",
+    bar: "from-rose-600 to-red-500", iconWrap: "bg-rose-100 dark:bg-rose-900/40 text-rose-600 dark:text-rose-300",
+    title: "text-rose-700 dark:text-rose-300", dot: "bg-rose-500",
+  },
+};
+const sevTheme = (s) => SEV_THEME[s] || SEV_THEME.critical;
 
 // ── Icônes SVG inline (auto-contenues, pas de lucide) ───────────────────────
 const Svg = ({ className, children }) => (
@@ -34,7 +50,6 @@ const Svg = ({ className, children }) => (
        strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">{children}</svg>
 );
 const IconUser = ({ className }) => (<Svg className={className}><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></Svg>);
-const IconCar = ({ className }) => (<Svg className={className}><path d="M5 11l1.5-4.5A2 2 0 0 1 8.4 5h7.2a2 2 0 0 1 1.9 1.5L19 11" /><rect x="3" y="11" width="18" height="6" rx="2" /><circle cx="7.5" cy="17.5" r="1.5" /><circle cx="16.5" cy="17.5" r="1.5" /></Svg>);
 const IconX = ({ className }) => (<Svg className={className}><path d="M18 6 6 18M6 6l12 12" /></Svg>);
 const IconBellOn = ({ className }) => (<Svg className={className}><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.7 21a2 2 0 0 1-3.4 0" /></Svg>);
 const IconBellOff = ({ className }) => (<Svg className={className}><path d="M13.7 21a2 2 0 0 1-3.4 0" /><path d="M18 8a6 6 0 0 0-9.3-5" /><path d="M6 8c0 7-3 9-3 9h13" /><path d="m2 2 20 20" /></Svg>);
@@ -65,9 +80,8 @@ export default function AlertNotifier() {
 
   const mutedRef = useRef(false);
   const audioCtxRef = useRef(null);
-  const cameraNamesRef = useRef(new Map());
-  const cooldownRef = useRef(new Map());
   const timersRef = useRef([]);
+  const seenRef = useRef(new Set());   // ids d'alertes déjà affichées (anti-doublon)
 
   // Charger la préférence « muet » (persistée localement).
   useEffect(() => {
@@ -126,65 +140,42 @@ export default function AlertNotifier() {
     timersRef.current.push(t);
   }, [playSound]);
 
-  const handleMeta = useCallback((data) => {
-    if (!data || !Array.isArray(data.detections)) return;
-    const now = Date.now();
-    // Purge opportuniste du cache anti-spam.
-    if (cooldownRef.current.size > 256) {
-      for (const [k, ts] of cooldownRef.current) {
-        if (now - ts > COOLDOWN_MS) cooldownRef.current.delete(k);
-      }
-    }
-    for (const det of data.detections) {
-      // On n'alerte QUE sur det.alert === true (vraie blacklist) : plaque
-      // blacklistée OU personne sur liste de surveillance (is_blacklisted).
-      // Une personne simplement reconnue (non blacklistée) ne déclenche RIEN.
-      if (!det.alert) continue;
-      const isPlate = det.type === "plate";
-
-      const key = `${data.camera_id}|${det.type}|${det.track_id}`;
-      const last = cooldownRef.current.get(key) || 0;
-      if (now - last < COOLDOWN_MS) continue;
-      cooldownRef.current.set(key, now);
-
-      addAlert({
-        kind: isPlate ? "plate" : "person",
-        label: (det.label || "")
-          .replace(/^⚠\s*/, "")
-          .replace(/\s*\[BLACKLIST\]\s*$/i, "")
-          .trim()
-          || (isPlate ? "Plaque inconnue" : "Personne"),
-        cameraName: cameraNamesRef.current.get(data.camera_id) || `Caméra ${data.camera_id}`,
-      });
-    }
-  }, [addAlert]);
-
-  // ── Connexions Socket.IO : 1 socket bootstrap (liste caméras) + 1 watcher
-  //    léger par caméra active. ──────────────────────────────────────────────
+  // Récupère périodiquement les nouvelles alertes du backend (créées par le moteur
+  // de règles) et les affiche en toast. Anti-doublon via seenRef ; le 1er passage
+  // marque l'existant comme « vu » (pas de rafale de toasts au chargement).
   useEffect(() => {
-    const watchers = new Map();           // camera_id -> socket
-    const boot = io(SOCKET_URL, { withCredentials: true });
-
-    boot.on("cameras_list", ({ cameras }) => {
-      for (const cam of cameras || []) {
-        cameraNamesRef.current.set(cam.id, cam.name);
-        if (watchers.has(cam.id)) continue;
-        const s = io(SOCKET_URL, { withCredentials: true });
-        s.on("connect", () => s.emit("start_stream", { camera_id: cam.id }));
-        s.on("metadata", handleMeta);
-        watchers.set(cam.id, s);
-      }
-    });
-
+    let active = true;
+    let first = true;
     const timers = timersRef.current;
+    const poll = async () => {
+      try {
+        const res = await fetchWithRefresh("/api/alerts?status=new");
+        if (!active || !res?.ok) return;
+        const data = await res.json();
+        const list = Array.isArray(data) ? data : (data.alerts || []);
+        for (const a of list) {
+          if (a.id == null || seenRef.current.has(a.id)) continue;
+          seenRef.current.add(a.id);
+          if (!first) {
+            addAlert({
+              kind: a.kind,
+              severity: a.severity,
+              label: a.label || a.kind,
+              cameraName: a.camera_name || (a.camera_id ? `Caméra ${a.camera_id}` : ""),
+            });
+          }
+        }
+        first = false;
+      } catch { /* backend injoignable : réessai au prochain tick */ }
+    };
+    poll();
+    const id = setInterval(poll, 10000);
     return () => {
-      try { boot.disconnect(); } catch { /* */ }
-      for (const s of watchers.values()) {
-        try { s.emit("stop_stream"); s.disconnect(); } catch { /* */ }
-      }
+      active = false;
+      clearInterval(id);
       timers.forEach((t) => clearTimeout(t));
     };
-  }, [handleMeta]);
+  }, [addAlert]);
 
   const toggleMute = () => {
     setMuted((m) => {
@@ -198,22 +189,27 @@ export default function AlertNotifier() {
     <>
       {/* Pile de toasts (au-dessus du contenu, sous d'éventuelles modales) */}
       <div className="fixed top-4 right-4 z-[60] flex flex-col gap-3 w-[330px] max-w-[calc(100vw-2rem)] pointer-events-none">
-        {alerts.map((a) => (
+        {alerts.map((a) => {
+          const th = sevTheme(a.severity);
+          return (
           <div
             key={a.id}
-            className="pointer-events-auto overflow-hidden rounded-2xl border border-rose-300/60 dark:border-rose-700/50 bg-white dark:bg-gray-900 shadow-2xl shadow-rose-900/20 animate-fade-in"
+            className={`pointer-events-auto overflow-hidden rounded-2xl border ${th.border} bg-white dark:bg-gray-900 shadow-2xl ${th.shadow} animate-fade-in`}
             role="alert"
           >
-            <div className="h-1 w-full bg-gradient-to-r from-rose-600 to-red-500" />
+            <div className={`h-1 w-full bg-gradient-to-r ${th.bar}`} />
             <div className="flex items-start gap-3 p-4">
-              <div className="shrink-0 h-10 w-10 rounded-xl bg-rose-100 dark:bg-rose-900/40 text-rose-600 dark:text-rose-300 flex items-center justify-center">
-                {a.kind === "plate" ? <IconCar className="h-5 w-5" /> : <IconUser className="h-5 w-5" />}
+              <div className={`shrink-0 h-10 w-10 rounded-xl ${th.iconWrap} flex items-center justify-center`}>
+                <IconUser className="h-5 w-5" />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className="inline-flex h-2 w-2 rounded-full bg-rose-500 animate-pulse" />
-                  <p className="text-sm font-bold text-rose-700 dark:text-rose-300 truncate">
-                    {a.kind === "plate" ? "Plaque blacklistée détectée" : "Personne blacklistée détectée"}
+                  <span className={`inline-flex h-2 w-2 rounded-full ${th.dot} animate-pulse`} />
+                  <p className={`text-sm font-bold ${th.title} truncate`}>
+                    {a.kind === "intrusion" ? "Intrusion détectée"
+                      : a.kind === "crowd" ? "Attroupement détecté"
+                      : a.kind === "queue" ? "File saturée"
+                      : "Alerte déclenchée"}
                   </p>
                 </div>
                 <p className="mt-1 text-sm font-semibold text-gray-900 dark:text-white truncate">{a.label}</p>
@@ -230,7 +226,8 @@ export default function AlertNotifier() {
               </button>
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Bouton son on/off (discret, en bas à droite) */}

@@ -1,12 +1,111 @@
 # app/models/camera.py
-from sqlmodel import SQLModel, Field
-from typing import Optional
+from sqlmodel import SQLModel, Field, Relationship
+from sqlalchemy import Column, Integer, ForeignKey, CheckConstraint
+from typing import Optional, List, TYPE_CHECKING
 from datetime import datetime
-from typing import Optional
+
+if TYPE_CHECKING:
+    # Import réservé au typage (évite un cycle d'import : camera_groups importe
+    # déjà cameras). SQLModel/SQLAlchemy résout la relation via la chaîne
+    # "CameraGroup" à la configuration des mappers, une fois les deux modules chargés.
+    from app.models.camera_groups import CameraGroup
+
+
+class CameraGroupLink(SQLModel, table=True):
+    """Table d'association N↔N entre `camera` et `cameragroup`.
+
+    Une caméra peut appartenir à plusieurs groupes et un groupe contient
+    plusieurs caméras (affectations multiples flexibles). Les deux FK sont en
+    ON DELETE CASCADE : supprimer une caméra ou un groupe purge automatiquement
+    les liens correspondants (aucune ligne orpheline).
+    """
+    __tablename__ = "camera_group_link"
+
+    camera_id: Optional[int] = Field(
+        default=None,
+        sa_column=Column(
+            Integer,
+            ForeignKey("camera.id", ondelete="CASCADE"),
+            primary_key=True,
+        ),
+    )
+    group_id: Optional[int] = Field(
+        default=None,
+        sa_column=Column(
+            Integer,
+            ForeignKey("cameragroup.id", ondelete="CASCADE"),
+            primary_key=True,
+        ),
+    )
+
+
 class Camera(SQLModel, table=True):
+    __table_args__ = (
+        CheckConstraint(
+            "staffing_max_agents IS NULL OR staffing_max_agents BETWEEN 1 AND 500",
+            name="ck_camera_staffing_max_agents",
+        ),
+        CheckConstraint(
+            "staffing_min_agents IS NULL OR staffing_min_agents BETWEEN 1 AND 500",
+            name="ck_camera_staffing_min_agents",
+        ),
+        CheckConstraint(
+            "staffing_min_agents IS NULL OR staffing_max_agents IS NULL "
+            "OR staffing_min_agents <= staffing_max_agents",
+            name="ck_camera_staffing_min_le_max",
+        ),
+        CheckConstraint(
+            "staffing_tolerance_s BETWEEN 30 AND 28800",
+            name="ck_camera_staffing_tolerance",
+        ),
+    )
+
     id: Optional[int] = Field(default=None, primary_key=True)
     cam_name: str = Field(..., max_length=50)
-    rtsp_url: str
+    # Nullable : une caméra HikCentral n'a pas d'URL statique (résolue à la volée
+    # via previewURLs/rtsp_s). Les caméras RTSP manuelles la renseignent toujours.
+    rtsp_url: Optional[str] = Field(default=None)
     location: Optional[str] = Field(default=None, max_length=100)
     is_active: bool = Field(default=True)
+
+    # ── Source du flux ────────────────────────────────────────────────────────
+    # "rtsp" = caméra RTSP directe (saisie manuelle) ; "hikcentral" = importée du
+    # catalogue HikCentral (flux résolu à la demande). Le catalogue est importé
+    # NON traité (is_active=False) : une caméra devient traitée quand on la configure.
+    source_type: str = Field(default="rtsp", max_length=20)
+    hik_index_code: Optional[str] = Field(default=None, index=True, max_length=64)
+    hik_status: Optional[int] = Field(default=None)  # 1=en ligne, 2=hors-ligne (HikCentral)
+
+    # ── Métadonnées géospatiales (cartographie OpenStreetMap / Leaflet) ───────
+    # Nullable : une caméra non géolocalisée n'apparaît simplement pas sur la carte.
+    latitude: Optional[float] = Field(default=None)
+    longitude: Optional[float] = Field(default=None)
+    # Cap boussole 0–360° de l'objectif : sert à dessiner le cône de champ de
+    # vision (field-of-view) sur la carte. Défaut 0.0 (plein nord).
+    bearing: Optional[float] = Field(default=0.0)
+
+    # ── Effectif agents visible par cette caméra ─────────────────────────────
+    # Le comptage ne porte pas sur toute l'image (des clients pourraient y être
+    # présents), mais sur l'UNION des zones `presence` actives de la caméra.
+    # max = effectif nominal/capacité couverte ; min = seuil opérationnel sous
+    # lequel un épisode STAFFING_LOW est ouvert pendant les heures du régime.
+    staffing_max_agents: Optional[int] = Field(default=None)
+    staffing_min_agents: Optional[int] = Field(default=None)
+    staffing_tolerance_s: int = Field(default=300)
+    staffing_work_schedule_id: Optional[int] = Field(
+        default=None,
+        sa_column=Column(
+            Integer,
+            ForeignKey("work_schedule.id", ondelete="SET NULL"),
+            nullable=True,
+            index=True,
+        ),
+    )
+
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    # ── Appartenance aux groupes (N↔N) ────────────────────────────────────────
+    groups: List["CameraGroup"] = Relationship(
+        back_populates="cameras",
+        link_model=CameraGroupLink,
+    )
