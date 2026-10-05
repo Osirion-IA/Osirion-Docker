@@ -26,6 +26,7 @@ Robustesse du comptage (les compteurs sont la sortie « produit » du système) 
 """
 import math
 import threading
+import os
 import time
 from collections import deque
 from datetime import datetime
@@ -56,6 +57,16 @@ class EventEngine:
         self.zones: List[Dict] = []        # zones ANALYTIQUES (hors exclusion)
         self.lines: List[Dict] = []
         self._ignore_polygons: List[List] = []   # polygones des zones d'exclusion actives
+        # Enveloppe d'INTÉRÊT : rectangles normalisés (x0,y0,x1,y1) couvrant les
+        # zones et les lignes actives, dilatés d'une marge. Sert à écarter du
+        # tracker les détections qui ne concerneront jamais un comptage.
+        self._interest_boxes: List[tuple] = []
+        # Marge de dilatation, en fraction de l'image. 0 = filtre désactivé.
+        # Généreuse par défaut : rater une vraie personne coûte bien plus cher
+        # que suivre un passant de trop.
+        self._interest_margin = max(0.0, float(
+            os.getenv("TRACK_ZONE_GATE_MARGIN", "0.08") or 0.0
+        ))
 
         self._refresh_interval = max(5, int(getattr(config, "ZONES_REFRESH_SECONDS", 30)))
         self._crowd_min_s = float(getattr(config, "CROWD_MIN_SECONDS", 3.0))
@@ -346,14 +357,74 @@ class EventEngine:
                 self._reconcile_post_states(monitored_post_ids, time.time())
                 self._ignore_polygons = ignore_polygons
                 self.zones = zones
+                self._interest_boxes = self._build_interest_boxes(zones, self.lines)
 
             lignes_recues = fetch_lines(self.camera_id)
             if lignes_recues is not None:
                 self.lines = [ln for ln in lignes_recues if ln.get("is_active", True)]
+                # Les lignes arrivent après les zones : on reconstruit l'enveloppe
+                # pour qu'elle les englobe aussi.
+                self._interest_boxes = self._build_interest_boxes(self.zones, self.lines)
         except Exception as e:
             logger.debug(f"[event-engine cam={self.camera_id}] reload KO : {e}")
 
     # ── Filtrage amont (appelé par le thread caméra, avant le tracking) ─────
+    def _build_interest_boxes(self, zones: List, lines: List) -> List[tuple]:
+        """Rectangles normalisés couvrant zones et lignes, dilatés de la marge.
+
+        On prend la BOÎTE ENGLOBANTE de chaque polygone, pas le polygone lui-même :
+        c'est volontairement permissif. Le but n'est pas de décider qui compte —
+        l'Event Engine le fait ensuite au point au sol — mais d'écarter ce qui ne
+        pourra jamais compter, par exemple un passant à l'autre bout du champ.
+        """
+        m = self._interest_margin
+        if m <= 0:
+            return []                       # filtre désactivé
+        boxes: List[tuple] = []
+        for z in zones or []:
+            poly = z.get("polygon") or []
+            if len(poly) < 3:
+                continue
+            xs = [float(pt[0]) for pt in poly]
+            ys = [float(pt[1]) for pt in poly]
+            boxes.append((min(xs) - m, min(ys) - m, max(xs) + m, max(ys) + m))
+        for ln in lines or []:
+            a, b = ln.get("point_a") or [], ln.get("point_b") or []
+            if len(a) < 2 or len(b) < 2:
+                continue
+            # Une ligne se franchit : les gens arrivent DES DEUX CÔTÉS. On double
+            # la marge, sans quoi on perdrait l'approche et donc le comptage.
+            lm = m * 2
+            boxes.append((min(a[0], b[0]) - lm, min(a[1], b[1]) - lm,
+                          max(a[0], b[0]) + lm, max(a[1], b[1]) + lm))
+        return boxes
+
+    def filter_outside_interest(self, boxes: List, frame_w: int, frame_h: int) -> List:
+        """Retire les détections hors de toute zone ou ligne configurée.
+
+        Appelé AVANT le tracker : une personne qui traverse le champ sans jamais
+        approcher d'une zone ne devient pas un track. L'association OC-SORT est
+        quadratique — mesuré sur ce parc : 31 ms pour 5 personnes, 117 ms pour 15,
+        853 ms pour 60, quand la passe YOLO en coûte 360. Chaque track évité
+        rapporte plus que le précédent.
+
+        Garde-fou : SANS enveloppe (filtre désactivé, ou caméra sans aucune zone
+        ni ligne), on ne filtre rien. Il vaut mieux suivre tout le monde que
+        rendre une caméra aveugle sur une configuration incomplète.
+        """
+        envs = self._interest_boxes             # référence locale (swap atomique)
+        if not envs or not boxes or not frame_w or not frame_h:
+            return boxes
+        kept = []
+        for b in boxes:
+            fx = ((b[0] + b[2]) / 2.0) / frame_w
+            fy = b[3] / frame_h                 # point au sol, comme filter_ignored
+            for (x0, y0, x1, y1) in envs:
+                if x0 <= fx <= x1 and y0 <= fy <= y1:
+                    kept.append(b)
+                    break
+        return kept
+
     def filter_ignored(self, boxes: List, frame_w: int, frame_h: int) -> List:
         """Retire les détections dont le point au sol tombe dans une zone d'exclusion.
 

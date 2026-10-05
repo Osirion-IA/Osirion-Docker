@@ -240,6 +240,12 @@ class TrackingProcessor:
                     #    qu'elles ne créent jamais de track ni de comptage. ────────
                     fh, fw = frame.shape[:2]
                     boxes = self.event_engine.filter_ignored(boxes, fw, fh)
+                    # ── Portillon d'intérêt : ce qui ne pourra jamais compter
+                    #    n'entre pas dans le tracker. L'association OC-SORT est
+                    #    quadratique (31 ms à 5 personnes, 853 ms à 60, contre
+                    #    360 ms pour la passe YOLO) : écarter les passants hors
+                    #    zone est le gain le plus direct sur le temps par image.
+                    boxes = self.event_engine.filter_outside_interest(boxes, fw, fh)
 
                     # ── Tracking (OC-SORT) → identifiants anonymes persistants ───
                     img_info = [fh, fw]

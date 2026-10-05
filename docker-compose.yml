@@ -231,7 +231,15 @@ services:
       # Plancher de confiance envoyé AU TRACKER (récupération BYTE des personnes
       # occluses) — bien plus bas que la confiance de détection ci-dessus. Réduit le
       # sous-comptage des files (une personne masquée 1–2 s n'est plus perdue).
-      PERSON_TRACK_MIN_CONFIDENCE: ${PERSON_TRACK_MIN_CONFIDENCE:-0.1}
+      # 0.1 était un plancher très permissif, posé au Palier 1 pour récupérer les
+      # personnes occluses. Il alimentait le tracker en boîtes faibles : coût
+      # (association quadratique) ET faux positifs. 0.2 conserve la récupération
+      # d'occlusion en coupant le bruit le plus bas.
+      PERSON_TRACK_MIN_CONFIDENCE: ${PERSON_TRACK_MIN_CONFIDENCE:-0.2}
+      # Portillon d'intérêt : marge (fraction d'image) autour des zones et des
+      # lignes. Une détection dont le point au sol tombe hors de toute enveloppe
+      # n'entre pas dans le tracker. 0 = désactivé.
+      TRACK_ZONE_GATE_MARGIN: ${TRACK_ZONE_GATE_MARGIN:-0.08}
       # Résolution d'inférence YOLO (côté long). Vide/0 = défaut 640 ; 960/1280
       # améliorent le recall des personnes petites/lointaines (fond de file) au prix
       # d'un coût GPU ~quadratique. Baisser si le GPU sature (↔ nombre de caméras).
