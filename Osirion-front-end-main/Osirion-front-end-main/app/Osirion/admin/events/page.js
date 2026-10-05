@@ -86,7 +86,7 @@ export default function EventsPage() {
       <div className="p-6">
         <PageHeader
           title="Événements"
-          subtitle="Journal d’activité anonyme"
+          subtitle="Journal d’activité"
           actions={<RefreshButton onClick={load} spinning={loading} />}
         />
 

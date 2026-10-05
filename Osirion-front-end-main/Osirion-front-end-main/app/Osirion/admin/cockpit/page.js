@@ -152,7 +152,7 @@ export default function CockpitPage() {
             <div className="flex items-start justify-between gap-4">
               <div>
                 <h3 className="text-[16px] font-semibold text-os-t1">Mettez votre site en service</h3>
-                <p className="text-[13px] text-os-t3 mt-0.5">4 étapes pour transformer vos caméras en capteurs de flux anonymes.</p>
+                <p className="text-[13px] text-os-t3 mt-0.5">4 étapes pour transformer vos caméras en capteurs de flux.</p>
               </div>
               <button onClick={dismissOnb} className="text-os-t4 hover:text-os-t1 p-1" aria-label="Masquer"><X className="h-4 w-4" /></button>
             </div>

@@ -105,7 +105,7 @@ export default function LoginPage() {
           </form>
 
           {/* <p className="text-[11px] text-[#b3babb] mt-10">
-            © {new Date().getFullYear()} Qwiper Sentinel — Système on-premise · 100 % anonyme
+            © {new Date().getFullYear()} Qwiper Sentinel — Système on-premise
           </p> */}
         </div>
       </div>

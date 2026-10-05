@@ -281,7 +281,7 @@ export default function AnalyticsPage() {
       <div className="p-6">
         <PageHeader
           title="Analytique"
-          subtitle="Tendances de flux anonymes · aide à la décision"
+          subtitle="Tendances de flux · aide à la décision"
           actions={
             <div className="flex items-center gap-2">
               <button onClick={exportCsv} disabled={!foot?.series?.length}

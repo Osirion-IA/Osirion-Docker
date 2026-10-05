@@ -37,7 +37,7 @@ export default function LiveWallPage() {
         <div className="flex items-end justify-between gap-4 mb-5">
           <div>
             <h1 className="text-[22px] font-bold text-os-t1">Mur de caméras</h1>
-            <p className="text-[13px] text-os-t3 mt-0.5">Flux WebRTC · overlay de détection anonyme temps réel</p>
+            <p className="text-[13px] text-os-t3 mt-0.5">Flux vidéo en direct · overlay temps réel</p>
           </div>
           <div className="flex items-center gap-3">
             <span className="text-[12px] text-os-t3">Colonnes</span>

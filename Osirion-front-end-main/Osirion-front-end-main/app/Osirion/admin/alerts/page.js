@@ -233,7 +233,7 @@ export default function AlertsPage() {
                     // eslint-disable-next-line @next/next/no-img-element
                     <img src={snap(selected.snapshot_url)} alt="" className="h-full w-full object-cover" />
                   ) : (
-                    <span className="os-num">SNAPSHOT · anonymisé · {timeOnly(selected.created_at, { seconds: false })}</span>
+                    <span className="os-num">SNAPSHOT · {timeOnly(selected.created_at, { seconds: false })}</span>
                   )}
                   <span className="absolute bottom-2 right-2 os-num text-[11px] bg-black/50 text-white px-2 py-1 rounded-os">{selected.camera_name || `Caméra ${selected.camera_id ?? "?"}`}</span>
                 </div>

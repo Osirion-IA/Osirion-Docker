@@ -398,7 +398,7 @@ export default function ZonesPage() {
               )}
             </Card>
             {/* <div className="rounded-os border border-os-border bg-os-card p-3.5">
-              <p className="text-[12px] text-os-t3">ⓘ Les zones ne suivent aucun individu. Elles comptent des présences anonymes dans un périmètre.</p>
+              <p className="text-[12px] text-os-t3">ⓘ Les zones ne suivent aucun individu. Elles comptent des présences dans un périmètre.</p>
             </div> */}
           </div>
         </div>

@@ -9,8 +9,8 @@ import { sora, plexMono } from "./fonts";
 // fonts.googleapis.com était injoignable. Le local reste hors-ligne.
 
 export const metadata = {
-  title: "Qwiper Sentinel — Supervision de flux anonymes",
-  description: "Plateforme d'intelligence opérationnelle vidéo — 100 % anonyme.",
+  title: "Qwiper Sentinel — Supervision vidéo opérationnelle",
+  description: "Plateforme d'intelligence opérationnelle vidéo.",
 };
 
 export default function RootLayout({ children }) {

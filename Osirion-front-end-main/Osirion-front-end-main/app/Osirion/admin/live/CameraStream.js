@@ -301,7 +301,7 @@ export default function CameraStream({ cameraId, streamPath, onLatencyUpdate, sh
                     {status === 'connecting' ? (
                         <>
                             <div className="h-9 w-9 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
-                            <span className="text-white/50 text-sm font-medium">Connexion vidéo (WebRTC)…</span>
+                            <span className="text-white/50 text-sm font-medium">Connexion vidéo…</span>
                         </>
                     ) : (
                         <>

@@ -58,7 +58,7 @@ function exportPDF(rows, meta) {
     h1{font-size:20px;margin:0 0 4px;} .meta{font-size:12px;color:#555;} .brand{font-size:13px;font-weight:bold;letter-spacing:2px;color:#1c2126;}
     table{width:100%;border-collapse:collapse;font-size:11px;} th{background:#1c2126;color:#fff;text-align:left;padding:6px 8px;} td{border-bottom:1px solid #e5e7eb;padding:5px 8px;}
     tr:nth-child(even) td{background:#f8fafc;} @media print{body{margin:12mm;} @page{size:A4 landscape;}}
-    </style></head><body><header><div><h1>Journal d'événements — flux anonymes</h1><div class="meta">Généré le ${escH(meta.generatedAt)}</div><div class="meta">Filtres : ${escH(meta.filters)}</div><div class="meta"><b>${meta.count}</b> événement(s)</div></div><div class="brand">QWIPER SENTINEL</div></header><table><thead>${thead}</thead><tbody>${tbody}</tbody></table></body></html>`);
+    </style></head><body><header><div><h1>Journal d'événements</h1><div class="meta">Généré le ${escH(meta.generatedAt)}</div><div class="meta">Filtres : ${escH(meta.filters)}</div><div class="meta"><b>${meta.count}</b> événement(s)</div></div><div class="brand">QWIPER SENTINEL</div></header><table><thead>${thead}</thead><tbody>${tbody}</tbody></table></body></html>`);
   w.document.close();
   setTimeout(() => { try { w.focus(); w.print(); } catch { /* */ } }, 300);
 }

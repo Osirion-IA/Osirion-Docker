@@ -345,7 +345,7 @@ function CalibrationPanel({ rows, cameraId, onCameraChange }) {
           })}
           {!liveZones.length && <div className="p-5 text-[11px] text-os-t3">Les paramètres de calibration apparaîtront dès la première décision du moteur.</div>}
           <div className="p-4 bg-os-card-2">
-            <p className="text-[10px] text-os-t3 leading-relaxed">Le contour doit couvrir le corps ou les pieds de l&apos;agent sans englober la zone de passage. Une boîte cyan est une détection anonyme ; le contour vert signifie une présence confirmée.</p>
+            <p className="text-[10px] text-os-t3 leading-relaxed">Le contour doit couvrir le corps ou les pieds de l&apos;agent sans englober la zone de passage. Une boîte cyan est une détection ; le contour vert signifie une présence confirmée.</p>
             <Link href="/Osirion/admin/zones" className="inline-flex mt-3 text-[11px] font-semibold text-os-blue hover:underline">Ajuster le tracé ou le régime horaire</Link>
           </div>
         </div>

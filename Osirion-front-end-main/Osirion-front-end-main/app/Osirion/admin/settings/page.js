@@ -305,7 +305,7 @@ export default function SettingsPage() {
               <div><h3 className="text-[15px] font-semibold text-os-t1">Détection</h3><p className="text-[13px] text-os-t3">Moteur Core</p></div>
             </div>
             <p className="text-[13px] text-os-t3 rounded-os border border-os-border bg-os-card-2 p-4">
-              La détection de personnes (anonyme) est toujours active sur les caméras. Les règles opérationnelles (attroupement, intrusion horaire…) se configurent dans « Règles & alertes ».
+              La détection de personnes est toujours active sur les caméras. Les règles opérationnelles (attroupement, intrusion horaire…) se configurent dans « Règles & alertes ».
             </p>
           </Card>
         )}
