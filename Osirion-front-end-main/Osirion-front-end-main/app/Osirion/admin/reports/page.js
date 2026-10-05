@@ -9,7 +9,7 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { FileText, BarChart3 } from "lucide-react";
 import OsShell from "../_osirion/OsShell";
-import { PageHeader, Card, Segmented, EmptyState } from "../_osirion/ui";
+import { PageHeader, Card, Segmented, EmptyState, SkeletonCard } from "../_osirion/ui";
 import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
 import { fmtWait, fmtDuration } from "../../../lib/format";
 
@@ -175,7 +175,7 @@ export default function ReportsPage() {
         </Card>
 
         {loading ? (
-          <EmptyState icon={BarChart3}>Calcul de la synthèse…</EmptyState>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">{[0,1,2,3].map((i) => <SkeletonCard key={i} rows={4} />)}</div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {sections.filter(hasData).map((sec) => (

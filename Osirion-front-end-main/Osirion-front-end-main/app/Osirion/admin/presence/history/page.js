@@ -7,7 +7,7 @@ import {
   Image as ImageIcon, Search, ShieldAlert, UserMinus, UsersRound,
 } from "lucide-react";
 import OsShell from "../../_osirion/OsShell";
-import { Card, EmptyState, PageHeader, RefreshButton, Segmented } from "../../_osirion/ui";
+import { Card, EmptyState, PageHeader, RefreshButton, Segmented, SkeletonRows } from "../../_osirion/ui";
 import { fetchWithRefresh } from "../../../../lib/fetchWithRefresh";
 import { parseUtc, timeOnly } from "../../../../lib/format";
 
@@ -202,7 +202,7 @@ function HistoryContent() {
         {error && <p className="mb-4 rounded-os border border-os-red/30 bg-os-red/5 px-4 py-3 text-[12px] text-os-red">{error}</p>}
         <div className="grid grid-cols-1 xl:grid-cols-[1.05fr_0.95fr] gap-4 items-start">
           <Card className="overflow-hidden">
-            {loading ? <EmptyState icon={Clock3}>Chargement de l’historique…</EmptyState> : !groups.length ? <EmptyState icon={Clock3}>Aucun événement ne correspond à ces filtres.</EmptyState> : groups.map((group) => (
+            {loading ? <div className="p-5"><SkeletonRows count={8} /></div> : !groups.length ? <EmptyState icon={Clock3}>Aucun événement ne correspond à ces filtres.</EmptyState> : groups.map((group) => (
               <section key={group.key}>
                 <div className="sticky top-0 z-10 border-y border-os-border bg-os-card-2/95 px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-os-t3 first:border-t-0">{group.label}</div>
                 <div className="divide-y divide-os-border">{group.events.map((event) => {

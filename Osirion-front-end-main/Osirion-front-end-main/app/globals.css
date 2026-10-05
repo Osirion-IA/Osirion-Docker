@@ -166,5 +166,25 @@ body {
 .os-anim-spin    { animation: os-spin 1s linear infinite; }
 .os-anim-toastin { animation: os-toastin .28s cubic-bezier(.2,.8,.2,1) both; }
 
+/* ── Squelettes de chargement ────────────────────────────────────────────────
+   Un bloc animé d'un reflet qui balaie la surface. Préféré au simple spinner :
+   il occupe la place du contenu à venir, donc la mise en page ne saute pas à
+   l'arrivée des données. Base et reflet viennent des jetons → les deux thèmes
+   suivent sans règle dédiée. */
+@keyframes os-shimmer { to { background-position-x: -200%; } }
+.os-skeleton {
+  background: linear-gradient(90deg,
+    var(--os-border-2) 0%, var(--os-card-2) 50%, var(--os-border-2) 100%);
+  background-size: 200% 100%;
+  animation: os-shimmer 1.4s ease-in-out infinite;
+  border-radius: 6px;
+}
+/* Réglage système « réduire les animations » : on garde le gris, on coupe le
+   mouvement — un balayage perpétuel est pénible pour qui y est sensible. */
+@media (prefers-reduced-motion: reduce) {
+  .os-skeleton { animation: none; }
+  .os-anim-spin, .os-anim-pulse, .os-anim-blink { animation: none; }
+}
+
 /* Chiffres mono tabulaires (compteurs alignés, pas de saut de largeur). */
 .os-num { font-family: var(--font-plex-mono), ui-monospace, monospace; font-variant-numeric: tabular-nums; }

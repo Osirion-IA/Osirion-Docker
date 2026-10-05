@@ -11,7 +11,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { TrendingUp, Clock, CalendarDays, Sparkles, ArrowUp, ArrowDown, Download, MapPin, ShieldAlert } from "lucide-react";
 import OsShell from "../_osirion/OsShell";
-import { PageHeader, Card, Segmented } from "../_osirion/ui";
+import { PageHeader, Card, Segmented, SkeletonKpis } from "../_osirion/ui";
 import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
 import { fmtWait, fmtDuration } from "../../../lib/format";
 
@@ -315,6 +315,7 @@ export default function AnalyticsPage() {
         {/* On met en tête ce qui déclenche une décision : l'attente ressentie par
             les clients et la tendance RELATIVE (robustes au sous-comptage). Le total
             absolu de fréquentation est relégué en dernier, cadré par son évolution. */}
+        {loading ? <SkeletonKpis count={4} /> : (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-5">
           <Insight label="Attente des clients" icon={Clock}
             value={loading ? "—" : agencies.length ? fmtDuration(agencies[0].wait_avg_s, { compact: true }) : "—"}
@@ -334,7 +335,7 @@ export default function AnalyticsPage() {
               hint={deltaEntries != null ? `${deltaEntries >= 0 ? "+" : ""}${deltaEntries}% vs période précédente` : "entrées comptées"}
               trend={deltaEntries} />
           )}
-        </div>
+        </div>)}
 
         <div className="mb-4"><Segmented value={tab} onChange={setTab} options={TABS} /></div>
 

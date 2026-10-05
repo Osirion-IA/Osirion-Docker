@@ -68,3 +68,66 @@ export function EmptyState({ icon: Icon, children }) {
     </div>
   );
 }
+
+// ── Chargement ──────────────────────────────────────────────────────────────
+// Neuf écrans affichaient neuf choses pendant le chargement : « — », un
+// EmptyState « Chargement… », un spinner maison, ou rien. Ces primitives
+// donnent une réponse unique, et surtout une réponse qui RÉSERVE LA PLACE :
+// le contenu ne pousse plus la page quand il arrive.
+
+/** Bloc gris animé. `w`/`h` acceptent n'importe quelle valeur CSS. */
+export function Skeleton({ w = "100%", h = 14, className = "" }) {
+  return <div className={`os-skeleton ${className}`} style={{ width: w, height: h }} />;
+}
+
+/** Rangée de tuiles d'indicateurs — la structure la plus fréquente en tête d'écran. */
+export function SkeletonKpis({ count = 4 }) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-5">
+      {Array.from({ length: count }, (_, i) => (
+        <div key={i} className="rounded-os-lg border border-os-border bg-os-card p-5">
+          <Skeleton w="45%" h={11} />
+          <div className="mt-3"><Skeleton w="35%" h={26} /></div>
+          <div className="mt-3"><Skeleton w="70%" h={10} /></div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Lignes d'une liste ou d'un tableau. */
+export function SkeletonRows({ count = 6, className = "" }) {
+  return (
+    <div className={`space-y-3 ${className}`}>
+      {Array.from({ length: count }, (_, i) => (
+        <div key={i} className="flex items-center gap-3">
+          <Skeleton w={`${55 + ((i * 13) % 30)}%`} h={13} />
+          <div className="ml-auto"><Skeleton w={60} h={13} /></div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Carte entière en attente (titre + corps). */
+export function SkeletonCard({ rows = 4, className = "" }) {
+  return (
+    <div className={`rounded-os-lg border border-os-border bg-os-card p-5 ${className}`}>
+      <Skeleton w="30%" h={15} />
+      <div className="mt-4"><SkeletonRows count={rows} /></div>
+    </div>
+  );
+}
+
+/**
+ * Indicateur discret pour un rafraîchissement EN PLACE — quand les données
+ * sont déjà à l'écran et qu'on ne veut pas les remplacer par des squelettes.
+ */
+export function InlineSpinner({ label = "Chargement…" }) {
+  return (
+    <span className="inline-flex items-center gap-2 text-[12px] text-os-t3">
+      <span className="os-anim-spin h-3.5 w-3.5 rounded-full border-2 border-os-border-2 border-t-os-primary" />
+      {label}
+    </span>
+  );
+}

@@ -7,7 +7,7 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { ListOrdered, FileSpreadsheet, FileText, FileType2 } from "lucide-react";
 import OsShell from "../_osirion/OsShell";
-import { PageHeader, Card, RefreshButton, EmptyState } from "../_osirion/ui";
+import { PageHeader, Card, RefreshButton, EmptyState, SkeletonRows } from "../_osirion/ui";
 import { useAuth } from "../AuthContext";
 import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
 import { exportEvents } from "../../../lib/eventExport";
@@ -117,7 +117,7 @@ export default function EventsPage() {
 
         <Card className="overflow-hidden">
           {loading ? (
-            <EmptyState icon={ListOrdered}>Chargement…</EmptyState>
+            <div className="p-5"><SkeletonRows count={10} /></div>
           ) : filtered.length === 0 ? (
             <EmptyState icon={ListOrdered}>
               {events.length === 0 ? "Aucun événement enregistré." : "Aucun événement ne correspond aux filtres."}

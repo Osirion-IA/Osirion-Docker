@@ -11,6 +11,7 @@ import OsShell from "../_osirion/OsShell";
 import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
 import { useAuth } from "../AuthContext";
 import { relative, timeOnly } from "../../../lib/format";
+import { SkeletonRows } from "../_osirion/ui";
 
 const STATUS_META = {
   new: { label: "Nouvelle", color: "var(--os-red)" },
@@ -167,7 +168,7 @@ export default function AlertsPage() {
         <div className="grid grid-cols-1 xl:grid-cols-[1.15fr_0.85fr] gap-4">
           <div className="space-y-2.5">
             {loading ? (
-              <div className="rounded-os-lg border border-os-border bg-os-card py-14 text-center text-[13px] text-os-t3">Chargement…</div>
+              <div className="space-y-2.5">{[0,1,2,3,4].map((i) => <div key={i} className="rounded-os-lg border border-os-border bg-os-card p-4"><SkeletonRows count={2} /></div>)}</div>
             ) : alerts.length === 0 ? (
               <div className="rounded-os-lg border border-os-border bg-os-card py-14 text-center">
                 <Inbox className="h-9 w-9 mx-auto mb-3 text-os-t4" strokeWidth={1.6} />

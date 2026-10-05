@@ -7,7 +7,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { RefreshCw, Trash2, ShieldCheck } from "lucide-react";
 import OsShell from "../_osirion/OsShell";
-import { PageHeader, Card, RefreshButton, EmptyState } from "../_osirion/ui";
+import { PageHeader, Card, RefreshButton, EmptyState, SkeletonRows } from "../_osirion/ui";
 import { useAuth } from "../AuthContext";
 import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
 
@@ -91,7 +91,7 @@ export default function AuditPage() {
             <ShieldCheck className="h-4 w-4 text-os-t3" />
             <h3 className="text-[14px] font-semibold text-os-t1">Journal d&apos;audit</h3>
           </div>
-          {loading ? <EmptyState icon={RefreshCw}>Chargement…</EmptyState>
+          {loading ? <div className="p-5"><SkeletonRows count={8} /></div>
             : logs.length === 0 ? <EmptyState icon={ShieldCheck}>Aucune entrée d&apos;audit.</EmptyState>
             : (
               <div className="overflow-x-auto">
