@@ -13,19 +13,12 @@ import { TrendingUp, Clock, CalendarDays, Sparkles, ArrowUp, ArrowDown, Download
 import OsShell from "../_osirion/OsShell";
 import { PageHeader, Card, Segmented } from "../_osirion/ui";
 import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
+import { fmtWait, fmtDuration } from "../../../lib/format";
 
 const WD = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
 const WD_LONG = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"];
 const BIZ = Array.from({ length: 17 }, (_, i) => i + 6); // 6h..22h
 const hLabel = (h) => `${h}h`;
-const fmtWait = (s) => (!s ? "0 s" : s < 60 ? `${Math.round(s)} s` : `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`);
-const fmtDuration = (s) => {
-  s = Math.max(0, Math.round(Number(s) || 0));
-  if (s < 60) return `${s} s`;
-  if (s < 3600) return `${Math.floor(s / 60)} min ${s % 60 ? `${s % 60} s` : ""}`.trim();
-  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
-  return `${h} h${m ? ` ${m} min` : ""}`;
-};
 const dLabel = (iso) => { const [, m, d] = iso.split("-"); return `${d}/${m}`; };
 const PERIODS = [{ value: 7, label: "7j" }, { value: 30, label: "30j" }, { value: 90, label: "90j" }];
 const TABS = [
@@ -261,12 +254,11 @@ export default function AnalyticsPage() {
   const qPeak = qa.peak_hour;
   const hasQueues = !!qa.has_queues;
   const agencies = qperf?.agencies || [];
-  const fmtWaitShort = (s) => (!s ? "0 s" : s < 60 ? `${Math.round(s)} s` : `${Math.floor(s / 60)} min`);
 
   const recos = [];
   if (hasQueues && qPeak != null) recos.push(`Affluence maximale des files vers ${qPeak}h–${qPeak + 1}h (occupation moyenne ${qa.peak_avg_occupancy}). Renforcez les guichets sur ce créneau.`);
   if (hasQueues && qa.quietest_hour != null) recos.push(`Files les plus calmes vers ${qa.quietest_hour}h — fenêtre idéale pour la maintenance ou les pauses.`);
-  if (agencies.length) { const w = agencies[0]; recos.push(`Agence où l'on attend le plus : ${w.site} — en moyenne ${fmtWaitShort(w.wait_avg_s)}, et 9 clients sur 10 en dessous de ${fmtWaitShort(w.wait_p90_s)}.`); }
+  if (agencies.length) { const w = agencies[0]; recos.push(`Agence où l'on attend le plus : ${w.site} — en moyenne ${fmtDuration(w.wait_avg_s, { compact: true })}, et 9 clients sur 10 en dessous de ${fmtDuration(w.wait_p90_s, { compact: true })}.`); }
   if (hasData && today.vs_avg_pct != null) recos.push(today.vs_avg_pct >= 0
     ? `Aujourd'hui +${today.vs_avg_pct}% de passages vs d'habitude — anticipez une journée chargée.`
     : `Aujourd'hui ${today.vs_avg_pct}% vs d'habitude — plus calme que la normale.`);
@@ -325,8 +317,8 @@ export default function AnalyticsPage() {
             absolu de fréquentation est relégué en dernier, cadré par son évolution. */}
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-5">
           <Insight label="Attente des clients" icon={Clock}
-            value={loading ? "—" : agencies.length ? fmtWaitShort(agencies[0].wait_avg_s) : "—"}
-            hint={agencies.length ? `${agencies[0].site} · 9 clients sur 10 attendent moins de ${fmtWaitShort(agencies[0].wait_p90_s)}` : "aucune file"} />
+            value={loading ? "—" : agencies.length ? fmtDuration(agencies[0].wait_avg_s, { compact: true }) : "—"}
+            hint={agencies.length ? `${agencies[0].site} · 9 clients sur 10 attendent moins de ${fmtDuration(agencies[0].wait_p90_s, { compact: true })}` : "aucune file"} />
           {hasData && (
             <Insight label="Par rapport à d'habitude" icon={TrendingUp}
               value={loading ? "—" : (today.vs_avg_pct != null ? `${today.vs_avg_pct >= 0 ? "+" : ""}${today.vs_avg_pct}%` : (today.so_far ?? 0))}

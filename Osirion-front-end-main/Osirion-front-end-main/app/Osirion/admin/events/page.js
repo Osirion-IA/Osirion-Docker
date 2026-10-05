@@ -11,6 +11,7 @@ import { PageHeader, Card, RefreshButton, EmptyState } from "../_osirion/ui";
 import { useAuth } from "../AuthContext";
 import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
 import { exportEvents } from "../../../lib/eventExport";
+import { dateTime } from "../../../lib/format";
 
 // Type d'événement → libellé FR + couleur du point (rouge = anomalie uniquement).
 const TYPE_META = {
@@ -27,11 +28,6 @@ const TYPE_META = {
   DETECTION: { label: "Détection", color: "var(--os-t4)" },
 };
 
-function fmtTime(ts) {
-  const d = new Date(ts);
-  if (isNaN(d)) return "—";
-  return d.toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
-}
 
 export default function EventsPage() {
   const [events, setEvents] = useState([]);
@@ -150,7 +146,7 @@ export default function EventsPage() {
                       : m.dwell_s != null ? `${Math.round(m.dwell_s)} s` : "—";
                     return (
                       <tr key={e.id} className="border-b border-os-border last:border-0 hover:bg-black/[0.015] dark:hover:bg-white/[0.02]">
-                        <td className="px-4 py-3 os-num text-os-t2 whitespace-nowrap">{fmtTime(e.timestamp)}</td>
+                        <td className="px-4 py-3 os-num text-os-t2 whitespace-nowrap">{dateTime(e.timestamp, { seconds: true })}</td>
                         <td className="px-4 py-3">
                           <span className="inline-flex items-center gap-1.5 text-os-t1 font-medium">
                             <span className="h-2 w-2 rounded-full" style={{ background: meta.color }} />{meta.label}

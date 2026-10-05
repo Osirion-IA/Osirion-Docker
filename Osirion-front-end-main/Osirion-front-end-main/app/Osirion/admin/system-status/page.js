@@ -13,6 +13,7 @@ import OsShell from "../_osirion/OsShell";
 import { PageHeader, Card } from "../_osirion/ui";
 import { useAuth } from "../AuthContext";
 import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
+import { relative, timeOnly } from "../../../lib/format";
 
 const ROLE_META = {
   admin: { label: "Administrateur", color: "var(--os-red)" },
@@ -25,16 +26,6 @@ const fmtBytes = (b) => {
   while (s >= 1024 && i < u.length - 1) { s /= 1024; i++; }
   return `${s.toFixed(i === 0 ? 0 : 1)} ${u[i]}`;
 };
-function relTime(ts) {
-  const d = new Date(ts && !String(ts).endsWith("Z") ? `${ts}Z` : ts);
-  if (isNaN(d)) return "—";
-  const m = Math.floor((Date.now() - d.getTime()) / 60000);
-  if (m < 1) return "à l'instant";
-  if (m < 60) return `il y a ${m} min`;
-  if (m < 1440) return `il y a ${Math.floor(m / 60)} h`;
-  return `il y a ${Math.floor(m / 1440)} j`;
-}
-const clock = (ts) => { const d = new Date(ts && !String(ts).endsWith("Z") ? `${ts}Z` : ts); return isNaN(d) ? "—" : d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }); };
 const auditColor = (a) => (/(alerte|acquitt)/i.test(a) ? "var(--os-red)" : /(connexion|login)/i.test(a) ? "var(--os-blue)" : /(gel|erreur|échou)/i.test(a) ? "var(--os-amber)" : "var(--os-t3)");
 
 function Tile({ label, value, hint, icon: Icon, color }) {
@@ -119,7 +110,7 @@ export default function SystemAccessPage() {
                         <p className="text-[12px] text-os-t3 truncate">{u.email}</p>
                       </div>
                       <span className="text-[12px] font-semibold shrink-0" style={{ color: rm.color }}>{rm.label}</span>
-                      <span className="text-[11px] text-os-t4 shrink-0 w-24 text-right">{u.is_active ? relTime(u.last_login) || "—" : "inactif"}</span>
+                      <span className="text-[11px] text-os-t4 shrink-0 w-24 text-right">{u.is_active ? relative(u.last_login) || "—" : "inactif"}</span>
                     </li>
                   );
                 })}
@@ -138,7 +129,7 @@ export default function SystemAccessPage() {
                     <span className="mt-1.5 h-2 w-2 rounded-full shrink-0" style={{ background: auditColor(l.action) }} />
                     <div className="min-w-0">
                       <p className="text-[13px] text-os-t1 leading-snug">{l.action}{l.detail ? ` — ${l.detail}` : ""}</p>
-                      <p className="os-num text-[11px] text-os-t4 mt-0.5">{clock(l.created_at)} · {l.user_email || "Système"}</p>
+                      <p className="os-num text-[11px] text-os-t4 mt-0.5">{timeOnly(l.created_at, { seconds: false })} · {l.user_email || "Système"}</p>
                     </div>
                   </li>
                 ))}

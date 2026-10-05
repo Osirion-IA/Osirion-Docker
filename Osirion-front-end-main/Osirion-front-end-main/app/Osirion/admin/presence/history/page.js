@@ -9,6 +9,7 @@ import {
 import OsShell from "../../_osirion/OsShell";
 import { Card, EmptyState, PageHeader, RefreshButton, Segmented } from "../../_osirion/ui";
 import { fetchWithRefresh } from "../../../../lib/fetchWithRefresh";
+import { parseUtc, timeOnly } from "../../../../lib/format";
 
 const PERIODS = [
   { value: 1, label: "Aujourd’hui" },
@@ -32,22 +33,12 @@ const RESOLUTION_REASONS = {
   monitoring_suspended: "Surveillance suspendue",
 };
 
-function utcDate(value) {
-  if (!value) return null;
-  const raw = String(value);
-  const date = new Date(/[zZ]|[+-]\d\d:\d\d$/.test(raw) ? raw : `${raw}Z`);
-  return Number.isNaN(date.getTime()) ? null : date;
-}
-function time(value) {
-  const date = utcDate(value);
-  return date ? date.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—";
-}
 function dayKey(value) {
-  const date = utcDate(value);
+  const date = parseUtc(value);
   return date ? date.toLocaleDateString("fr-CA") : "unknown";
 }
 function dayLabel(value) {
-  const date = utcDate(value);
+  const date = parseUtc(value);
   if (!date) return "Date inconnue";
   const today = new Date();
   const yesterday = new Date(); yesterday.setDate(today.getDate() - 1);
@@ -100,7 +91,7 @@ function Evidence({ event }) {
       <div className="relative aspect-[16/9] bg-[#12161d] grid place-items-center text-white/25 overflow-hidden">
         {image ? <img src={image} alt={`Preuve ${type.label}`} className="h-full w-full object-cover" /> : <ImageIcon className="h-10 w-10" strokeWidth={1.3} />}
         <span className="absolute left-3 top-3 rounded-os bg-black/70 px-2 py-1 text-[10px] font-semibold text-white">{type.label}</span>
-        <span className="absolute right-3 bottom-3 rounded-os bg-black/70 px-2 py-1 os-num text-[9px] text-white">{time(event.timestamp)}</span>
+        <span className="absolute right-3 bottom-3 rounded-os bg-black/70 px-2 py-1 os-num text-[9px] text-white">{timeOnly(event.timestamp)}</span>
       </div>
       <div className="p-4">
         <p className="text-[14px] font-semibold text-os-t1">{event.camera_nom}</p>
@@ -217,7 +208,7 @@ function HistoryContent() {
                 <div className="divide-y divide-os-border">{group.events.map((event) => {
                   const meta = TYPES[event.event_type] || { label: event.event_type, color: "var(--os-t3)" };
                   const active = selected?.id === event.id;
-                  return <button key={event.id} onClick={() => setSelectedId(event.id)} className={`w-full p-4 text-left flex items-start gap-3 transition-colors ${active ? "bg-os-primary/10" : "hover:bg-black/[0.02]"}`}><span className="mt-1.5 h-2.5 w-2.5 rounded-full shrink-0" style={{ background: meta.color }} /><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="text-[11px] font-semibold" style={{ color: meta.color }}>{meta.label}</p>{event.data_quality === "archived" && <span className="rounded bg-os-amber/10 px-1.5 py-0.5 text-[8px] font-semibold uppercase text-os-amber">archive</span>}{event.snapshot_url && <ImageIcon className="h-3 w-3 text-os-t4" />}</div><p className="mt-0.5 text-[12px] font-semibold text-os-t1 truncate">{event.camera_nom}</p><p className="mt-0.5 text-[10px] text-os-t3 truncate">{eventDescription(event)}{event.meta?.schedule_name ? ` · ${event.meta.schedule_name}` : ""}</p></div><span className="os-num text-[10px] text-os-t4 whitespace-nowrap">{time(event.timestamp)}</span></button>;
+                  return <button key={event.id} onClick={() => setSelectedId(event.id)} className={`w-full p-4 text-left flex items-start gap-3 transition-colors ${active ? "bg-os-primary/10" : "hover:bg-black/[0.02]"}`}><span className="mt-1.5 h-2.5 w-2.5 rounded-full shrink-0" style={{ background: meta.color }} /><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="text-[11px] font-semibold" style={{ color: meta.color }}>{meta.label}</p>{event.data_quality === "archived" && <span className="rounded bg-os-amber/10 px-1.5 py-0.5 text-[8px] font-semibold uppercase text-os-amber">archive</span>}{event.snapshot_url && <ImageIcon className="h-3 w-3 text-os-t4" />}</div><p className="mt-0.5 text-[12px] font-semibold text-os-t1 truncate">{event.camera_nom}</p><p className="mt-0.5 text-[10px] text-os-t3 truncate">{eventDescription(event)}{event.meta?.schedule_name ? ` · ${event.meta.schedule_name}` : ""}</p></div><span className="os-num text-[10px] text-os-t4 whitespace-nowrap">{timeOnly(event.timestamp)}</span></button>;
                 })}</div>
               </section>
             ))}

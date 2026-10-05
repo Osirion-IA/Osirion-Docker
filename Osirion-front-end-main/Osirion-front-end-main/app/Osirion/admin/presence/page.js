@@ -17,6 +17,7 @@ import { Card, EmptyState, RefreshButton, Segmented } from "../_osirion/ui";
 import CameraStream from "../live/CameraStream";
 import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
 import { CORE_URL } from "../../../lib/publicUrls";
+import { parseUtc, dateTime, elapsed } from "../../../lib/format";
 
 const PERIODS = [
   { value: 7, label: "7 jours" },
@@ -47,33 +48,6 @@ function aggregatePresenceState(zones) {
   return priority.find((state) => zones.some((zone) => zone.state === state)) || "initializing";
 }
 
-function utcDate(value) {
-  if (!value) return null;
-  if (typeof value === "number") {
-    const date = new Date(value < 1e12 ? value * 1000 : value);
-    return Number.isNaN(date.getTime()) ? null : date;
-  }
-  const raw = String(value);
-  const date = new Date(/[zZ]|[+-]\d\d:\d\d$/.test(raw) ? raw : `${raw}Z`);
-  return Number.isNaN(date.getTime()) ? null : date;
-}
-function fmtDate(value, seconds = false) {
-  const date = utcDate(value);
-  if (!date) return "—";
-  return date.toLocaleString("fr-FR", {
-    day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit",
-    ...(seconds ? { second: "2-digit" } : {}),
-  });
-}
-function relative(value) {
-  const date = utcDate(value);
-  if (!date) return "—";
-  const elapsed = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000));
-  if (elapsed < 60) return `${elapsed} s`;
-  if (elapsed < 3600) return `${Math.floor(elapsed / 60)} min`;
-  if (elapsed < 86400) return `${Math.floor(elapsed / 3600)} h ${Math.floor((elapsed % 3600) / 60)} min`;
-  return `${Math.floor(elapsed / 86400)} j`;
-}
 function duration(seconds) {
   const value = Math.max(0, Number(seconds) || 0);
   if (value < 60) return `${Math.round(value)} s`;
@@ -452,7 +426,7 @@ function EventEvidence({ event }) {
           <img src={image} alt={`Preuve ${meta.label}`} className="h-full w-full object-cover" />
         ) : <ImageIcon className="h-9 w-9" strokeWidth={1.4} />}
         <span className="absolute left-3 top-3 rounded-os bg-black/65 px-2 py-1 text-[10px] font-semibold text-white">{meta.label}</span>
-        <span className="absolute right-3 bottom-3 rounded-os bg-black/65 px-2 py-1 os-num text-[9px] text-white/85">{fmtDate(event.timestamp, true)}</span>
+        <span className="absolute right-3 bottom-3 rounded-os bg-black/65 px-2 py-1 os-num text-[9px] text-white/85">{dateTime(event.timestamp, true)}</span>
       </div>
       <div className="p-4">
         <p className="text-[13px] font-semibold text-os-t1">{event.camera_nom}</p>
@@ -663,7 +637,7 @@ export default function PresencePage() {
                 <DurationTrend absence={absence} staffing={staffing} />
               </Card>
               <Card className="px-4 py-1">
-                <PeriodStat label="Temps d'absence cumulé — tous postes" value={duration(absence?.total_absence_s)} hint={`${absence?.affected_posts || 0} poste(s) touché(s) · données fiables${absence?.data_quality?.reliable_since ? ` depuis ${fmtDate(absence.data_quality.reliable_since)}` : " uniquement"}`} />
+                <PeriodStat label="Temps d'absence cumulé — tous postes" value={duration(absence?.total_absence_s)} hint={`${absence?.affected_posts || 0} poste(s) touché(s) · données fiables${absence?.data_quality?.reliable_since ? ` depuis ${dateTime(absence.data_quality.reliable_since)}` : " uniquement"}`} />
                 <PeriodStat label="Absence moyenne" value={duration(absence?.avg_absence_s)} />
                 <PeriodStat label="Absence la plus longue" value={duration(absence?.max_absence_s)} />
                 <PeriodStat label="Sous-effectif cumulé" value={duration(staffing?.total_shortage_s)} hint={`${staffing?.affected_cameras || 0} caméra(s) touchée(s)`} />
@@ -689,7 +663,7 @@ export default function PresencePage() {
                     <div key={item.key} className="px-4 py-3 flex items-start gap-3">
                       <span className="mt-1 h-2 w-2 rounded-full shrink-0" style={{ background: item.color }} />
                       <div className="min-w-0 flex-1"><p className="text-[11px] font-semibold" style={{ color: item.color }}>{item.kind}</p><p className="text-[12px] font-semibold text-os-t1 truncate">{item.name}</p><p className="text-[11px] text-os-t3 truncate">{item.value}</p></div>
-                      <span className="os-num text-[10px] text-os-t4 whitespace-nowrap">{relative(item.since)}</span>
+                      <span className="os-num text-[10px] text-os-t4 whitespace-nowrap">{elapsed(item.since)}</span>
                     </div>
                   )) : <EmptyState icon={CheckCircle2}>Aucune situation ouverte.</EmptyState>}
                 </div>
@@ -710,7 +684,7 @@ export default function PresencePage() {
                       <button key={event.id} onClick={() => setSelectedEventId(event.id)} className={`w-full px-4 py-3 text-left flex items-start gap-3 transition-colors ${selected ? "bg-os-primary/10" : "hover:bg-black/[0.02]"}`}>
                         <span className="mt-1 h-2 w-2 rounded-full shrink-0" style={{ background: meta.color }} />
                         <div className="min-w-0 flex-1"><p className="text-[11px] font-semibold" style={{ color: meta.color }}>{meta.label}</p><p className="text-[12px] font-medium text-os-t1 truncate">{event.camera_nom}</p><p className="text-[10px] text-os-t3 truncate">{eventValue(event)}</p></div>
-                        <span className="os-num text-[9px] text-os-t4 whitespace-nowrap">{fmtDate(event.timestamp)}</span>
+                        <span className="os-num text-[9px] text-os-t4 whitespace-nowrap">{dateTime(event.timestamp)}</span>
                       </button>
                     );
                   })}

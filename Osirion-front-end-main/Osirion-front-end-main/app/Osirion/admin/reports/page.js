@@ -11,19 +11,9 @@ import { FileText, BarChart3 } from "lucide-react";
 import OsShell from "../_osirion/OsShell";
 import { PageHeader, Card, Segmented, EmptyState } from "../_osirion/ui";
 import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
+import { fmtWait, fmtDuration } from "../../../lib/format";
 
 const PERIODS = [{ value: 7, label: "7j" }, { value: 30, label: "30j" }, { value: 90, label: "90j" }];
-const fmtWait = (s) => (!s ? "0 s" : s < 60 ? `${Math.round(s)} s` : `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`);
-const fmtDuration = (s) => {
-  s = Math.max(0, Math.round(Number(s) || 0));
-  if (s < 3600) return fmtWait(s);
-  if (s < 86400) {
-    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
-    return `${h} h${m ? ` ${m} min` : ""}`;
-  }
-  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600);
-  return `${d} j${h ? ` ${h} h` : ""}`;
-};
 
 // Un bloc dont AUCUNE ligne ne porte de valeur décrit un module non configuré,
 // pas une activité nulle : aligner cinq zéros se lit comme une mesure. On le

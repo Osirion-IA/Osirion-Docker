@@ -10,6 +10,7 @@ import { Gauge, WifiOff, Clock, Activity } from "lucide-react";
 import OsShell from "../_osirion/OsShell";
 import { PageHeader, Card, Segmented, EmptyState } from "../_osirion/ui";
 import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
+import { fmtDuration, dateTime } from "../../../lib/format";
 
 const PERIODS = [{ value: 7, label: "7j" }, { value: 30, label: "30j" }, { value: 90, label: "90j" }];
 const STATUS = {
@@ -20,15 +21,6 @@ const STATUS = {
   stopped: { label: "Arrêtée", color: "var(--os-t4)" },
 };
 const stMeta = (s) => STATUS[s] || { label: s || "—", color: "var(--os-t4)" };
-const fmtDur = (s) => {
-  if (!s || s < 1) return "0";
-  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
-  if (d) return `${d} j ${h} h`;
-  if (h) return `${h} h ${m} min`;
-  if (m) return `${m} min`;
-  return `${Math.round(s)} s`;
-};
-const fmtDate = (iso) => new Date(iso).toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 const uptimeColor = (p) => (p == null ? "var(--os-t4)" : p >= 95 ? "var(--os-green)" : p >= 70 ? "var(--os-amber)" : "var(--os-red)");
 
 function Kpi({ label, value, hint, icon: Icon, color }) {
@@ -161,7 +153,7 @@ export default function CameraHistoryPage() {
             color={sum.currently_offline > 0 ? "var(--os-red)" : "var(--os-green)"}
             hint={`/ ${sum.cameras ?? 0} caméra(s)`} />
           <Kpi label="Temps hors-ligne cumulé" icon={Clock}
-            value={loading ? "—" : fmtDur(sum.total_offline_seconds)}
+            value={loading ? "—" : fmtDuration(sum.total_offline_seconds)}
             hint="toutes caméras" />
         </div>
 
@@ -206,8 +198,8 @@ export default function CameraHistoryPage() {
                     <div className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] text-os-t3">
                       <span>{c.disconnections} déconnexion(s)</span>
                       <span>{c.reconnections} reconnexion(s)</span>
-                      <span>hors-ligne {fmtDur(c.offline_seconds)}</span>
-                      <span>plus longue coupure {fmtDur(c.longest_outage_seconds)}</span>
+                      <span>hors-ligne {fmtDuration(c.offline_seconds)}</span>
+                      <span>plus longue coupure {fmtDuration(c.longest_outage_seconds)}</span>
                     </div>
                   </div>
                 );
@@ -227,7 +219,7 @@ export default function CameraHistoryPage() {
                 const to = stMeta(e.status), from = stMeta(e.prev_status);
                 return (
                   <li key={e.id} className="flex items-center gap-3 py-2 text-[13px]">
-                    <span className="os-num text-[11px] text-os-t4 w-24 shrink-0">{fmtDate(e.timestamp)}</span>
+                    <span className="os-num text-[11px] text-os-t4 w-24 shrink-0">{dateTime(e.timestamp)}</span>
                     <span className="min-w-0 flex-1 truncate text-os-t1">{e.name}{e.site ? <span className="text-os-t4"> · {e.site}</span> : null}</span>
                     <span className="shrink-0 inline-flex items-center gap-1.5">
                       {e.prev_status && <><span className="text-[11px]" style={{ color: from.color }}>{from.label}</span><span className="text-os-t4">→</span></>}

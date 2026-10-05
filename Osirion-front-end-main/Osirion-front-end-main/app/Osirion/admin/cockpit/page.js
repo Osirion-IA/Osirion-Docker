@@ -11,6 +11,7 @@ import Link from "next/link";
 import { RefreshCw, Clock, X, ArrowRight, Wifi, Activity } from "lucide-react";
 import OsShell from "../_osirion/OsShell";
 import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
+import { fmtWait, relative, dayLong } from "../../../lib/format";
 
 const ONB_KEY = "osirion-cockpit-onboarding";
 // Synthèse servie par un cache serveur de 5 min — repoller plus vite ne rendrait
@@ -21,20 +22,6 @@ const ALERTS_PREVIEW = 5;
 
 const j = async (r) => (r && r.ok ? r.json().catch(() => null) : null);
 const num = (n) => (typeof n === "number" && isFinite(n) ? n : 0);
-function fmtWait(sec) {
-  sec = Math.round(num(sec));
-  const m = Math.floor(sec / 60), s = sec % 60;
-  return `${m} min ${String(s).padStart(2, "0")} s`;
-}
-function ago(iso) {
-  if (!iso) return "";
-  const d = new Date(iso.endsWith?.("Z") ? iso : `${iso}Z`);
-  const s = Math.max(0, (Date.now() - d.getTime()) / 1000);
-  if (s < 45) return "à l'instant";
-  if (s < 3600) return `il y a ${Math.round(s / 60)} min`;
-  if (s < 86400) return `il y a ${Math.round(s / 3600)} h`;
-  return d.toLocaleDateString("fr-FR");
-}
 function loadColor(frac) {
   if (frac < 0.6) return "var(--os-green)";
   if (frac < 0.85) return "var(--os-amber)";
@@ -53,7 +40,6 @@ const distinctReason = (alert) => {
 };
 
 const SEV_COLOR = { info: "var(--os-blue)", warning: "var(--os-amber)", critical: "var(--os-red)" };
-const dateFr = () => new Date().toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
 
 function Kpi({ label, value, sub, icon: Icon, accent, color }) {
   return (
@@ -188,7 +174,7 @@ export default function CockpitPage() {
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <h1 className="text-[22px] font-bold text-os-t1">Cockpit</h1>
-            <p className="text-[13px] text-os-t3 mt-0.5 capitalize">{dateFr()}</p>
+            <p className="text-[13px] text-os-t3 mt-0.5 capitalize">{dayLong()}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <select value={groupId} onChange={(e) => { setGroupId(e.target.value); setCamId(""); }} className={sel}>
@@ -298,7 +284,7 @@ export default function CockpitPage() {
                     <span className="absolute left-0 top-0 bottom-0 w-[3px]" style={{ background: SEV_COLOR[a.severity] || "var(--os-red)" }} />
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-[10px] font-semibold tracking-wide uppercase" style={{ color: SEV_COLOR[a.severity] || "var(--os-red)" }}>Nouvelle</span>
-                      <span className="os-num text-[11px] text-os-t4">{ago(a.created_at)}</span>
+                      <span className="os-num text-[11px] text-os-t4">{relative(a.created_at)}</span>
                     </div>
                     <p className="text-[13px] font-semibold text-os-t1 mt-0.5 truncate">{a.label || a.kind}</p>
                     {distinctReason(a) && <p className="text-[12px] text-os-t3 truncate">{distinctReason(a)}</p>}

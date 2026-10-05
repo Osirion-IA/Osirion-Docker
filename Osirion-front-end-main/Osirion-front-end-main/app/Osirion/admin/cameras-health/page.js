@@ -15,6 +15,7 @@ import { Video, RotateCw } from "lucide-react";
 import { CORE_URL } from "../../../lib/publicUrls";
 import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
 import { groupCamerasBySite } from "../../../lib/cameraGroups";
+import { fmtAge, fmtDuration } from "../../../lib/format";
 
 const POLL_MS = 2000, MAX_POINTS = 30, FPS_SCALE = 30;
 const STATES = {
@@ -25,8 +26,6 @@ const STATES = {
   stopped: { label: "Arrêtée", color: "var(--os-t4)" },
 };
 const stateMeta = (s) => STATES[s] || STATES.stopped;
-const fmtAge = (s) => (s == null ? "—" : s < 60 ? `${s.toFixed(0)} s` : `${Math.floor(s / 60)} min ${Math.floor(s % 60)} s`);
-const fmtUptime = (s) => (!s ? "—" : Math.floor(s / 3600) > 0 ? `${Math.floor(s / 3600)} h ${Math.floor((s % 3600) / 60)} min` : `${Math.floor(s / 60)} min`);
 
 function Sparkline({ data, color, height = 44 }) {
   if (!data || data.length === 0) return <div style={{ height }} />;
@@ -176,7 +175,7 @@ export default function CamerasHealthPage() {
         <div className="mt-4 grid grid-cols-3 gap-x-4 gap-y-3">
           <Metric label="Dernière frame" value={fmtAge(c.last_frame_age_s)} />
           <Metric label="Reconnexions" value={c.reconnections ?? 0} color={c.reconnections > 0 ? "var(--os-amber)" : undefined} />
-          <Metric label="Flux ouvert depuis" value={fmtUptime(c.uptime_s)} />
+          <Metric label="Flux ouvert depuis" value={fmtDuration(c.uptime_s, { empty: "—" })} />
         </div>
         {degraded && <p className="mt-4 rounded-os border border-os-border bg-os-card-2 px-3 py-2 text-[12px] text-os-amber">Reconnexion — {c.reconnection_attempts} tentative(s).</p>}
         {isHik && (

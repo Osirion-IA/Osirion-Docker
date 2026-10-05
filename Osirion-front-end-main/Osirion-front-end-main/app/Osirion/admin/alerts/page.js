@@ -10,6 +10,7 @@ import { Bell, Check, Archive, Send, Inbox, ChevronLeft, ChevronRight, CheckChec
 import OsShell from "../_osirion/OsShell";
 import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
 import { useAuth } from "../AuthContext";
+import { relative, timeOnly } from "../../../lib/format";
 
 const STATUS_META = {
   new: { label: "Nouvelle", color: "var(--os-red)" },
@@ -53,16 +54,6 @@ const deliveryError = (raw) => {
   return "Échec de l'envoi";
 };
 
-function relTime(ts) {
-  const d = new Date(ts && !String(ts).endsWith("Z") ? `${ts}Z` : ts);
-  if (isNaN(d)) return "—";
-  const m = Math.floor((Date.now() - d.getTime()) / 60000);
-  if (m < 1) return "à l'instant";
-  if (m < 60) return `il y a ${m} min`;
-  if (m < 1440) return `il y a ${Math.floor(m / 60)} h`;
-  return d.toLocaleString("fr-FR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
-}
-const clock = (ts) => { const d = new Date(ts && !String(ts).endsWith("Z") ? `${ts}Z` : ts); return isNaN(d) ? "—" : d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }); };
 const snap = (u) => (u ? (String(u).startsWith("http") ? u : `/api/images?path=${encodeURIComponent(u)}`) : null);
 function deliveryMeta(alert) {
   if (alert.notified_at) return { label: `Envoyée · ${alert.notified_channel || "canal inconnu"}`, color: "var(--os-green)" };
@@ -207,7 +198,7 @@ export default function AlertsPage() {
                         {distinctReason(a) && <p className="text-[12px] text-os-t3 truncate">{distinctReason(a)}</p>}
                         <p className="text-[11px] truncate mt-0.5" style={{ color: delivery.color }}>{delivery.label}</p>
                       </div>
-                      <span className="os-num text-[11px] text-os-t4 shrink-0">{relTime(a.created_at)}</span>
+                      <span className="os-num text-[11px] text-os-t4 shrink-0">{relative(a.created_at)}</span>
                     </div>
                   </button>
                 );
@@ -241,7 +232,7 @@ export default function AlertsPage() {
                     // eslint-disable-next-line @next/next/no-img-element
                     <img src={snap(selected.snapshot_url)} alt="" className="h-full w-full object-cover" />
                   ) : (
-                    <span className="os-num">SNAPSHOT · anonymisé · {clock(selected.created_at)}</span>
+                    <span className="os-num">SNAPSHOT · anonymisé · {timeOnly(selected.created_at, { seconds: false })}</span>
                   )}
                   <span className="absolute bottom-2 right-2 os-num text-[11px] bg-black/50 text-white px-2 py-1 rounded-os">{selected.camera_name || `Caméra ${selected.camera_id ?? "?"}`}</span>
                 </div>
@@ -272,7 +263,7 @@ export default function AlertsPage() {
 
                   <div className="grid grid-cols-2 gap-4 mt-5 pt-4 border-t border-os-border">
                     <Meta label="Caméra" value={selected.camera_name || `Caméra ${selected.camera_id ?? "?"}`} />
-                    <Meta label="Déclenchée à" value={clock(selected.created_at)} mono />
+                    <Meta label="Déclenchée à" value={timeOnly(selected.created_at, { seconds: false })} mono />
                     <Meta label="Traitée par" value={selected.acknowledged_by ? `#${selected.acknowledged_by}` : "—"} />
                     <Meta label="Notification" value={deliveryMeta(selected).label} />
                     {selected.notify_attempts > 0 && <Meta label="Tentatives effectuées" value={String(selected.notify_attempts)} mono />}
