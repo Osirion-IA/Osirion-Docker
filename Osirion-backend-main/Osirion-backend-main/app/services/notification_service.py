@@ -150,8 +150,8 @@ def _plain_label(label: Optional[str]) -> str:
     return _TRAILING_PAREN.sub("", (label or "Alerte").strip()) or "Alerte"
 
 
-def _alert_context(alert) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-    """(nom de caméra, site, fuseau) — défensif : jamais bloquant.
+def _alert_context(alert) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[int], Optional[int]]:
+    """(nom de caméra, site, fuseau, effectif, seuil) — défensif : jamais bloquant.
 
     Le fuseau est cherché d'abord sur la ZONE d'où vient l'alerte (les postes
     d'agent portent leur régime horaire, et c'est là que l'heure compte), puis
@@ -159,7 +159,7 @@ def _alert_context(alert) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """
     camera_id = getattr(alert, "camera_id", None)
     if camera_id is None:
-        return None, None, None
+        return None, None, None, None, None
     try:
         from sqlalchemy.orm import selectinload
         from sqlmodel import select
@@ -173,27 +173,37 @@ def _alert_context(alert) -> Tuple[Optional[str], Optional[str], Optional[str]]:
                 select(Camera).where(Camera.id == camera_id).options(selectinload(Camera.groups))
             ).first()
             if cam is None:
-                return None, None, None
+                return None, None, None, None, None
             site = cam.groups[0].name if cam.groups else None
 
             schedule_id = None
+            effectif = seuil = None
             event_id = getattr(alert, "event_id", None)
             if event_id:
                 event = s.get(Event, event_id)
-                zone_id = (getattr(event, "meta", None) or {}).get("zone_id") if event else None
+                meta = (getattr(event, "meta", None) or {}) if event else {}
+                # Effectif constaté au moment du déclenchement, pris sur
+                # l'événement — pas recalculé, sinon il ne correspondrait plus à
+                # ce qui a déclenché l'alerte.
+                compte = meta.get("count")
+                if isinstance(compte, (int, float)):
+                    effectif = int(compte)
+                zone_id = meta.get("zone_id")
                 if zone_id is not None:
                     zone = s.get(Zone, zone_id)
-                    schedule_id = getattr(zone, "work_schedule_id", None) if zone else None
+                    if zone is not None:
+                        schedule_id = getattr(zone, "work_schedule_id", None)
+                        seuil = getattr(zone, "threshold", None)
             schedule_id = schedule_id or cam.staffing_work_schedule_id
 
             tz = None
             if schedule_id:
                 ws = s.get(WorkSchedule, schedule_id)
                 tz = getattr(ws, "timezone", None) if ws else None
-            return cam.cam_name, site, tz
+            return cam.cam_name, site, tz, effectif, seuil
     except Exception:
         logger.debug("[notify] contexte d'alerte indisponible", exc_info=True)
-        return None, None, None
+        return None, None, None, None, None
 
 
 def _local_time(when, tz_name: Optional[str]) -> str:
@@ -216,14 +226,28 @@ def _local_time(when, tz_name: Optional[str]) -> str:
 def compose_alert_email(alert) -> Tuple[str, str]:
     """(sujet, corps) épurés pour une alerte. La capture reste en pièce jointe."""
     titre = _plain_label(alert.label)
-    cam_name, site, tz = _alert_context(alert)
+    cam_name, site, tz, effectif, seuil = _alert_context(alert)
 
-    lignes = []
+    # (libellé, valeur) — la largeur de colonne est calculée ensuite, pour que
+    # les deux-points restent alignés quel que soit le jeu de lignes présent.
+    champs = []
+    # Saturation de file UNIQUEMENT : l'effectif et le seuil sont ici
+    # l'information qui déclenche l'action — « 14 personnes pour un seuil de 10 »
+    # dit s'il faut ouvrir un guichet. Les autres types d'alerte n'en ont pas
+    # besoin, et leur corps reste dépouillé.
+    if (getattr(alert, "kind", None) or "").lower() == "queue":
+        if effectif is not None:
+            champs.append(("Personnes", str(effectif)))
+        if seuil is not None:
+            champs.append(("Seuil", str(seuil)))
     if cam_name:
-        lignes.append(f"Caméra : {cam_name}")
+        champs.append(("Caméra", cam_name))
     if site:
-        lignes.append(f"Site   : {site}")
-    lignes.append(f"Heure  : {_local_time(getattr(alert, 'created_at', None), tz)}")
+        champs.append(("Site", site))
+    champs.append(("Heure", _local_time(getattr(alert, "created_at", None), tz)))
+
+    largeur = max(len(lib) for lib, _ in champs)
+    lignes = [f"{lib.ljust(largeur)} : {val}" for lib, val in champs]
     return f"Osirion — {titre}", "\n".join(lignes) + "\n"
 
 
