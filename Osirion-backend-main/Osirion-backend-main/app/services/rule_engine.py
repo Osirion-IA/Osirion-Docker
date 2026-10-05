@@ -157,6 +157,60 @@ def _in_cooldown(rule: Rule, meta, now_mono: float) -> bool:
     return False
 
 
+# ── Épisodes : une alerte par SITUATION, pas par événement ───────────────────
+# Certains déclencheurs décrivent un ÉTAT et se répètent tant qu'il dure :
+# CROWD_DETECTED est réémis à chaque passage du moteur tant que la file reste
+# au-dessus du seuil. Le cooldown ne faisait que cadencer ce flux — une file
+# saturée une heure produisait une alerte toutes les 2 min, soit 30 alertes pour
+# UNE situation. Mesuré avant correction : 8 278 événements → 1 557 alertes,
+# avec une médiane de 7 min entre deux alertes d'une même caméra (minimum 24 s).
+#
+# On regroupe donc ces événements en épisodes : UNE alerte à l'ouverture, plus
+# rien tant que la situation dure. L'épisode est considéré clos après
+# EPISODE_RESOLVE_AFTER_S sans nouvel événement (il n'existe pas d'événement de
+# « fin de saturation » à écouter).
+#
+# ⚠ Ce traitement ne vaut QUE pour les déclencheurs répétitifs. POST_VACANT,
+# lui, n'est émis qu'UNE fois par épisode, en amont, par le Core : lui imposer
+# une durée minimale de persistance supprimerait purement et simplement les
+# alertes d'absence. Les autres déclencheurs gardent donc le cooldown d'origine.
+_STATE_TRIGGERS = {"CROWD_DETECTED"}
+
+# Durée pendant laquelle la condition doit tenir avant la première alerte : une
+# file à 10 personnes pendant 15 s n'est pas un incident.
+EPISODE_MIN_DURATION_S = int(getattr(settings, "RULE_EPISODE_MIN_DURATION_S", 0) or 45)
+# Silence au-delà duquel on considère la situation terminée.
+EPISODE_RESOLVE_AFTER_S = int(getattr(settings, "RULE_EPISODE_RESOLVE_AFTER_S", 0) or 300)
+
+# clé (rule_id, zone) → {first_seen, last_seen, alerted}
+_episodes: Dict[Tuple, dict] = {}
+
+
+def _episode_allows_alert(rule: Rule, meta, now_mono: float) -> bool:
+    """Vrai s'il faut alerter MAINTENANT pour cette situation.
+
+    En mémoire, comme le cooldown : un redémarrage rouvre les épisodes, ce qui
+    coûte au pire une alerte de plus par zone — préférable à un état persisté
+    qui resterait bloqué « ouvert » après un arrêt brutal.
+    """
+    key = _cooldown_key(rule, meta)
+    ep = _episodes.get(key)
+
+    if ep is None or (now_mono - ep["last_seen"]) > EPISODE_RESOLVE_AFTER_S:
+        # Première occurrence, ou situation précédente résolue depuis longtemps.
+        _episodes[key] = {"first_seen": now_mono, "last_seen": now_mono, "alerted": False}
+        ep = _episodes[key]
+    else:
+        ep["last_seen"] = now_mono
+
+    if ep["alerted"]:
+        return False                      # déjà signalée, la situation se prolonge
+    if (now_mono - ep["first_seen"]) < EPISODE_MIN_DURATION_S:
+        return False                      # pas encore assez persistante
+    ep["alerted"] = True
+    return True
+
+
 # ── Libellé ──────────────────────────────────────────────────────────────────
 def _label(rule: Rule, event: Event) -> str:
     meta = event.meta or {}
@@ -225,7 +279,12 @@ def evaluate_event(session: Session, event: Event) -> None:
             continue
         if not _conditions_met(rule.conditions, event):
             continue
-        if _in_cooldown(rule, meta, now_mono):
+        if event.event_type in _STATE_TRIGGERS:
+            # Déclencheur d'ÉTAT : une alerte par épisode (cf. _episode_allows_alert).
+            if not _episode_allows_alert(rule, meta, now_mono):
+                logger.debug(f"[rule] {rule.name!r} : épisode déjà signalé ou trop bref → alerte ignorée")
+                continue
+        elif _in_cooldown(rule, meta, now_mono):
             logger.debug(f"[rule] {rule.name!r} en cooldown ({rule.cooldown_s}s) → alerte ignorée")
             continue
 
