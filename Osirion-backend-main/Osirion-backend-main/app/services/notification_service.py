@@ -248,7 +248,11 @@ def compose_alert_email(alert) -> Tuple[str, str]:
 
     largeur = max(len(lib) for lib, _ in champs)
     lignes = [f"{lib.ljust(largeur)} : {val}" for lib, val in champs]
-    return f"Osirion — {titre}", "\n".join(lignes) + "\n"
+    # L'objet est repris en tête du corps : un objet se tronque dans les listes
+    # de messagerie et disparaît une fois le mail ouvert. Sans le préfixe
+    # « Osirion — », qui ne sert qu'à repérer l'expéditeur dans la boîte.
+    corps = f"{titre}\n\n" + "\n".join(lignes) + "\n"
+    return f"Osirion — {titre}", corps
 
 
 def send_email(subject: str, body: str, to: Optional[str] = None,
