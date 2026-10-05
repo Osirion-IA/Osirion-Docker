@@ -489,7 +489,6 @@ export default function AnalyticsPage() {
                         <th className="py-2.5 font-semibold text-right">Personnes</th>
                         <th className="py-2.5 font-semibold text-right">Attente moyenne</th>
                         <th className="py-2.5 font-semibold text-right">Attente longue</th>
-                        <th className="py-2.5 font-semibold text-right">Pire attente</th>
                         <th className="py-2.5 font-semibold text-right">Trop longue</th>
                       </tr>
                     </thead>
@@ -500,7 +499,6 @@ export default function AnalyticsPage() {
                           <td className="py-2.5 os-num text-os-t1 text-right font-semibold">{q.length}</td>
                           <td className="py-2.5 os-num text-os-t2 text-right">{fmtWait(q.wait_avg_s)}</td>
                           <td className="py-2.5 os-num text-os-t2 text-right">{fmtWait(q.wait_p90_s)}</td>
-                          <td className="py-2.5 os-num text-os-t3 text-right">{fmtWait(q.wait_max_s)}</td>
                           <td className="py-2.5 os-num text-right" style={{ color: q.over_threshold_pct > 20 ? "var(--os-red)" : q.over_threshold_pct > 0 ? "var(--os-amber)" : "var(--os-t3)" }}>{q.over_threshold_pct == null ? "—" : `${q.over_threshold_pct}%`}</td>
                         </tr>
                       ))}
