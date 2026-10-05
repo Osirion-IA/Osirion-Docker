@@ -38,6 +38,44 @@ const EMPTY = {
   min_count: "", max_count: "", min_wait_s: "", direction: "any",
   days: [], from: "", to: "", cooldown_min: "", notify_email: false, notify_webhook: false,
 };
+
+/**
+ * Recharge une règle existante dans le formulaire — transformation INVERSE de
+ * celle qu'opère save(). Les conditions et le créneau sont stockés en JSON
+ * ({ all: [{field, op, value}] }, { days, from, to }) ; il faut les décomposer
+ * pour retrouver les champs de saisie.
+ */
+function ruleToForm(r) {
+  const f = { ...EMPTY };
+  f.name = r.name || "";
+  f.trigger = r.trigger || EMPTY.trigger;
+  f.zone_id = r.zone_id != null ? String(r.zone_id) : "";
+  f.work_schedule_id = r.work_schedule_id != null ? String(r.work_schedule_id) : "";
+  f.kind = r.kind || EMPTY.kind;
+  f.severity = r.severity || EMPTY.severity;
+  // Le formulaire saisit des MINUTES, la règle stocke des secondes.
+  f.cooldown_min = r.cooldown_s ? String(r.cooldown_s / 60) : "";
+
+  const preds = Array.isArray(r.conditions?.all) ? r.conditions.all
+              : Array.isArray(r.conditions?.any) ? r.conditions.any : [];
+  for (const p of preds) {
+    if (p?.field === "count" && p.op === ">=") f.min_count = String(p.value);
+    else if (p?.field === "count" && p.op === "<=") f.max_count = String(p.value);
+    else if (p?.field === "dwell_s" && p.op === ">=") f.min_wait_s = String(p.value);
+    else if (p?.field === "direction") f.direction = String(p.value);
+  }
+
+  if (r.schedule) {
+    f.days = Array.isArray(r.schedule.days) ? [...r.schedule.days] : [];
+    f.from = r.schedule.from || "";
+    f.to = r.schedule.to || "";
+  }
+  const ch = r.notify_channels || [];
+  f.notify_email = ch.includes("email");
+  f.notify_webhook = ch.includes("webhook");
+  return f;
+}
+
 const TEMPLATES = [
   { key: "intrusion_nuit", label: "Intrusion nocturne", form: { name: "Intrusion nocturne", trigger: "ZONE_OCCUPANCY_CHANGED", kind: "intrusion", severity: "critical", min_count: "1", days: ALL_DAYS, from: "22:00", to: "06:00", cooldown_min: "5", notify_email: true } },
   { key: "saturation_file", label: "Saturation de file", form: { name: "Saturation de file d'attente", trigger: "CROWD_DETECTED", kind: "queue", severity: "warning", min_count: "5", cooldown_min: "2", notify_email: true } },
@@ -77,6 +115,13 @@ export default function RulesPage() {
   const toggleDay = (i) => setForm((f) => ({ ...f, days: f.days.includes(i) ? f.days.filter((d) => d !== i) : [...f.days, i].sort() }));
   const applyTemplate = (t) => { setMsg(""); setForm({ ...EMPTY, ...t.form }); };
 
+  // Règle en cours de MODIFICATION (null = création). Le backend acceptait déjà
+  // les mises à jour (RuleUpdate couvre tous les champs) ; l'interface
+  // n'utilisait le PUT que pour la bascule actif/inactif.
+  const [editing, setEditing] = useState(null);
+  const startEdit = (r) => { setEditing(r); setForm(ruleToForm(r)); setMsg(""); };
+  const cancelEdit = () => { setEditing(null); setForm(EMPTY); setMsg(""); };
+
   const save = async () => {
     setMsg("");
     if (!form.name.trim()) { setMsg("Nom requis."); return; }
@@ -111,9 +156,18 @@ export default function RulesPage() {
       cooldown_s: form.cooldown_min !== "" ? Math.round(Number(form.cooldown_min) * 60) : 0,
       conditions, schedule, notify_channels,
     };
-    const res = await fetchWithRefresh("/api/rules", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-    if (!res?.ok) { setMsg("Échec de l'enregistrement."); return; }
-    setForm(EMPTY); load();
+    const url = editing ? `/api/rules/${editing.id}` : "/api/rules";
+    const res = await fetchWithRefresh(url, {
+      method: editing ? "PUT" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res?.ok) {
+      const d = await res?.json().catch(() => null);
+      setMsg(d?.detail || (editing ? "Échec de la mise à jour." : "Échec de l'enregistrement."));
+      return;
+    }
+    setEditing(null); setForm(EMPTY); load();
   };
   const toggleActive = async (r) => { await fetchWithRefresh(`/api/rules/${r.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ is_active: !r.is_active }) }); load(); };
   const del = async (id) => { await fetchWithRefresh(`/api/rules/${id}`, { method: "DELETE" }); load(); };
@@ -136,7 +190,7 @@ export default function RulesPage() {
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
           {canWrite && (
             <Card className="p-5 space-y-3.5">
-              <h3 className="text-[15px] font-semibold text-os-t1">Nouvelle règle</h3>
+              <h3 className="text-[15px] font-semibold text-os-t1">{editing ? `Modifier « ${editing.name} »` : "Nouvelle règle"}</h3>
 
               <div>
                 <p className={`${lbl} mb-1.5`}>Partir d&apos;un scénario</p>
@@ -246,7 +300,10 @@ export default function RulesPage() {
               </div>
 
               <div className="flex items-center gap-3 pt-1">
-                <button onClick={save} className="px-4 py-2.5 rounded-os text-[13px] font-semibold bg-os-cta text-white hover:bg-os-cta-hover">Créer la règle</button>
+                <button onClick={save} className="px-4 py-2.5 rounded-os text-[13px] font-semibold bg-os-cta text-white hover:bg-os-cta-hover">{editing ? "Mettre à jour" : "Créer la règle"}</button>
+                  {editing && (
+                    <button onClick={cancelEdit} className="px-3 py-2.5 rounded-os text-[13px] text-os-t3 hover:text-os-t1 border border-os-border">Annuler</button>
+                  )}
                 {msg && <Banner message={msg} />}
               </div>
             </Card>
@@ -281,7 +338,8 @@ export default function RulesPage() {
                               className={`relative h-5 w-9 rounded-full transition-colors ${r.is_active ? "bg-os-green" : "bg-os-border-2"}`}>
                               <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${r.is_active ? "left-[18px]" : "left-0.5"}`} />
                             </button>
-                            <button onClick={() => del(r.id)} className="text-[12px] text-os-red hover:underline">Suppr.</button>
+                            <button onClick={() => startEdit(r)} className="text-[12px] text-os-blue hover:underline">Modifier</button>
+                              <button onClick={() => del(r.id)} className="text-[12px] text-os-red hover:underline">Suppr.</button>
                           </div>
                         )}
                       </div>
