@@ -158,7 +158,27 @@ export default function ZonesPage() {
     const pt = [Math.round(x * 1000) / 1000, Math.round(y * 1000) / 1000];
     setDraft((d) => (tool === "line" ? [...d, pt].slice(-2) : [...d, pt]));
   };
-  const cancelDraft = () => { setDraft([]); setName(""); setThreshold(""); setMinPresence(""); setScheduleId(""); setMsg(""); setTool("select"); };
+  // Zone en cours de MODIFICATION (null = création). Le backend acceptait déjà
+  // les mises à jour (ZoneUpdate : name, kind, polygon, threshold…) ; seule
+  // l'interface ne les exposait pas, hors réaffectation de régime horaire.
+  const [editing, setEditing] = useState(null);
+
+  /** Recharge une zone existante dans l'éditeur, tracé compris. */
+  const startEdit = (z) => {
+    setEditing(z);
+    setTool("zone");
+    // Le polygone devient le brouillon : on peut l'ajuster point par point,
+    // ou tout effacer pour retracer de zéro.
+    setDraft((z.polygon || []).map((pt) => [pt[0], pt[1]]));
+    setName(z.name || "");
+    setKind(z.kind || "occupancy");
+    setThreshold(z.threshold != null ? String(z.threshold) : "");
+    setMinPresence(z.min_presence_s != null ? String(z.min_presence_s) : "");
+    setScheduleId(z.schedule?.id ? String(z.schedule.id) : "");
+    setMsg("");
+  };
+
+  const cancelDraft = () => { setDraft([]); setName(""); setThreshold(""); setMinPresence(""); setScheduleId(""); setMsg(""); setTool("select"); setEditing(null); };
   const undoPoint = () => setDraft((d) => d.slice(0, -1));
 
   const save = async () => {
@@ -173,6 +193,25 @@ export default function ZonesPage() {
         if (kind === "presence" && !scheduleId) {
           setMsg("Choisissez un régime horaire : sans lui, ce poste ne serait pas surveillé.");
           return;
+        }
+        const corps = {
+          name: name.trim(), kind, polygon: draft, color: kindColor(kind),
+          threshold: (kind !== "ignore" && threshold) ? Number(threshold) : null,
+          min_presence_s: (kind !== "ignore" && minPresence !== "") ? Number(minPresence) : null,
+          work_schedule_id: kind === "presence" && scheduleId ? Number(scheduleId) : null,
+        };
+        if (editing) {
+          // Mise à jour : camera_id n'est pas modifiable, on ne l'envoie pas.
+          const r = await fetchWithRefresh(`/api/zones/${editing.id}`, {
+            method: "PUT", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(corps),
+          });
+          if (!r?.ok) {
+            const d = await r?.json().catch(() => null);
+            setMsg(d?.detail || "Échec de la mise à jour de la zone.");
+            return;
+          }
+          cancelDraft(); loadShapes(camId); return;
         }
         const r = await fetchWithRefresh("/api/zones", {
           method: "POST", headers: { "Content-Type": "application/json" },
@@ -282,7 +321,7 @@ export default function ZonesPage() {
                 )}
                 <svg viewBox="0 0 1 1" preserveAspectRatio="none" onClick={onSvgClick}
                   className={`absolute inset-0 w-full h-full ${tool !== "select" ? "cursor-crosshair" : ""}`}>
-                  {zones.map((z) => (
+                  {zones.filter((z) => z.id !== editing?.id).map((z) => (
                     <polygon key={`z${z.id}`} points={ptStr(z.polygon || [])} fill={(z.color || kindColor(z.kind)) + "33"} stroke={z.color || kindColor(z.kind)} strokeWidth="2" vectorEffect="non-scaling-stroke" />
                   ))}
                   {lines.map((l) => (
@@ -322,8 +361,24 @@ export default function ZonesPage() {
                       className="w-36 px-3 py-2 rounded-os border border-os-border bg-os-card text-[13px] text-os-t1" />
                   )}
                   <button onClick={undoPoint} disabled={!draft.length} className="px-3 py-2 rounded-os text-[13px] border border-os-border text-os-t2 disabled:opacity-40">↶ Point</button>
-                  <button onClick={save} className="px-4 py-2 rounded-os text-[13px] font-semibold bg-os-cta text-white hover:bg-os-cta-hover">Enregistrer</button>
+                  {editing && (
+                    <button onClick={() => setDraft([])} disabled={!draft.length}
+                      title="Repartir d'un tracé vide sans perdre les autres réglages"
+                      className="px-3 py-2 rounded-os text-[13px] border border-os-border text-os-t2 disabled:opacity-40">Retracer</button>
+                  )}
+                  <button onClick={save} className="px-4 py-2 rounded-os text-[13px] font-semibold bg-os-cta text-white hover:bg-os-cta-hover">
+                    {editing ? "Mettre à jour" : "Enregistrer"}
+                  </button>
+                  {editing && (
+                    <button onClick={cancelDraft} className="px-3 py-2 rounded-os text-[13px] text-os-t3 hover:text-os-t1">Annuler</button>
+                  )}
                 </div>
+              )}
+              {canWrite && editing && (
+                <p className="text-[12px] text-os-t2 mt-2">
+                  Modification de <span className="font-semibold">{editing.name}</span> — déplacez les sommets
+                  avec ↶, ou <span className="font-semibold">Retracer</span> pour repartir d&apos;un polygone vide.
+                </p>
               )}
               {canWrite && tool === "zone" && (
                 <>
@@ -373,7 +428,14 @@ export default function ZonesPage() {
                           )}
                         </span>
                       </span>
-                      {canWrite && <button onClick={() => delZone(z.id)} className="text-[12px] text-os-red hover:underline shrink-0">Suppr.</button>}
+                      {canWrite && (
+                        <span className="flex items-center gap-2.5 shrink-0">
+                          <button onClick={() => startEdit(z)}
+                            className="text-[12px] text-os-blue hover:underline">Modifier</button>
+                          <button onClick={() => delZone(z.id)}
+                            className="text-[12px] text-os-red hover:underline">Suppr.</button>
+                        </span>
+                      )}
                     </li>
                   ))}
                 </ul>
