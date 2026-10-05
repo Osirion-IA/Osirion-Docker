@@ -3,7 +3,7 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { useAuth } from "../AuthContext";
 import OsShell from "../_osirion/OsShell";
-import { PageHeader } from "../_osirion/ui";
+import { PageHeader, Banner } from "../_osirion/ui";
 import { AccessDenied } from "../RoleGuard";
 import { fetchWithRefresh } from "@/app/lib/fetchWithRefresh";
 import { getSetting } from "@/app/lib/settings";
@@ -124,14 +124,6 @@ function ModalCard({ title, onClose, children }) {
   );
 }
 
-function ErrorBanner({ message }) {
-  return (
-    <div className="mb-4 px-4 py-3 rounded-os border border-os-border text-sm text-os-red">
-      {message}
-    </div>
-  );
-}
-
 function Field({ label, children }) {
   return (
     <div>
@@ -197,7 +189,7 @@ function CreateUserModal({ onClose, onSuccess }) {
   return (
     <ModalOverlay onClose={onClose}>
       <ModalCard title="Nouvel utilisateur" onClose={onClose}>
-        {error && <ErrorBanner message={error} />}
+        {error && <Banner message={error} className="mb-4" />}
         <form onSubmit={handleSubmit} className="space-y-4">
           <Field label="Nom complet">
             <input
@@ -300,7 +292,7 @@ function EditUserModal({ user, onClose, onSuccess }) {
   return (
     <ModalOverlay onClose={onClose}>
       <ModalCard title="Modifier l'utilisateur" onClose={onClose}>
-        {error && <ErrorBanner message={error} />}
+        {error && <Banner message={error} className="mb-4" />}
         <form onSubmit={handleSubmit} className="space-y-4">
           <Field label="Nom complet">
             <input
@@ -414,7 +406,7 @@ function DeleteUserModal({ user, onClose, onSuccess }) {
             ? Cette action est irréversible.
           </p>
         </div>
-        {error && <ErrorBanner message={error} />}
+        {error && <Banner message={error} className="mb-4" />}
         <div className="flex gap-3">
           <button
             onClick={onClose}

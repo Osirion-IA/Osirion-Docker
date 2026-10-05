@@ -13,7 +13,7 @@ import {
   Globe2, Image as ImageIcon, UserMinus, UserRoundCheck, UsersRound,
 } from "lucide-react";
 import OsShell from "../_osirion/OsShell";
-import { Card, EmptyState, RefreshButton, Segmented } from "../_osirion/ui";
+import { Card, EmptyState, RefreshButton, Segmented, Banner } from "../_osirion/ui";
 import CameraStream from "../live/CameraStream";
 import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
 import { CORE_URL } from "../../../lib/publicUrls";
@@ -611,7 +611,7 @@ export default function PresencePage() {
           </div>
         </div>
 
-        {error && <p className="mb-4 rounded-os border border-os-red/30 bg-os-red/5 px-4 py-3 text-[12px] text-os-red">{error}</p>}
+        {error && <Banner message={error} className="mb-4" />}
 
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-4">
           <Kpi icon={UsersRound} label="Agents observés" value={totalAgents} hint={`${liveCameras}/${rows.length} caméra(s) remontent des données`} />

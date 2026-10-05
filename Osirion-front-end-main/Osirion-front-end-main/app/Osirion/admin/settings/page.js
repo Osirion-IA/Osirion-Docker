@@ -8,7 +8,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Settings as Cog, Shield, Target, CheckCircle2, Save, RotateCcw, Cctv, Plug, Mail, Send, X } from "lucide-react";
 import OsShell from "../_osirion/OsShell";
-import { PageHeader, Card, Segmented } from "../_osirion/ui";
+import { PageHeader, Card, Segmented, Banner } from "../_osirion/ui";
 import WorkSchedules from "../_osirion/WorkSchedules";
 import { useAuth } from "../AuthContext";
 import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
@@ -106,6 +106,7 @@ export default function SettingsPage() {
   const effectiveTab = isOperator ? "horaires" : tab;
   const [dirty, setDirty] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [localMsg, setLocalMsg] = useState(null);   // échec d'écriture/lecture du stockage local
   const [settings, setSettings] = useState({ siteName: "Qwiper Sentinel", sessionTimeout: 30, passwordMinLength: 8 });
 
   const change = (k, v) => { setSettings((p) => ({ ...p, [k]: v })); setDirty(true); };
@@ -128,7 +129,14 @@ export default function SettingsPage() {
       for (const k of PERSIST_KEYS) payload[k] = settings[k];
       localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(payload));
       if (settings.siteName) document.title = settings.siteName;
-    } catch { /* */ }
+    } catch {
+      // L'écriture peut échouer : quota saturé, navigation privée, stockage
+      // bloqué par le navigateur. On annonçait « Enregistré » quand même, et
+      // le réglage disparaissait au rechargement sans que personne le sache.
+      setLocalMsg({ ok: false, text: "Enregistrement impossible : le navigateur refuse le stockage local (navigation privée ou quota saturé)." });
+      return;
+    }
+    setLocalMsg(null);
     setDirty(false); setSaved(true); setTimeout(() => setSaved(false), 2500);
   };
   const reset = () => {
@@ -136,7 +144,11 @@ export default function SettingsPage() {
       const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
       const s = raw ? JSON.parse(raw) : {};
       setSettings((p) => { const n = { ...p }; for (const k of PERSIST_KEYS) if (s[k] !== undefined) n[k] = s[k]; return n; });
-    } catch { /* */ }
+    } catch {
+      setLocalMsg({ ok: false, text: "Lecture du stockage local impossible : les valeurs affichées n'ont pas pu être rétablies." });
+      return;
+    }
+    setLocalMsg(null);
     setDirty(false);
   };
 
@@ -155,7 +167,12 @@ export default function SettingsPage() {
         setHik({ host: d.host || "", app_key: d.app_key || "", user_id: d.user_id || "", app_secret: "" });
         setHikMeta({ has_secret: !!d.has_secret, source: d.source, configured: !!d.configured, effective_host: d.effective_host, loading: false });
       } else setHikMeta((m) => ({ ...m, loading: false }));
-    } catch { setHikMeta((m) => ({ ...m, loading: false })); }
+    } catch {
+      // Un échec de lecture laissait l'écran afficher « non configuré », ce qui
+      // se confond avec une configuration réellement absente.
+      setHikMeta((m) => ({ ...m, loading: false }));
+      setHikMsg({ ok: false, text: "Configuration HikCentral illisible : vérifiez que le backend répond." });
+    }
   }, []);
   useEffect(() => { loadHik(); }, [loadHik]);
 
@@ -274,6 +291,7 @@ export default function SettingsPage() {
             <label className={lbl}>Nom du site</label>
             <input type="text" value={settings.siteName} onChange={(e) => change("siteName", e.target.value)} className={inp} />
             <p className="text-[12px] text-os-t3 mt-2">Affiché comme titre de l&apos;onglet du navigateur.</p>
+            {localMsg && <Banner message={localMsg} className="mt-3" />}
           </Card>
         )}
 
@@ -378,7 +396,7 @@ export default function SettingsPage() {
             </div>
 
             <p className="text-[12px] text-os-t3 mt-3">Mot de passe chiffré au repos, jamais réaffiché. Gmail : activez la validation en 2 étapes et utilisez un <b>mot de passe d&apos;application</b>. L&apos;envoi automatique s&apos;active <b>par règle</b> (Règles &amp; alertes).</p>
-            {notifMsg && <p className={`mt-3 text-[13px] ${notifMsg.ok ? "text-os-green" : "text-os-red"}`}>{notifMsg.text}</p>}
+            {notifMsg && <Banner message={notifMsg} className="mt-3" />}
 
             <div className="mt-5 flex items-center gap-2">
               <button onClick={saveNotif} disabled={notifBusy != null}
@@ -436,7 +454,7 @@ export default function SettingsPage() {
               </div>
             </div>
 
-            {hikMsg && <p className={`mt-4 text-[13px] ${hikMsg.ok ? "text-os-green" : "text-os-red"}`}>{hikMsg.text}</p>}
+            {hikMsg && <Banner message={hikMsg} className="mt-4" />}
 
             <div className="mt-5 flex items-center gap-2">
               <button onClick={saveHik} disabled={hikBusy != null}

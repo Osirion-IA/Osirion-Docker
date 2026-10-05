@@ -131,3 +131,32 @@ export function InlineSpinner({ label = "Chargement…" }) {
     </span>
   );
 }
+
+// ── Messages ────────────────────────────────────────────────────────────────
+// Cinq rendus coexistaient : un ErrorBanner local dans Utilisateurs, un
+// encadré ad hoc dans Présence, une ligne colorée dans Audit et Paramètres,
+// du texte rouge sans état de succès dans Règles et Zones. Même information,
+// cinq apparences — et deux écrans incapables d'annoncer une réussite.
+//
+// `Banner` accepte les deux formes rencontrées : une chaîne (erreur par
+// défaut) ou l'objet { ok, text } déjà utilisé par Paramètres et Audit.
+
+export function Banner({ message, tone, className = "" }) {
+  if (!message) return null;
+  const texte = typeof message === "string" ? message : message.text;
+  if (!texte) return null;
+  // `tone` explicite > champ `ok` de l'objet > erreur par défaut.
+  const ok = tone ? tone === "success" : (typeof message === "object" ? !!message.ok : false);
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className={`rounded-os border px-4 py-3 text-[13px] ${className}`}
+      style={ok
+        ? { borderColor: "rgba(31,170,89,.35)", background: "rgba(31,170,89,.06)", color: "var(--os-green)" }
+        : { borderColor: "var(--os-red)", background: "rgba(230,0,39,.05)", color: "var(--os-red)" }}
+    >
+      {texte}
+    </div>
+  );
+}

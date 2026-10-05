@@ -9,7 +9,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Video } from "lucide-react";
 import OsShell from "../_osirion/OsShell";
-import { PageHeader, Card } from "../_osirion/ui";
+import { PageHeader, Card, Banner } from "../_osirion/ui";
 import { useAuth } from "../AuthContext";
 import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
 import { CORE_URL } from "../../../lib/publicUrls";
@@ -338,7 +338,7 @@ export default function ZonesPage() {
                   )}
                 </>
               )}
-              {msg && <p className="text-[13px] text-os-red mt-2">{msg}</p>}
+              {msg && <Banner message={msg} className="mt-2" />}
             </Card>
           </div>
 

@@ -7,7 +7,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { RefreshCw, Trash2, ShieldCheck } from "lucide-react";
 import OsShell from "../_osirion/OsShell";
-import { PageHeader, Card, RefreshButton, EmptyState, SkeletonRows } from "../_osirion/ui";
+import { PageHeader, Card, RefreshButton, EmptyState, SkeletonRows, Banner } from "../_osirion/ui";
 import { useAuth } from "../AuthContext";
 import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
 
@@ -83,7 +83,7 @@ export default function AuditPage() {
             )}
           </div>
           {preview && <p className="mt-3 text-[13px] text-os-t2"><b className="os-num">{preview.to_delete}</b> événement(s) sur <b className="os-num">{preview.total_events}</b> — {preview.to_delete > 0 ? "action irréversible." : "rien à supprimer."}</p>}
-          {msg && <p className="mt-3 text-[13px] font-medium" style={{ color: msg.ok ? "var(--os-green)" : "var(--os-red)" }}>{msg.text}</p>}
+          {msg && <Banner message={msg} className="mt-3" />}
         </Card>
 
         <Card className="overflow-hidden">

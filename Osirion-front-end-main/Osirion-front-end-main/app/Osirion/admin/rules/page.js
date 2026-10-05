@@ -7,7 +7,7 @@
  */
 import { useState, useEffect, useCallback } from "react";
 import OsShell from "../_osirion/OsShell";
-import { PageHeader, Card } from "../_osirion/ui";
+import { PageHeader, Card, Banner } from "../_osirion/ui";
 import { useAuth } from "../AuthContext";
 import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
 
@@ -247,7 +247,7 @@ export default function RulesPage() {
 
               <div className="flex items-center gap-3 pt-1">
                 <button onClick={save} className="px-4 py-2.5 rounded-os text-[13px] font-semibold bg-os-cta text-white hover:bg-os-cta-hover">Créer la règle</button>
-                {msg && <span className="text-[13px] text-os-red">{msg}</span>}
+                {msg && <Banner message={msg} />}
               </div>
             </Card>
           )}
