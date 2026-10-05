@@ -58,8 +58,15 @@ class Rule(SQLModel, table=True):
     # Sévérité métier : "info" | "warning" | "critical".
     severity: str = Field(default="warning", max_length=20)
     notify_channels: Optional[List[str]] = Field(default=None, sa_column=Column(JSON))
-    # Anti-spam : délai mini (s) entre deux tirs de la règle sur une même zone (0 = off).
-    cooldown_s: int = Field(default=0)
+    # Anti-spam : délai mini (s) entre deux tirs de la règle sur une même zone.
+    #
+    # Le défaut était 0 — AUCUNE temporisation : toute règle créée depuis
+    # l'interface naissait en mesure d'alerter à chaque événement. Pour un
+    # déclencheur répétitif, le regroupement par épisode du moteur protège
+    # (cf. rule_engine._STATE_TRIGGERS) ; pour les autres, rien ne bornait le
+    # débit. 300 s est un plancher raisonnable, ajustable par règle dans l'UI.
+    # Mettre 0 reste possible et désactive explicitement la temporisation.
+    cooldown_s: int = Field(default=300)
     is_active: bool = Field(default=True)
     # Observabilité.
     last_triggered_at: Optional[datetime] = Field(default=None)

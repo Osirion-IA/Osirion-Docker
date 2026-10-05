@@ -15,7 +15,7 @@ class RuleCreate(BaseModel):
     schedule: Optional[Dict[str, Any]] = None
     kind: str = "custom"
     severity: str = "warning"
-    cooldown_s: int = 0
+    cooldown_s: int = 300
     notify_channels: Optional[List[str]] = None
 
     @field_validator("work_schedule_id")
@@ -71,7 +71,7 @@ class RuleRead(BaseModel):
     schedule: Optional[Dict[str, Any]] = None
     kind: str
     severity: str = "warning"
-    cooldown_s: int = 0
+    cooldown_s: int = 300
     notify_channels: Optional[List[str]] = None
     is_active: bool
     last_triggered_at: Optional[datetime] = None
