@@ -53,6 +53,27 @@ export const SECTIONS = [
   },
 ];
 
+
+// ── Poste de veille ─────────────────────────────────────────────────────────
+// Le rôle « alerts » ne voit QUE le Centre d'alertes. Ce n'est pas qu'un
+// masquage d'interface : le backend refuse aussi tout le reste à ce rôle
+// (require_viewer ne l'inclut pas). Ici on évite simplement d'afficher des
+// liens qui mèneraient à un refus.
+export const ALERTS_ONLY_ROLE = "alerts";
+export const ALERTS_HOME = "/Osirion/admin/alerts";
+
+/** Sections visibles pour un rôle donné. */
+export function sectionsForRole(role) {
+  if (role !== ALERTS_ONLY_ROLE) return SECTIONS;
+  const surveiller = SECTIONS.find((s) => s.key === "surveiller");
+  const alertes = surveiller?.screens.find((sc) => sc.href === ALERTS_HOME);
+  if (!alertes) return [];
+  return [{ ...surveiller, screens: [alertes] }];
+}
+
+/** Vrai si ce rôle est confiné au seul écran d'alertes. */
+export const isAlertsOnly = (role) => role === ALERTS_ONLY_ROLE;
+
 // Section active déduite du chemin courant (préserve le deep-linking Next.js).
 export function findSection(pathname) {
   for (const s of SECTIONS) {

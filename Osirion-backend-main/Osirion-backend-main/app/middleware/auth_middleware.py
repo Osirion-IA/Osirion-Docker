@@ -160,6 +160,12 @@ class RoleChecker:
 require_admin = RoleChecker([UserRole.ADMIN])
 require_user = RoleChecker([UserRole.ADMIN, UserRole.USER])
 require_viewer = RoleChecker([UserRole.ADMIN, UserRole.USER, UserRole.VIEWER])
+# Lecture du flux d'alertes, ouverte en plus au poste de veille. N'est posé QUE
+# sur les endpoints de consultation des alertes : partout ailleurs, require_viewer
+# continue de refuser le rôle ALERTS.
+require_alerts_feed = RoleChecker(
+    [UserRole.ADMIN, UserRole.USER, UserRole.VIEWER, UserRole.ALERTS]
+)
 
 
 # ─────────────────────────────────────────────

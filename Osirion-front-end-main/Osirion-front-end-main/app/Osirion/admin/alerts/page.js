@@ -10,6 +10,7 @@ import { Bell, Check, Archive, Send, Inbox, ChevronLeft, ChevronRight, CheckChec
 import OsShell from "../_osirion/OsShell";
 import { fetchWithRefresh } from "../../../lib/fetchWithRefresh";
 import { useAuth } from "../AuthContext";
+import { isAlertsOnly } from "../_osirion/nav";
 import { relative, timeOnly } from "../../../lib/format";
 import { SkeletonRows } from "../_osirion/ui";
 
@@ -76,6 +77,12 @@ export default function AlertsPage() {
   const notifyAvailable = !!(stats?.notifications?.email || stats?.notifications?.webhook);
   const user = useAuth();
   const canResolve = ["admin", "user"].includes(user?.role || "viewer");
+  // Poste de veille : écran de mur, lu de loin et jamais piloté. On agrandit, on
+  // retire ce qui ne se consulte pas à distance, et SURTOUT on rafraîchit — la
+  // page ne chargeait qu'au montage, ce qui pour une veille « temps réel »
+  // revenait à afficher un instantané figé.
+  const veille = isAlertsOnly(user?.role);
+  const [majA, setMajA] = useState(null);
 
   const loadAlerts = useCallback(async () => {
     setLoading(true);
@@ -95,6 +102,15 @@ export default function AlertsPage() {
   }, []);
   useEffect(() => { loadAlerts(); }, [loadAlerts]);
   useEffect(() => { loadStats(); }, [loadStats]);
+
+  // Rafraîchissement périodique. 15 s en poste de veille, où l'écran doit
+  // suivre l'événement ; rien ailleurs, pour ne pas déplacer la liste sous la
+  // souris d'un opérateur en train de traiter une alerte.
+  useEffect(() => {
+    if (!veille) return;
+    const t = setInterval(() => { loadAlerts(); loadStats(); setMajA(new Date()); }, 15000);
+    return () => clearInterval(t);
+  }, [veille, loadAlerts, loadStats]);
 
   const doAction = async (alert, action, body) => {
     setBusyId(alert.id);
@@ -142,8 +158,25 @@ export default function AlertsPage() {
       <div className="p-6">
         <div className="flex items-end justify-between gap-4 mb-5">
           <div>
-            <h1 className="text-[22px] font-bold text-os-t1">Centre d&apos;alertes</h1>
-            <p className="text-[13px] text-os-t3 mt-0.5">Traitez les alertes déclenchées par le systeme</p>
+            <h1 className={`font-bold text-os-t1 ${veille ? "text-[30px]" : "text-[22px]"}`}>
+              {veille ? "Alertes en direct" : "Centre d'alertes"}
+            </h1>
+            {veille ? (
+              /* Poste de veille : l'écran est lu de loin et n'est jamais piloté.
+                 On annonce que la page se met à jour seule, et l'heure du dernier
+                 tour — sans quoi rien ne distingue un écran à jour d'un écran gelé. */
+              <p className="text-[13px] text-os-t3 mt-1 inline-flex items-center gap-2">
+                <span className="h-2 w-2 rounded-full bg-os-red os-anim-blink" />
+                Actualisation automatique
+                {majA && (
+                  <span className="os-num">
+                    · {majA.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                  </span>
+                )}
+              </p>
+            ) : (
+              <p className="text-[13px] text-os-t3 mt-0.5">Traitez les alertes déclenchées par le système</p>
+            )}
           </div>
           <div className="flex items-center gap-2">
             {canResolve && statusFilter !== "resolved" && bulkTarget > 0 && (
@@ -271,7 +304,10 @@ export default function AlertsPage() {
                     {selected.notify_last_error && <Meta label="Dernière erreur" value={deliveryError(selected.notify_last_error)} title={selected.notify_last_error} />}
                   </div>
 
-                  <div className="flex items-center gap-2 mt-5">
+                  {/* Le poste de veille ne dispose d'aucun droit d'action : le
+                      backend refuse acquittement, résolution et notification à ce
+                      rôle. Afficher les boutons ne produirait que des 403. */}
+                  <div className={`items-center gap-2 mt-5 ${canResolve ? "flex" : "hidden"}`}>
                     {selected.status === "new" && (
                       <button onClick={() => doAction(selected, "acknowledge")} disabled={busyId === selected.id}
                         className="flex-1 py-2.5 rounded-os bg-os-cta text-white text-[13px] font-semibold inline-flex items-center justify-center gap-2 hover:bg-os-cta-hover disabled:opacity-40">

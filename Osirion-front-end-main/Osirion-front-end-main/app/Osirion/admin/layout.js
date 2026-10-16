@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { AuthContext } from "./AuthContext";
 import AlertNotifier from "./AlertNotifier";
 import { getSetting } from "../../lib/settings";
 import { triggerRefresh } from "../../lib/fetchWithRefresh";
+import { isAlertsOnly, ALERTS_HOME } from "./_osirion/nav";
 
 const LAST_ACTIVITY_KEY = "osirion-session-last-activity";
 const ACTIVITY_WRITE_INTERVAL_MS = 5000;
@@ -19,8 +20,17 @@ function getTokenExpiry() {
 
 export default function AdminLayout({ children }) {
   const router = useRouter();
+  const pathname = usePathname();
   const [user, setUser] = useState(null);
   const [checking, setChecking] = useState(true);
+
+  // Poste de veille : ramené sur son écran s'il atterrit ailleurs — URL tapée à
+  // la main, signet, retour navigateur. Le backend refuse déjà les données hors
+  // alertes à ce rôle ; cette redirection lui évite simplement des écrans vides.
+  useEffect(() => {
+    if (!user || !isAlertsOnly(user.role)) return;
+    if (pathname !== ALERTS_HOME) router.replace(ALERTS_HOME);
+  }, [user, pathname, router]);
 
   // Vérification initiale de session au montage
   useEffect(() => {

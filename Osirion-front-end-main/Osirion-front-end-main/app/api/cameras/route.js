@@ -19,9 +19,15 @@ export async function GET(req) {
       },
     });
 
-    const data = await response.json();
+    const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      return NextResponse.json({ message: data?.message || "Erreur lors de la récupération des caméras." }, { status: 500 });
+      // On RELAIE le code du backend au lieu de tout aplatir en 500 : un refus
+      // d'autorisation (403) se présentait comme une panne serveur, ce qui rend
+      // indébogable la restriction d'un rôle.
+      return NextResponse.json(
+        { message: data?.detail || data?.message || "Erreur lors de la récupération des caméras." },
+        { status: response.status },
+      );
     }
     return NextResponse.json(data);
   } catch (err) {

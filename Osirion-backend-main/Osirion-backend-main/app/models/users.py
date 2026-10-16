@@ -8,6 +8,10 @@ class UserRole(str, Enum):
     ADMIN = "admin"       # Accès complet
     USER = "user"         # Accès standard
     VIEWER = "viewer"     # Lecture seule
+    # Poste de veille : ne voit QUE le flux d'alertes temps réel. Volontairement
+    # HORS de require_viewer — l'API doit refuser le reste, pas seulement
+    # l'interface le masquer. Un rôle restreint au navigateur n'est pas restreint.
+    ALERTS = "alerts"     # Veille alertes uniquement
 
 class User(SQLModel, table=True):
     __tablename__ = "user"

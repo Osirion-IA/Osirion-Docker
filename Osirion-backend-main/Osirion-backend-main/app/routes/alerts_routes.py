@@ -18,7 +18,7 @@ import logging
 from app.database import get_session
 from app.models.alerts import Alert, ALERT_NEW, ALERT_ACKNOWLEDGED, ALERT_RESOLVED
 from app.models.cameras import Camera
-from app.middleware.auth_middleware import require_viewer, require_user
+from app.middleware.auth_middleware import require_viewer, require_user, require_alerts_feed
 from app.services.notification_service import (
     send_email, send_webhook, email_configured, webhook_configured, snapshot_local_path,
     compose_alert_email,
@@ -71,7 +71,7 @@ def list_alerts(
     camera_id: Optional[int] = None,
     skip: int = 0,
     limit: int = Query(200, ge=1, le=500),
-    _current_user=Depends(require_viewer),
+    _current_user=Depends(require_alerts_feed),
     session: Session = Depends(get_session),
 ):
     """Liste paginée, scopée agence/caméra. Pour un COMPTE, utiliser /stats :
@@ -98,7 +98,7 @@ def list_alerts(
 def alert_stats(
     group_id: Optional[int] = None,
     camera_id: Optional[int] = None,
-    _current_user=Depends(require_viewer),
+    _current_user=Depends(require_alerts_feed),
     session: Session = Depends(get_session),
 ):
     """Compteurs par statut, scopés agence/caméra. Agrégé en base (GROUP BY) :

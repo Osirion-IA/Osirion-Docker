@@ -18,7 +18,7 @@ import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { Menu } from "lucide-react";
 import { useAuth } from "../AuthContext";
-import { SECTIONS, findSection } from "./nav";
+import { SECTIONS, findSection, sectionsForRole, isAlertsOnly } from "./nav";
 import OsSidebar from "./OsSidebar";
 import OsCommandPalette from "./OsCommandPalette";
 
@@ -27,6 +27,11 @@ export default function OsShell({ children, alertsCount = 0 }) {
   const user = useAuth();
   const section = findSection(pathname);
   const [menuOpen, setMenuOpen] = useState(false);
+  // Poste de veille : une seule destination, donc aucune navigation à offrir.
+  // La sidebar et son bouton d'ouverture disparaissent — un menu à une entrée
+  // vers l'écran déjà affiché n'est que du bruit.
+  const veille = isAlertsOnly(user?.role);
+  const sections = sectionsForRole(user?.role);
 
   // Changer d'écran referme le tiroir — y compris sur une navigation qui ne
   // passe pas par un clic dans le menu (retour navigateur, palette de commandes).
@@ -44,7 +49,7 @@ export default function OsShell({ children, alertsCount = 0 }) {
     <div data-os-theme={section.theme} className="min-h-screen bg-os-bg text-os-t1 font-sans">
       <div className="flex">
         {/* Voile : seulement sous lg, et seulement tiroir ouvert. */}
-        {menuOpen && (
+        {menuOpen && !veille && (
           <div
             className="fixed inset-0 z-40 bg-black/40 lg:hidden"
             onClick={() => setMenuOpen(false)}
@@ -52,8 +57,9 @@ export default function OsShell({ children, alertsCount = 0 }) {
           />
         )}
 
+        {!veille && (
         <OsSidebar
-          sections={SECTIONS}
+          sections={sections}
           activeKey={section.key}
           activePath={pathname}
           alertsCount={alertsCount}
@@ -61,9 +67,11 @@ export default function OsShell({ children, alertsCount = 0 }) {
           mobileOpen={menuOpen}
           onClose={() => setMenuOpen(false)}
         />
+        )}
 
         <main className="flex-1 min-w-0">
           {/* Barre d'ouverture — sous lg uniquement. */}
+          {!veille && (
           <div className="lg:hidden sticky top-0 z-30 h-[52px] flex items-center gap-3 px-4 bg-os-sidebar border-b border-os-sidebar-border">
             <button
               onClick={() => setMenuOpen(true)}
@@ -80,10 +88,11 @@ export default function OsShell({ children, alertsCount = 0 }) {
               </span>
             )}
           </div>
+          )}
           {children}
         </main>
       </div>
-      <OsCommandPalette sections={SECTIONS} />
+      {!veille && <OsCommandPalette sections={SECTIONS} />}
     </div>
   );
 }
